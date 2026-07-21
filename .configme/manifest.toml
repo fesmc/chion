@@ -1,0 +1,5 @@
+# configme manifest for chion.
+package = "chion"
+deps = [
+    "fesm-utils:dev",
+]

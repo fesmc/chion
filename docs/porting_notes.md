@@ -101,6 +101,50 @@ Level 1 work packages independently testable.
 
 ---
 
+## WP2 — build system
+
+### D9. configme cannot install chion until the registry entry lands
+**What:** `configme -m macbook -c gfortran` fails with *"package 'chion' is not supported"*.
+configme resolves packages only from its own shipped `data/packages/`; unlike machines and
+compilers, there is **no user-level or repo-level override tier** (`src/configme/data.py:34`).
+**Why it matters:** WP18 (adding `configme/data/packages/chion.toml`) is therefore a
+*blocker* for WP2's acceptance test, not a downstream task as originally planned. It also
+requires a change to a separate repo plus a `pip install -U` before it takes effect.
+**Interim:** `config/Makefile` was verified by assembling it exactly as configme does —
+compiler fragment, then machine fragment, then the auto-detected netCDF block, then
+`include config/common.mk` — and asserting the placeholder appears exactly once and the
+`common.mk` include is present. Default, `debug=1` and `openmp=1` builds all verified.
+**Status:** open; needs a decision on committing to the configme repo.
+
+---
+
+## WP3 — `snow_column_utils.f90`
+
+### D8. Kernels take contiguous column slices, not (array, index)
+**What:** Julia physics kernels take the full `(Ntot,ncol)` array plus a column index `idx`,
+and reach elements through `_get_layer(mass, k, idx)`. chion passes a column slice —
+`mass(:,icol)` — plus the active layer count `n`.
+**Why:** The Julia indirection exists only so one kernel body can run over a `Matrix` on GPU
+and a `Vector` on CPU; chion has no GPU path. Because the arrays are `(Ntot,ncol)` and
+Fortran is column-major, a slice is contiguous and is passed by reference with no copy. The
+resulting signatures are far more readable and make OpenMP privacy obvious by inspection.
+**Impact:** Applies to every Level 1 physics module, so it is a convention, not a local
+choice. The outer dispatcher still works in `(state, icol)` terms and slices at the call
+site. Routines that change the layer count (split/merge) additionally take `n` as
+`intent(INOUT)`.
+
+### D10. Fortran does not short-circuit `.or.`
+**What:** `is_lowest_active_snow_layer` is written as a nested `if`, not as the single
+expression `k >= n .or. mass(k+1) <= 0`.
+**Why:** Julia's `||` short-circuits, so `mass(k+1)` is never evaluated when `k == n`.
+Fortran leaves evaluation order unspecified, and `k == n == Ntot` would read one element past
+the array. The acceptance test covers exactly this case.
+**Impact:** None behaviourally; it is a correctness requirement. The same hazard will recur
+anywhere a Julia guard relies on `||`/`&&` short-circuiting — check for it in every ported
+predicate.
+
+---
+
 ## Preserved deliberately (do NOT "fix")
 
 These are listed in full in `docs/PLAN.md` section 5. Restated here as they are encountered:
