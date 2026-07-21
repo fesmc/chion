@@ -103,18 +103,29 @@ Level 1 work packages independently testable.
 
 ## WP2 — build system
 
-### D9. configme cannot install chion until the registry entry lands
-**What:** `configme -m macbook -c gfortran` fails with *"package 'chion' is not supported"*.
-configme resolves packages only from its own shipped `data/packages/`; unlike machines and
-compilers, there is **no user-level or repo-level override tier** (`src/configme/data.py:34`).
-**Why it matters:** WP18 (adding `configme/data/packages/chion.toml`) is therefore a
-*blocker* for WP2's acceptance test, not a downstream task as originally planned. It also
-requires a change to a separate repo plus a `pip install -U` before it takes effect.
-**Interim:** `config/Makefile` was verified by assembling it exactly as configme does —
-compiler fragment, then machine fragment, then the auto-detected netCDF block, then
-`include config/common.mk` — and asserting the placeholder appears exactly once and the
-`common.mk` include is present. Default, `debug=1` and `openmp=1` builds all verified.
-**Status:** open; needs a decision on committing to the configme repo.
+### D9. configme has no local package-override tier — WP18 was a blocker
+**What:** `configme -m macbook -c gfortran` initially failed with *"package 'chion' is not
+supported"*. configme resolves packages only from its own shipped `data/packages/`; unlike
+machines and compilers, there is **no user-level or repo-level override tier**
+(`src/configme/data.py:34`).
+**Why it matters:** WP18 was therefore a *blocker* for WP2's acceptance test, not a
+downstream task as the plan originally had it. Registering a new FESM package requires a
+change to the configme repo plus a reinstall before it takes effect — worth knowing for any
+future package.
+**Resolution:** `src/configme/data/packages/chion.toml` added on branch `add-chion-package`
+in `~/models/configme` (commit `a5656da`); full configme test suite passes (210 tests).
+After `pip install -U`, `configme -m macbook -c gfortran` generates the root `Makefile`
+correctly and `make chion-static` builds against it.
+**Still open:** that branch is unmerged and unpushed, and chion is not yet listed in
+`data/orchestrators/yelmox.toml` `default_packages` — that belongs to WP19 phase A.
+
+### D11. `.gitignore` patterns must anchor `Makefile` to the repo root
+**What:** `/Makefile`, not `Makefile`.
+**Why:** An unanchored pattern matches at every level and silently excludes
+`config/Makefile`, which is the configme *template* and must stay tracked. This was caught
+only because the file was missing from a commit summary. yelmo and yelmox both use the
+unanchored form and get away with it because their templates were tracked before the ignore
+rule existed — do not copy that pattern into a new repo.
 
 ---
 

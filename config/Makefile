@@ -82,8 +82,43 @@ utils : chion-static
 		@echo "    test_column_utils.x is ready."
 		@echo " "
 
+layers : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_layers.x $(testdir)/test_layers.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_layers.x is ready."
+
+energy : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_energy.x $(testdir)/test_energy.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_energy.x is ready."
+
+water : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_water.x $(testdir)/test_water.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_water.x is ready."
+
+surface : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_surface.x $(testdir)/test_surface.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_surface.x is ready."
+
+pdd : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_pdd.x $(testdir)/test_pdd.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_pdd.x is ready."
+
+diagnostics : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_diagnostics.x $(testdir)/test_diagnostics.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_diagnostics.x is ready."
+
+itm : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_itm.x $(testdir)/test_itm.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_itm.x is ready."
+
 # All acceptance tests
-tests : defs utils
+tests : defs utils layers energy water surface pdd diagnostics itm
 
 .PHONY : usage
 usage:
