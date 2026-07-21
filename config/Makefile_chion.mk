@@ -110,6 +110,11 @@ $(objdir)/chion_api.o: $(srcdir)/chion_api.f90 \
 						  	$(objdir)/snow_bessi.o $(objdir)/snow_pdd.o $(objdir)/snow_itm.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+$(objdir)/chion_io.o: $(srcdir)/chion_io.f90 \
+						  	$(objdir)/chion_defs.o $(objdir)/chion_api.o \
+						  	$(objdir)/snow_diagnostics.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 $(objdir)/chion.o: $(srcdir)/chion.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o $(objdir)/chion_api.o \
 						  	$(objdir)/snow_bessi.o $(objdir)/snow_pdd.o $(objdir)/snow_itm.o \
@@ -142,4 +147,5 @@ chion_physics = $(objdir)/snow_column_utils.o \
 
 chion_core =    $(objdir)/chion_model.o \
                 $(objdir)/chion_api.o \
+                $(objdir)/chion_io.o \
                 $(objdir)/chion.o

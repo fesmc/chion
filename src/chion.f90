@@ -32,6 +32,7 @@ module chion
     use chion_defs
     use chion_model
     use chion_api
+    use chion_io
 
     use snow_bessi
     use snow_pdd

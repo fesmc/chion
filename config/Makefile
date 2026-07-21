@@ -141,13 +141,34 @@ api : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_api.x is ready."
 
+io : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_io.x $(testdir)/test_io.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_io.x is ready."
+
+# Driver programs (note: not test_*.x -- these are the runme executables)
+column : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/chion_column.x $(testdir)/chion_column.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    chion_column.x is ready."
+
+grid : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/chion_grid.x $(testdir)/chion_grid.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    chion_grid.x is ready."
+
 itm : chion-static
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_itm.x $(testdir)/test_itm.f90 \
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_itm.x is ready."
 
 # All acceptance tests
-tests : defs utils layers energy water surface wp7 bessi pdd diagnostics itm api
+tests : defs utils layers energy water surface wp7 bessi pdd diagnostics itm api io
+
+# Driver executables
+drivers : column grid
+
+all : tests drivers
 
 .PHONY : usage
 usage:

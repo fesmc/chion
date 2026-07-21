@@ -209,6 +209,55 @@ the test. Two consequences worth knowing before WP19:
 
 ---
 
+## WP14/WP15 — IO and drivers
+
+### D14. Output dimension order differs from Chion.jl, of necessity
+**What:** Chion.jl declares `("t","x","y")`, landing in the file as `var(y,x,t)`. chion writes
+`var(time,yc,xc)`.
+**Why:** `time` is the unlimited dimension, and netCDF requires the unlimited dimension to be
+slowest-varying. This is also CF-standard and yelmo's convention.
+**Impact:** **WP16's comparison harness must permute axes.** Variable names, units and
+`long_name` are unaffected and match exactly for all 20 shared variables.
+
+### D15. Unmapped grid cells use `MV = -9999`, not NaN
+**What:** Chion.jl fills cells with no column at NaN; chion uses `chion_defs`' `MV`, written as
+both `missing_value` and `_FillValue`.
+**Why:** a NaN in an `sp` field is indistinguishable from one produced by an FPE-trapped
+operation under `debug=1`, which would make a real bug look like ordinary masking.
+**Impact:** WP16 must treat `MV` and NaN as equivalent when comparing.
+
+### D16. Restart is host-driven, not folded into `chion_init_state`
+**What:** `chion_restart_read` is a separate call. `par%restart` is loaded from the namelist
+and consumed by the host or driver, not by `chion_init_state`.
+**Why:** `chion_io` depends on `chion_api` for `chion_class`, so `chion_api` cannot call
+`chion_io` without a circular dependency. This is the same pattern yelmox uses for smbpal.
+**Impact:** the documented sequence is in the `chion_init_state` header. `use chion` exposes
+both. If `chion_class` ever moves to a lower module, this can be folded in.
+
+### D17. `chion_write_step` recomputes BESSI's four diagnostics
+**What:** `thickness`, `wet_mass`, `bulk_density` and `liquid_water` are recomputed via
+`summarize_domain_state` at write time rather than read from `chn%bsi%now`.
+**Why:** `bessi_column_step` does not update them (Chion.jl produces them on the way to
+output), so the stored values are stale by construction.
+**Impact:** the *restart* still writes the stored values, because `bessi_reset_columns`
+deliberately does not reset them (upstream defect 23) and that staleness is part of what an
+exact restart must reproduce.
+
+### D18. The shipped column example was retuned to exercise the model
+**What:** `par/chion_column.nml` originally described a strongly ablating column: peak
+accumulation stayed below `mass_max`, so the layer machinery never fired (peak layer count 1)
+and there was no refreezing. Retuned to a percolation-zone firn site — `t2m_mean = 258.15`,
+`t2m_amplitude = 16`, `pr_mean = 3.0e-5`, `sw_mean = 165`, `sw_amplitude = 145`.
+**Why:** a shipped example that exercises one code path is a poor demonstration and a weak
+WP16 comparison target.
+**Impact:** BESSI over 10 years now reaches 12 layers, densifies 315 -> 651 kg m-3, and
+produces 5532 kg m-2 of melt, 2437 of refreezing and 4109 of runoff — so accumulation,
+split/merge, all three densification regimes, melt, percolation and refreezing are all
+covered. Colder or drier settings build layers but never melt; warmer ones ablate to bare ice
+and never split.
+
+---
+
 ## WP-wide build note
 
 ### D12. `debug=1` drops `underflow` from the FPE trap set

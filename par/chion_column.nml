@@ -22,6 +22,13 @@
 ! &ctrl — driver control (WP15; not read by the chion library)
 ! ============================================================
 
+! These values describe a percolation-zone firn site: roughly 950 kg m-2 yr-1
+! of accumulation with a melting summer. They were chosen so the shipped
+! example actually exercises the model -- layer split/merge and the bottom
+! merge, densification through all three regimes, melt, percolation and
+! refreezing. A drier or colder setting builds layers but never melts, and a
+! warmer one ablates to bare ice and never splits a layer.
+
 &ctrl
     ncol             = 1                    ! [1] Number of independent columns
     time_init        = 0.0                  ! [d] Start time
@@ -35,15 +42,15 @@
     surface_height   = 1500.0               ! [m] Surface elevation
     H_ice            = 1000.0               ! [m] Ice thickness (ITM only)
 
-    t2m_mean         = 263.15               ! [K] Annual mean air temperature
-    t2m_amplitude    = 12.0                 ! [K] Half-amplitude of the annual cycle
+    t2m_mean         = 258.15               ! [K] Annual mean air temperature
+    t2m_amplitude    = 16.0                 ! [K] Half-amplitude of the annual cycle
     t2m_phase        = 200.0                ! [d] Day of year of the warmest day
 
-    pr_mean          = 1.5e-5               ! [kg m-2 s-1] Annual mean precipitation rate
+    pr_mean          = 3.0e-5               ! [kg m-2 s-1] Annual mean precipitation rate
     t_snow_max       = 273.15               ! [K] Above this, precipitation falls as rain
 
-    sw_mean          = 150.0                ! [W m-2] Annual mean downward shortwave
-    sw_amplitude     = 130.0                ! [W m-2] Half-amplitude of its annual cycle
+    sw_mean          = 165.0                ! [W m-2] Annual mean downward shortwave
+    sw_amplitude     = 145.0                ! [W m-2] Half-amplitude of its annual cycle
     wind_speed       = 4.0                  ! [m s-1] Constant wind speed
 
     file_out         = "chion_column.nc"    ! Output file, written to the run directory

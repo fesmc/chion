@@ -262,8 +262,22 @@ contains
     end subroutine chion_init
 
     subroutine chion_init_state(chn)
-        ! Cold start. Restart reading is WP14; when it arrives it replaces the
-        ! body of this routine, not its signature.
+        ! Cold start.
+        !
+        ! Restart reading is deliberately NOT folded in here. chion_io depends
+        ! on this module for chion_class, so chion_api cannot call chion_io
+        ! without a circular dependency. Restart is therefore host-driven, the
+        ! same pattern yelmox uses for smbpal:
+        !
+        !     call chion_init(chn,filename,ncol)
+        !     if (trim(chn%par%restart) .ne. "none") then
+        !         call chion_restart_read(chn,chn%par%restart,time)
+        !     else
+        !         call chion_init_state(chn)
+        !     end if
+        !
+        ! `use chion` exposes both. par%restart is read from the namelist and
+        ! consumed by the host or driver, not by this routine.
 
         implicit none
 
