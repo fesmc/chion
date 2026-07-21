@@ -116,8 +116,9 @@ future package.
 in `~/models/configme` (commit `a5656da`); full configme test suite passes (210 tests).
 After `pip install -U`, `configme -m macbook -c gfortran` generates the root `Makefile`
 correctly and `make chion-static` builds against it.
-**Still open:** that branch is unmerged and unpushed, and chion is not yet listed in
-`data/orchestrators/yelmox.toml` `default_packages` — that belongs to WP19 phase A.
+**Still open:** the branch is pushed (`fesmc/configme:add-chion-package`) but unmerged, and
+chion is not yet listed in `data/orchestrators/yelmox.toml` `default_packages` — that belongs
+to WP19 phase A.
 
 ### D11. `.gitignore` patterns must anchor `Makefile` to the repo root
 **What:** `/Makefile`, not `Makefile`.
@@ -217,6 +218,33 @@ equals `d(snowpack_swe)` exactly.
 Collected across batch 1. Severity: **A** = wrong results, **B** = latent/conditional,
 **C** = cosmetic or doc-only.
 
+### The BESSI mass-closure identity (WP8)
+
+Derived by enumerating every mass mutation in `column_step_core!` and splitting runoff into
+column-sourced and ice-sourced parts:
+
+```
+total_snow_water_mass + runoff + smb_ice - vapor_mass  ==  cumulative accepted precipitation
+```
+
+**`mass_base` does not appear** — it is already inside `smb_ice`
+(`smb_ice = mass_base + vapor_bare - melt_bare - melt_ice` by construction), so including it
+separately double-counts. Worth knowing before writing any conservation check in WP11 or WP16.
+
+Two conditions are required for it to close, both of which are upstream defects rather than
+port artefacts: rain must be withheld on steps beginning with `mass(1) <= 0` (defect 11), and
+humidity forcing must be off (defect 1). With dry air over a thin pack, defect 1 alone leaves
+a 105 kg m-2 residual against 192 kg m-2 of reported sublimation.
+
+Measured relative residual: 9.2e-7 (BESSI densification), 8.8e-7 (HTESSEL), 6.9e-7 to 9.0e-7
+across all twelve scheme combinations.
+
+**The residual saturates with run length** — 6.4e-7 at 1 yr, 9.2e-7 at 5 yr, 9.7e-7 at 20 yr,
+9.8e-7 at 40 yr. It is a bounded per-step relative bias (~8 ulp of `sp`, from
+`mass(1) = m_prev + m_added`), not a random walk, so `sp` is safe here. But it sits just
+inside the 1e-6 acceptance threshold with almost no headroom: **that tolerance cannot be
+tightened without moving the layer mass arrays to `dp`.**
+
 ### A — defects
 
 1. **(A) Vapor-mass diagnostics are not mass-closed.**
@@ -240,6 +268,15 @@ Collected across batch 1. Severity: **A** = wrong results, **B** = latent/condit
    as `0.4^n` and is never exhausted.
 7. **(A) PDD `snowpack_swe` is unbounded** — no cap, no aging, no densification, so the
    ablation buffer depends on spin-up length.
+
+19. **(A) Diurnal substepping multiplies the albedo aging rate by `n_substeps`.**
+    `_update_surface_albedo_arrays!` sits inside `column_step_core!`, and the aging law
+    carries no `dt` (trap 5). With `max_substeps = 8` the albedo ages eight times per day.
+    Bounded by the `alpha_wet` floor, but it means enabling substepping silently changes the
+    albedo scheme, not merely the shortwave resolution. Found in WP8.
+20. **(A) The bare-ice path uses `rainfall_rate` in the energy budget but discards its mass.**
+    Extends defect 11: rain is a genuine mass leak on *any* bare column, not only on
+    massless-surface columns. Found in WP8.
 
 ### B — latent
 
@@ -265,6 +302,18 @@ Collected across batch 1. Severity: **A** = wrong results, **B** = latent/condit
     the amount actually melted. `step.jl:346` relies on the difference to trigger bare-ice
     melt.
 
+21. **(B) Snowfall brightening is non-linear under substepping.** `1 - exp(-dm/3)` means eight
+    brightenings of `dm/8` do not equal one of `dm`, so substepping darkens fresh snow
+    relative to the daily-mean path. Same root cause as 19. Found in WP8.
+22. **(B) `workspace.liquid_water_before_energy` is written for `1:n_before` and read for
+    `1:n_after`.** Safe only because `n` cannot grow between the snapshot and the compaction.
+    It is a persistent buffer, so a violation would read another column's data rather than
+    obvious garbage. chion uses a zero-initialised stack-local snapshot instead.
+23. **(B) `_reset_bessi_columns_kernel!` does not reset the four diagnostics**
+    (`thickness`, `wet_mass`, `bulk_density`, `liquid_water`) that
+    `_initialize_bessi_state_kernel!` does, so a deactivated column carries stale diagnostics
+    into output. Preserved, not fixed.
+
 ### C — doc and cosmetic
 
 15. **(C) `percolation.md` contradicts `percolation.jl`** on where liquid water in a massless
@@ -274,7 +323,11 @@ Collected across batch 1. Severity: **A** = wrong results, **B** = latent/condit
 17. **(C) `_surface_liquid_water_content` guards `mass[1]` on `EPS_TINY`** while
     `_update_surface_albedo_arrays!` guards on `EPS_EMPTY_LAYER` one line earlier. Trap 1
     territory, but this particular pair is almost certainly unintentional.
-18. **(C) PDD hard-codes `273.15` and `86400.0`** rather than using a constants struct, and
+18. **(C) `step.jl:383` recomputes `has_liquid_water` after refreezing and never reads it.**
+    Dropped as dead code in chion.
+19b. **(C) The `_n_active == 0` guard on the ice-melt shortfall is redundant** — `_apply_melt!`
+    can only return `melted < melt_mass` when the column is empty.
+20b. **(C) PDD hard-codes `273.15` and `86400.0`** rather than using a constants struct, and
     uses a single `sigma` where smbpal uses three by surface type.
 
 The full PDD analysis, with quantified impacts and recommended fixes, is in

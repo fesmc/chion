@@ -131,13 +131,18 @@ wp7 : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_wp7.x is ready."
 
+bessi : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_bessi.x $(testdir)/test_bessi.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_bessi.x is ready."
+
 itm : chion-static
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_itm.x $(testdir)/test_itm.f90 \
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_itm.x is ready."
 
 # All acceptance tests
-tests : defs utils layers energy water surface wp7 pdd diagnostics itm
+tests : defs utils layers energy water surface wp7 bessi pdd diagnostics itm
 
 .PHONY : usage
 usage:
