@@ -24,13 +24,25 @@ program test_defs
     write(*,*)
 
     ! --- Precision -------------------------------------------------------
-    call check("wp is double precision", wp .eq. kind(1.d0), nfail)
-    call check("wp /= sp",               wp .ne. sp,         nfail)
+    ! wp = sp for state and interfaces (yelmo-compatible); wp_acc = dp for
+    ! cumulative accumulators. See the precision policy in chion_defs.
+    call check("wp is single precision",  wp .eq. kind(1.0),   nfail)
+    call check("wp == sp",                wp .eq. sp,          nfail)
+    call check("wp_acc is double",        wp_acc .eq. kind(1.d0), nfail)
+    call check("wp_acc /= wp",            wp_acc .ne. wp,      nfail)
 
     ! --- Tolerances ------------------------------------------------------
-    call check("TOL_TINY        = 1e-12", abs(TOL_TINY        - 1.0e-12_wp) .lt. 1.0e-24_wp, nfail)
-    call check("TOL_EMPTY_LAYER = 1e-10", abs(TOL_EMPTY_LAYER - 1.0e-10_wp) .lt. 1.0e-22_wp, nfail)
+    call check("TOL_TINY        = 1e-12", abs(TOL_TINY        - 1.0e-12_wp_acc) .lt. 1.0e-24_wp_acc, nfail)
+    call check("TOL_EMPTY_LAYER = 1e-10", abs(TOL_EMPTY_LAYER - 1.0e-10_wp_acc) .lt. 1.0e-22_wp_acc, nfail)
     call check("tolerances are distinct", TOL_TINY .ne. TOL_EMPTY_LAYER, nfail)
+    call check("tolerances are dp",       kind(TOL_TINY) .eq. wp_acc, nfail)
+
+    ! The reason TOL_TINY must be compared against dp-computed quantities:
+    ! in sp arithmetic it vanishes against anything of order 1 or larger.
+    call check("TOL_TINY vanishes in sp arithmetic at O(1)", &
+               1.0_wp + real(TOL_TINY,wp) .eq. 1.0_wp, nfail)
+    call check("TOL_TINY survives in dp arithmetic at O(1)", &
+               1.0_wp_acc + TOL_TINY .ne. 1.0_wp_acc, nfail)
 
     ! --- Constants defaults, against Chion.jl/src/constants.jl:173-200 ---
     call chion_const_init(c)
@@ -181,7 +193,9 @@ contains
         ! Local variables
         real(wp) :: tol
 
-        tol = max(abs(expected)*1.0e-14_wp,1.0e-30_wp)
+        ! Relative tolerance at sp resolution. A dp-style 1e-14 would fail
+        ! every check now that wp = sp.
+        tol = max(abs(expected)*8.0_wp*epsilon(1.0_wp),tiny(1.0_wp))
 
         if (abs(value-expected) .le. tol) then
             write(*,"(a,a,a,g14.6)") "  ok   : ", trim(label), " = ", value

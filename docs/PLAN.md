@@ -36,7 +36,7 @@ so `real(wp) :: mass(Ntot,ncol)` is a byte-identical layout — no transposition
 | model | state | status |
 |---|---|---|
 | `BESSIModel` | `(Ntot,ncol)` layers + 15 per-column scalars | full physics |
-| `PDDModel` | 4 per-column scalars, **no layers, no energy balance** | self-contained, but **not fully working** — see §3.1 |
+| `PDDModel` | 4 per-column scalars, **no layers, no energy balance** | self-contained, but **not fully working** — see §3.2 |
 | `ITMModel` | — | **does not exist in Chion.jl**; `build_model(:itm,…)` deliberately errors (`test/test_case_api.jl:538`). chion ports it from `smbpal/src/smb_itm.f90` instead (WP12). |
 
 **Model choice and BESSI sub-options are different axes.** Within BESSI:
@@ -162,15 +162,20 @@ type bessi_state_class
     real(wp), allocatable :: mass_w(:,:)       ! (Ntot,ncol) [kg m-2] liquid
     real(wp), allocatable :: density(:,:)      ! (Ntot,ncol) [kg m-3]
     real(wp), allocatable :: temperature(:,:)  ! (Ntot,ncol) [K]
-    ! per-column scalars (cumulative unless noted)
-    real(wp), allocatable :: mass_base(:), smb_ice(:), runoff(:), melt(:), refreezing(:)
-    real(wp), allocatable :: vapor_mass(:), sublimation(:), latent_heat_flux_sum(:)
-    real(wp), allocatable :: t_srf(:), albedo(:)                    ! instantaneous
-    real(wp), allocatable :: thickness(:), wet_mass(:), bulk_density(:), liquid_water(:)  ! diagnostic
+
+    ! Cumulative accumulators -- MUST be wp_acc (dp). See section 3.1.
+    real(wp_acc), allocatable :: mass_base(:), smb_ice(:), runoff(:)
+    real(wp_acc), allocatable :: melt(:), refreezing(:)
+    real(wp_acc), allocatable :: vapor_mass(:), sublimation(:), latent_heat_flux_sum(:)
+
+    ! Instantaneous and diagnostic per-column scalars
+    real(wp), allocatable :: t_srf(:), albedo(:)
+    real(wp), allocatable :: thickness(:), wet_mass(:), bulk_density(:), liquid_water(:)
 end type
 ```
 
-PDD state is four `(ncol)` vectors: `snowpack_swe`, `smb_ice`, `runoff`, `pdd_sum`.
+PDD state is four `(ncol)` vectors: `snowpack_swe` (`wp`), and `smb_ice`, `runoff`, `pdd_sum`
+(all `wp_acc`, being cumulative).
 
 ### 2.3 Model dispatch
 
@@ -253,9 +258,9 @@ chion/
 1. **Discretisation: packed column list.** `ncol` independent columns with `(js,is)` scatter
    for IO, exactly as Chion.jl. Not `(nx,ny)`. The host passes only the points it wants
    computed.
-2. **Precision: `wp = dp`.** Chion.jl is `Float64` throughout and `EPS_TINY = 1e-12` is
-   meaningless in single precision. This overrides yelmo's `wp = sp`; `chion_defs` still
-   defines `sp`/`dp` so host code can convert at the interface.
+2. **Precision: `wp = sp`, with `wp_acc = dp` for accumulators.** Matching yelmo and
+   fesm-utils, so no conversion is needed at the yelmox boundary. Measured, not assumed —
+   see §3.1.
 3. **Cleanups allowed.** The port targets *physical* equivalence with Chion.jl, not
    bit-comparability. See §4.1 for the policy on what may be cleaned and what may not.
 4. **ITM: port from `smbpal/src/smb_itm.f90` now** (WP12, promoted into batch 1). chion will
@@ -266,7 +271,42 @@ chion/
    addition: it must keep smbpal available during a transition period and demonstrate
    equivalence before smbpal is removed.
 
-### 3.1 Caution: PDD is not fully working in Chion.jl
+### 3.1 Precision policy
+
+Chion.jl is `Float64` throughout. chion is `sp` for state and interfaces, which is a real
+change and needed evidence rather than a guess. The expressions below were extracted from the
+Chion.jl algorithms and evaluated in both precisions.
+
+| expression | `sp` behaviour | verdict |
+|---|---|---|
+| cumulative diagnostics, 36,500 daily increments | 0.01 kg m⁻² increments onto a 1e5 kg m⁻² total are lost outright; **80 kg m⁻² drift (0.08%) over 100 yr** | **`dp` required** |
+| pore volume `phi = m/rho - m/rho_i` | abs error ~3e-8 m; quantized at ~1e-5, so the `TOL_TINY` guard **can never fire**, and `phi` feeds the division `lwc = m_w/rho_w/phi` | **`dp` locally** |
+| cold content `(T0-T)*ci*m_s` | 100% relative error below 3e-5 K from melting, but implied mass error only ~1e-5 kg m⁻² | `dp` locally (free) |
+| densification gap `(rho_i - rho)` | error ~2e-5 kg m⁻³, absorbed by the monotone update and `rho_i` cap | `sp` fine |
+| tridiagonal conduction solve | max 3.4e-5 K vs `dp`; matrix is strictly diagonally dominant | `sp` fine |
+| melt energy residual | no error at representative values | `sp` fine |
+
+Consequently:
+
+- `wp = sp` — layered state (`mass`, `mass_w`, `density`, `temperature`), forcing, and all
+  public interfaces.
+- `wp_acc = dp` — the nine cumulative per-column accumulators: `smb_ice`, `runoff`, `melt`,
+  `refreezing`, `vapor_mass`, `sublimation`, `latent_heat_flux_sum`, `mass_base`, `pdd_sum`.
+  Per-column scalars, so the memory cost is negligible.
+- `real(wp_acc)` **locals** in three named places: pore volume (percolation, albedo), cold
+  content (refreezing), and surface-energy accumulation across diurnal substeps.
+- Both tolerances are declared `dp` so comparisons promote correctly. A guard of the form
+  `x <= TOL_TINY` is only meaningful when `x` itself was computed in `dp`.
+
+Note the memory argument for `sp` is negligible at these sizes (Greenland 10 km ≈ 20,000
+columns × 15 layers × 4 arrays = 4.8 MB vs 9.6 MB). The actual benefit is interface
+consistency with yelmo/yelmox.
+
+**This changes every conservation tolerance in the plan.** `sp` gives ~7 significant digits,
+so acceptance thresholds are `1e-6` relative, not `1e-12`. Where a quantity is `wp_acc`, the
+tighter `dp` threshold still applies and is stated per WP.
+
+### 3.2 Caution: PDD is not fully working in Chion.jl
 
 Chion.jl's `PDDModel` is known not to be fully functional. Consequences for the port:
 
@@ -339,7 +379,8 @@ inside a WP.
 **WP1 — `chion_defs.f90` + repo skeleton**
 Deliverables: the directory tree in §2.4 with placeholders, `.gitignore`, and
 `src/chion_defs.f90` containing: `sp`/`dp`/`wp` re-exported from fesm-utils `precision`;
-`EPS_TINY = 1.0e-12_wp`, `EPS_EMPTY_LAYER = 1.0e-10_wp`, `io_unit_err`, `MV`;
+`TOL_TINY = 1.0e-12_wp_acc`, `TOL_EMPTY_LAYER = 1.0e-10_wp_acc` (both `dp`, see §3.1),
+`io_unit_err`, `MV`;
 `chion_const_class` (26 fields mirroring `SnowpackPhysicalConstants`, `src/constants.jl:61-88`,
 defaults at `:173-200`); the scheme-flag integer parameters; `chion_step_forcing_class`;
 `chion_forcing_class` (the `(ncol)` host-facing arrays); `chion_param_class`;
@@ -395,7 +436,8 @@ case), `enforce_snow_depth_cap`.
 Note the depth cap uses hard-coded `BESSI_REFERENCE_LAYER_COUNT = 15` and
 `BESSI_REFERENCE_DEPTH_DENSITY = 300` with a `1.5` factor, independent of the configured `Ntot`.
 Deliverable also: `tests/test_layers.f90` driving accumulation/melt sequences and asserting
-`sum(mass) + sum(mass_w) + mass_base + runoff` is conserved to `1e-12` relative.
+`sum(mass) + sum(mass_w) + mass_base + runoff` is conserved to `1e-6` relative (sp; see
+§3.1). Note `mass_base` and `runoff` are `wp_acc`, so accumulate the check in `dp`.
 This is the highest-risk WP — the split/merge/shift index arithmetic is fiddly.
 Depends: WP1, WP3.
 
@@ -451,7 +493,9 @@ Port `Chion.jl/src/processes/percolation.jl`, `refreezing.jl`, `melt.jl`.
   from the top, with depleted-layer removal and water routing, then a surface merge when
   `mass(1) < mass_min`.
 Acceptance: unit tests for (i) water conservation through percolation, (ii) refreezing energy
-closure `refrozen*Lm == Σ consumed cold content` to `1e-12`, (iii) melt mass conservation.
+closure `refrozen*Lm == Σ consumed cold content` to `1e-6` relative, (iii) melt mass
+conservation to `1e-6` relative. Cold content is computed in `dp` locally (§3.1), so the
+energy closure may be checked more tightly than the `sp` mass fields.
 Depends: WP1, WP3, WP4 (melt calls the layer routines).
 
 **WP7 — accumulation, albedo, densification, diurnal**
@@ -502,11 +546,11 @@ Acceptance: a single column driven by a synthetic annual cycle produces a mass-c
 physically plausible snowpack; profiles printed for eyeball comparison with Julia.
 Depends: WP4, WP5, WP6, WP7.
 
-**WP9 — PDD (`snow_pdd.f90`)** — *read §3.1 first; Chion.jl's PDD is not fully working*
+**WP9 — PDD (`snow_pdd.f90`)** — *read §3.2 first; Chion.jl's PDD is not fully working*
 Port `Chion.jl/src/processes/pdd.jl`, cross-checking every step against
 `smbpal/src/smb_pdd.f90` (`calc_ablation_pdd`, `calc_temp_effective`). Where they disagree,
 smbpal wins and the divergence is written up. **Deliverable includes a defect list** for
-upstream Chion.jl, covering at minimum the five suspicious points in §3.1.
+upstream Chion.jl, covering at minimum the five suspicious points in §3.2.
 Bulk, no layers. Six-line core:
 ```
 pdd_sum        += pdd
@@ -528,7 +572,8 @@ Replace the implicit `27 <= dt_days <= 32` trigger with an explicit
 this in the defect list. Use the constants struct rather than PDD's hard-coded `273.15`
 and `86400.0`.
 Acceptance: mass-balance identity
-`Δsmb_ice + Δrunoff == snowfall + rainfall - Δsnowpack_swe` to `1e-12`; PISM integral checked
+`Δsmb_ice + Δrunoff == snowfall + rainfall - Δsnowpack_swe` to `1e-10` (all three terms are
+`wp_acc`, so this stays a `dp` check); PISM integral checked
 against its limits (`Tbar→+inf → dt*Tbar`; `Tbar=0 → dt*sigma/sqrt(2pi)`); and a run against
 the same forcing as smbpal's PDD giving physically comparable annual SMB.
 Depends: WP1.
@@ -562,7 +607,8 @@ chion does not own an insolation module — this is a change from smbpal, which 
 insolation internally via `calc_insol_day`, so the host must now supply it.
 Because chion is to replace smbpal in yelmox, **acceptance is equivalence with smbpal**: given
 the same parameters, forcing and insolation, `chion` with `model="itm"` must reproduce
-`smbpal_update_monthly` with `abl_method="itm"` to within round-off. Build that comparison as
+`smbpal_update_monthly` with `abl_method="itm"` to within `sp` round-off (~1e-6 relative).
+Build that comparison as
 part of this WP, not as an afterthought — it is the evidence that WP19 is safe.
 Also record, for a future upstream contribution, what an `ITMModel` in Chion.jl would need.
 Depends: WP1, WP3.
@@ -608,7 +654,7 @@ Every field that cannot meet a tight tolerance must be traced to a specific docu
 
 Three reference targets, not one:
 - **BESSI** — Chion.jl is authoritative. Tight tolerances.
-- **PDD** — Chion.jl for structure only (§3.1); smbpal for physical plausibility. Loose
+- **PDD** — Chion.jl for structure only (§3.2); smbpal for physical plausibility. Loose
   tolerances, plus a written explanation of every divergence.
 - **ITM** — smbpal is authoritative (there is no Chion.jl ITM). Round-off agreement expected;
   this is the WP12 comparison, run as part of the same harness.

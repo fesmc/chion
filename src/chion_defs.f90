@@ -20,12 +20,38 @@ module chion_defs
     private
 
     ! === Precision ===========================================================
+    !
+    ! PRECISION POLICY  (measured, not assumed -- see docs/porting_notes.md D1)
+    !
+    ! wp = sp for all state, forcing and interfaces. This matches yelmo and
+    ! fesm-utils, so no conversion is needed at the yelmox boundary. It was
+    ! verified adequate for: the layered state (mass, mass_w, density,
+    ! temperature), the tridiagonal conduction solve (strictly diagonally
+    ! dominant; max error 3e-5 K), the densification density gap, and the
+    ! melt-energy residual.
+    !
+    ! wp_acc = dp is MANDATORY for cumulative accumulators. These are summed
+    ! every step and never reset, so in sp small increments onto a large total
+    ! are lost outright: 0.01 kg m-2 increments onto 1e5 kg m-2 drift by
+    ! 80 kg m-2 (0.08%) over a 100-year daily run. Applies to smb_ice, runoff,
+    ! melt, refreezing, vapor_mass, sublimation, latent_heat_flux_sum,
+    ! mass_base and pdd_sum.
+    !
+    ! Three expressions must additionally be evaluated in dp LOCALLY, even
+    ! though their inputs and outputs are wp. Each is a difference of nearly
+    ! equal numbers feeding a division or a tolerance test:
+    !   1. pore volume   phi = m/rho - m/rho_i     (percolation, albedo)
+    !      In sp, phi is quantized at ~1e-5 m, so the TOL_TINY guard can never
+    !      fire and the division lwc = m_w/rho_w/phi is unstable.
+    !   2. cold content  (T0 - T)*ci*m_s           (refreezing)
+    !      sp resolution at 273 K is 3e-5 K; smaller offsets are pure noise.
+    !   3. surface energy accumulation over diurnal substeps.
+    ! Use real(wp_acc) locals, convert back on store. This is a few operations
+    ! per column per step -- the cost is not measurable.
 
-    ! Note: fesm-utils defines wp = sp. chion overrides this with wp = dp.
-    ! Chion.jl is Float64 throughout and its tolerances (TOL_TINY = 1e-12)
-    ! are meaningless in single precision. See docs/PLAN.md section 3.
-    integer, parameter, public :: wp = dp
-    integer, parameter, public :: wp_chion = wp     ! exposed to external models
+    integer, parameter, public :: wp     = sp
+    integer, parameter, public :: wp_acc = dp      ! cumulative accumulators
+    integer, parameter, public :: wp_chion = wp    ! exposed to external models
 
     public :: sp, dp
 
@@ -36,11 +62,17 @@ module chion_defs
 
     ! === Numeric tolerances ==================================================
     ! Chion.jl/src/constants.jl:9-10.
-    ! WARNING: these two are NOT interchangeable. Different routines gate on
+    !
+    ! WARNING 1: these two are NOT interchangeable. Different routines gate on
     ! different thresholds, deliberately. See docs/PLAN.md section 5, item 1.
+    !
+    ! WARNING 2: both are declared dp so that comparisons promote correctly.
+    ! TOL_TINY is below sp resolution for any quantity of order 1 or larger,
+    ! so a guard of the form "x <= TOL_TINY" is only meaningful when x itself
+    ! was computed in dp. See the precision policy above.
 
-    real(wp), parameter, public :: TOL_TINY        = 1.0e-12_wp   ! EPS_TINY
-    real(wp), parameter, public :: TOL_EMPTY_LAYER = 1.0e-10_wp   ! EPS_EMPTY_LAYER
+    real(wp_acc), parameter, public :: TOL_TINY        = 1.0e-12_wp_acc  ! EPS_TINY
+    real(wp_acc), parameter, public :: TOL_EMPTY_LAYER = 1.0e-10_wp_acc  ! EPS_EMPTY_LAYER
 
     ! === Scheme flags ========================================================
     ! Chion.jl/src/constants.jl:43-49. Integer-valued so that physics routines

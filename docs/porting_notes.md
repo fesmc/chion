@@ -12,14 +12,44 @@ Each entry states **what**, **why**, and **impact**.
 
 ## WP1 — `chion_defs.f90`
 
-### D1. `wp = dp`, not re-exported from fesm-utils
-**What:** `chion_defs` imports `sp`/`dp` from fesm-utils `precision` but defines its own
-`wp = dp`. fesm-utils (and yelmo) use `wp = sp`.
-**Why:** Chion.jl is `Float64` throughout, and `EPS_TINY = 1e-12` is below single-precision
-resolution — in `sp` it would be indistinguishable from zero, silently disabling several
-guards. Decision recorded in `docs/PLAN.md` section 3, item 2.
-**Impact:** Host code linking against both yelmo and chion must convert at the interface.
-`wp_chion` is exported for that purpose, mirroring yelmo's `wp_yelmo`.
+### D1. `wp = sp` for state, `wp_acc = dp` for accumulators
+**What:** Chion.jl is `Float64` throughout. chion uses `wp = sp` for the layered state,
+forcing and all public interfaces, and `wp_acc = dp` for the nine cumulative per-column
+accumulators (`smb_ice`, `runoff`, `melt`, `refreezing`, `vapor_mass`, `sublimation`,
+`latent_heat_flux_sum`, `mass_base`, `pdd_sum`). Three expressions are additionally evaluated
+in `dp` locally: pore volume, cold content, and surface-energy accumulation across diurnal
+substeps.
+
+**Why:** `wp = sp` matches yelmo and fesm-utils, so nothing has to be converted at the yelmox
+boundary. The split was measured rather than assumed — see `docs/PLAN.md` section 3.1 for the
+full table. In summary:
+
+- The tridiagonal conduction solve is *safe* in `sp` (max 3.4e-5 K vs `dp`; the matrix is
+  strictly diagonally dominant). This was the expected risk and turned out not to be one.
+- Cumulative accumulators are *not* safe: 0.01 kg m-2 increments onto a 1e5 kg m-2 total are
+  lost outright in `sp`, drifting 80 kg m-2 (0.08%) over a 100-year daily run. This is the
+  only failure with real physical impact, and it is why `wp_acc` exists.
+- Pore volume `phi = m/rho - m/rho_i` is quantized at ~1e-5 m in `sp`, so the `TOL_TINY`
+  guard can never fire, and `phi` feeds the division `lwc = m_w/rho_w/phi`.
+- Cold content `(T0-T)*ci*m_s` is pure noise below 3e-5 K from melting, though the implied
+  mass error is only ~1e-5 kg m-2. Computed in `dp` because it costs nothing.
+
+**Impact:**
+- No conversion needed at the yelmo/yelmox interface. `wp_chion` is still exported (mirroring
+  yelmo's `wp_yelmo`) so host code can be explicit.
+- **All conservation tolerances are `1e-6` relative, not `1e-12`.** Checks over `wp_acc`
+  quantities may still use `dp` thresholds; every WP states which applies.
+- Any new cumulative quantity added later must be `wp_acc`. This is the easiest thing in the
+  port to get wrong, because it compiles and runs fine and only shows up as slow mass drift.
+
+### D1b. Both tolerances are declared `dp`
+**What:** `TOL_TINY` and `TOL_EMPTY_LAYER` are `real(wp_acc)`, not `real(wp)`.
+**Why:** So comparisons promote correctly. `TOL_TINY = 1e-12` is below `sp` resolution for
+anything of order 1 or larger, so `x <= TOL_TINY` is only a meaningful test when `x` itself
+was computed in `dp`. The acceptance test asserts both halves of this explicitly.
+**Impact:** Guards must be applied to `dp`-computed quantities. Where a guard protects an
+`sp` quantity, it is effectively a test against zero — which is what Julia gets too, just for
+a different reason.
 
 ### D2. Tolerances renamed `EPS_*` -> `TOL_*`
 **What:** `EPS_TINY` -> `TOL_TINY`, `EPS_EMPTY_LAYER` -> `TOL_EMPTY_LAYER`.
