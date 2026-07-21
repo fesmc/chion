@@ -40,24 +40,13 @@ module snow_surface_fluxes
                            chion_const_class, chion_step_forcing_class
     use snow_column_utils, only : surface_has_snow
 
-    ! *** WP4 DEPENDENCY -- snow_layers does not exist yet. ******************
-    ! apply_snow_surface_vapor_mass_flux needs the layer removal/merge
-    ! routines. The use statement below and the two call sites marked
-    ! "WP4 INTEGRATION POINT" are commented out so that this module compiles
-    ! standalone today. Nothing else in the module has to change when WP4
-    ! lands: uncomment the use line, uncomment the two calls, and delete the
-    ! two "exit" statements that keep those loops from spinning forever.
-    !
-    ! Julia passes typemax(Int) as a max-index argument to _merge_surface_layer!;
-    ! WP4's Fortran signature has no such argument, so it is simply dropped.
-    !
-    ! Note also: config/Makefile_chion.mk's rule for snow_surface_fluxes.o does
-    ! not yet list snow_layers.o as a prerequisite. It must, once the use
-    ! statement is live. The object ORDER in chion_physics is already correct.
-    !
-    ! use snow_layers, only : remove_depleted_surface_and_route_water, &
-    !                        merge_surface_layer
-    ! ***********************************************************************
+    ! snow_layers supplies the layer removal/merge used by
+    ! apply_snow_surface_vapor_mass_flux when sublimation empties the surface
+    ! layer. Julia passes typemax(Int) as a max-index argument to
+    ! _merge_surface_layer!; the Fortran signature has no such argument, so it
+    ! is simply dropped.
+    use snow_layers, only : remove_depleted_surface_and_route_water, &
+                            merge_surface_layer
 
     implicit none
 
@@ -652,21 +641,15 @@ contains
             ! its liquid water to runoff.
             do while (n .gt. 0)
                 if (mass(1) .gt. real(TOL_EMPTY_LAYER,wp)) exit
-                ! ---- WP4 INTEGRATION POINT 1 of 2 --------------------------
-                ! call remove_depleted_surface_and_route_water(mass,mass_w,density, &
-                !                                              temperature,n,runoff,c)
-                ! ------------------------------------------------------------
-                exit    ! remove when WP4 lands; prevents an infinite loop today
+                call remove_depleted_surface_and_route_water(mass,mass_w,density, &
+                                                             temperature,n,runoff,c)
             end do
 
             ! Re-merge a surface layer that has become too thin.
             do while (n .gt. 1)
                 if (mass(1) .ge. mass_min) exit
-                ! ---- WP4 INTEGRATION POINT 2 of 2 --------------------------
-                ! call merge_surface_layer(mass,mass_w,density,temperature,n, &
-                !                          mass_split,mass_min,c)
-                ! ------------------------------------------------------------
-                exit    ! remove when WP4 lands; prevents an infinite loop today
+                call merge_surface_layer(mass,mass_w,density,temperature,n, &
+                                         mass_split,mass_min,c)
             end do
 
         else
