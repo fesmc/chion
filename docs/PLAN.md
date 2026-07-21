@@ -306,6 +306,19 @@ consistency with yelmo/yelmox.
 so acceptance thresholds are `1e-6` relative, not `1e-12`. Where a quantity is `wp_acc`, the
 tighter `dp` threshold still applies and is stated per WP.
 
+### 3.1b Deferred decisions — follow up before WP19
+
+Open questions parked deliberately, each with the evidence already gathered. None blocks the
+build; all should be resolved before the yelmox cutover.
+
+| # | Question | Evidence so far | Decision |
+|---|---|---|---|
+| 1 | `8.13` vs the gas constant `8.314` in the densification Arrhenius denominators | factor **~2.6** on the low-density BESSI rate at 260 K; factor **~1400** on the mid/high branches at 263 K (WP7) | **Deferred.** Ported verbatim as `DENSIFY_R_GAS`. Too load-bearing to be a unit slip; needs a modelling call, ideally a decade-long column run once WP8 exists. |
+| 2 | `9.81` vs `9.80665` in the overburden | 3.6e-4 relative on overburden, ~1.1e-3 on the cubed mid/high tendencies (WP7) | Open. Small enough to reconcile, but untested end-to-end. |
+| 3 | ITM's `L_m = 3.35e5` vs `chion_const_class%Lm = 3.34e5`, and its hard-coded `273.15` | `itm_c`/`itm_t` are calibrated against them | Open. Keeping them separate prevents a host retuning `T0` from silently retuning ITM's melt. |
+| 4 | PDD `smb_ice` convention: whole-column mass change (PDD) vs ice-only forcing (BESSI) | the two Chion.jl models disagree; `smb_ice` feeds `ice_sheet_net_forcing_yearly` (WP9) | **Must** be resolved before WP19. Reproduced, not fixed. |
+| 5 | Whether `pdd_method` should default to `pism` rather than `simple` | the simple form loses 1.25 kg m-2 d-1 at -5 C and 5.98 at 0 C, concentrated at the ELA; smbpal always uses the integral (WP9) | Recommend `pism` at WP13. |
+
 ### 3.2 Caution: PDD is not fully working in Chion.jl
 
 Chion.jl's `PDDModel` is known not to be fully functional. Consequences for the port:
