@@ -30,6 +30,20 @@ openmp ?= 0
 
 include config/common.mk
 
+# chion overrides the compiler fragment's DFLAGS_DEBUG to drop `underflow` from
+# the FPE trap set (the fragment, and yelmo, trap it).
+#
+# Gradual underflow to zero is correct and expected behaviour throughout this
+# model: exp() of a large negative argument appears in the HTESSEL thermal
+# metamorphism term, the PDD normal-CDF tails, the albedo decay law and the
+# densification Arrhenius factors. Trapping underflow turns correctly-rounded
+# results into SIGILL, and made three of the ten acceptance tests abort under
+# debug=1 while passing under -O2. invalid, zero and overflow are still trapped,
+# which is where real bugs show up.
+#
+# Remove this override to restore yelmo's flag set.
+DFLAGS_DEBUG = -w -g -ggdb -ffpe-trap=invalid,zero,overflow -fbacktrace -fcheck=all
+
 # Determine whether to use normal flags or debugging flags
 DFLAGS = $(DFLAGS_NODEBUG)
 ifeq ($(debug), 1)
@@ -112,13 +126,18 @@ diagnostics : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_diagnostics.x is ready."
 
+wp7 : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_wp7.x $(testdir)/test_wp7.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_wp7.x is ready."
+
 itm : chion-static
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_itm.x $(testdir)/test_itm.f90 \
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_itm.x is ready."
 
 # All acceptance tests
-tests : defs utils layers energy water surface pdd diagnostics itm
+tests : defs utils layers energy water surface wp7 pdd diagnostics itm
 
 .PHONY : usage
 usage:

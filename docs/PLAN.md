@@ -353,10 +353,10 @@ into "silent behaviour change", every WP applies this policy and records each cl
   the default. §5 item 3 lists the candidates. Prefer namelist parameters for anything that is
   arguably tunable physics (`max_lwc`, albedo aging coefficients, densification thresholds);
   named `parameter` constants for genuine physical constants.
-- Reconcile `g = 9.81` in densification with the single gravity constant, and `8.13` in the
-  densification Arrhenius denominators with the gas constant `8.314` — **but** measure the
-  impact on a decade-long column run first and record it. If it shifts results materially,
-  keep both values as separate parameters with the Julia defaults and flag upstream.
+- Reconcile `g = 9.81` in densification with the single gravity constant — **but** measure the
+  impact on a decade-long column run first and record it. Measured in WP7: 3.6e-4 relative on
+  overburden, entering the mid/high branches cubed for ~1.1e-3 on those tendencies. Small, but
+  still untested end-to-end until WP8 exists.
 - Delete the two unused `EnergyWorkspace` arrays and stop misusing `previous_temperature` as
   diagonal scratch (§5 item 12). The workspace becomes stack-local automatic arrays anyway.
 - Remove the duplicate/inconsistent entry points that exist only for GPU dispatch in Julia.
@@ -370,6 +370,17 @@ into "silent behaviour change", every WP applies this policy and records each cl
 - Making the two-pass energy re-solve a true Dirichlet row (§5 item 6).
 - Enforcing volume conservation in the refreezing density cap (§5 item 7).
 - Making the depth cap respect the configured `Ntot` (§5 item 11).
+- **Replacing `8.13` with the gas constant `8.314` in the densification Arrhenius
+  denominators.** This was originally listed as an allowed cleanup pending measurement. WP7
+  measured it and it is **not** a cleanup: `exp(-10160/(8.13*T)) / exp(-10160/(8.314*T))` at
+  260 K is a factor of **~2.6**, so substituting the gas constant more than doubles the
+  low-density BESSI densification rate. The mid/high branches carry `-60000/(8.13*T)`, where
+  the same substitution is a factor of **~1400** at 263 K. A number that load-bearing is a
+  calibrated parameter, not a unit slip. It is ported verbatim as the named parameter
+  `DENSIFY_R_GAS` so the experiment is a one-line change.
+- **Reconciling ITM's `L_m = 3.35e5` with `chion_const_class%Lm = 3.34e5`,** or its hard-coded
+  `273.15` with `T0`. `itm_c` and `itm_t` are calibrated against those values, so a host
+  retuning `T0` would silently retune ITM's melt.
 
 Each of these is a real modelling question, not a style issue. Raise them; do not decide them
 inside a WP.

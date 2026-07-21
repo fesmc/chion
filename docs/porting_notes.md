@@ -168,11 +168,131 @@ These are listed in full in `docs/PLAN.md` section 5. Restated here as they are 
 
 ---
 
+## WP-wide build note
+
+### D12. `debug=1` drops `underflow` from the FPE trap set
+**What:** `config/Makefile` overrides the compiler fragment's `DFLAGS_DEBUG`, removing
+`underflow` from `-ffpe-trap`. yelmo and the shipped configme fragment both trap it.
+**Why:** Gradual underflow to zero is correct and expected throughout this model — `exp()` of
+a large negative argument appears in the HTESSEL thermal metamorphism term, the PDD
+normal-CDF tails, the albedo decay law, and both densification Arrhenius factors. Trapping it
+turns correctly-rounded results into SIGILL. Three of the ten acceptance tests (WP4, WP7,
+WP9) aborted under `debug=1` while passing under `-O2`, purely from this.
+**Impact:** `invalid`, `zero` and `overflow` are still trapped, which is where real bugs
+surface. Remove the override to restore yelmo's flag set. Note the agents developing batch 1
+tested against `invalid,zero,overflow` only, so this mismatch was invisible to all of them —
+worth checking any future WP against the *project's* debug flags, not a hand-rolled set.
+
+---
+
+## Batch 1 acceptance-criteria corrections
+
+Two work-package briefs specified criteria that were wrong. Recorded because the reasoning
+matters more than the fix.
+
+### C1. WP5 — "the analytic linear gradient" does not exist
+The brief asked for a steady state under constant surface flux with a zero-flux bottom. No
+such steady state exists: with no sink, energy accumulates and the column warms indefinitely.
+The correct statement is the *quasi*-steady profile, in which the whole column warms at a
+uniform rate and the conductive flux across interface `k` is `F*(1 - M_k/M_tot)` — the flux at
+depth carries only the energy needed to warm the mass below it. A genuine constant gradient
+would need a Dirichlet base, which the scheme deliberately lacks, and faking one with a
+massive bottom layer distorts `interface_conductance` because `dz = m/rho`.
+
+### C2. WP9 — the requested mass-balance identity cannot hold
+The brief asked to assert
+`d(smb_ice) + d(runoff) == snowfall + rainfall - d(snowpack_swe)`.
+Chion.jl credits `smb_ice` with `d(snowpack_swe)`, so `smb_ice` is a whole-column mass change,
+not the "net mass forcing to the ice sheet" its own NetCDF metadata claims. **BESSI uses the
+opposite convention** (`smb_ice` receives only bottom-export, bare-ice and ice-melt terms), so
+the two models in Chion.jl disagree about what their headline output variable means — and
+`smb_ice` feeds `ice_sheet_net_forcing_yearly` directly. What does hold, and is asserted, is
+`d(smb_ice) + d(runoff) == snowfall + rainfall`, plus a regression guard that the residual
+equals `d(snowpack_swe)` exactly.
+
+---
+
 ## Open items to report upstream to Chion.jl
 
-- `docs/src/processes/percolation.md` contradicts `src/processes/percolation.jl` on where
-  liquid water in a massless layer goes: the doc says the next layer down, the code sends it
-  straight to runoff.
-- `_column_has_liquid_water` docstring says "above the empty-layer tolerance" but the code
-  uses `EPS_TINY`, not `EPS_EMPTY_LAYER`.
-- `PDDModel` defects — see `docs/PLAN.md` section 3.1; the list is to be completed in WP9.
+Collected across batch 1. Severity: **A** = wrong results, **B** = latent/conditional,
+**C** = cosmetic or doc-only.
+
+### A — defects
+
+1. **(A) Vapor-mass diagnostics are not mass-closed.**
+   `_apply_snow_surface_vapor_mass_flux!` returns the *unclipped* `vapor_mass` while the mass
+   it applies is clipped by `max(..., 0)`. When sublimation demand exceeds the surface layer,
+   the cumulative `vapor_mass`/`sublimation` diagnostics overstate what was removed.
+2. **(A) `free_slot_for_surface_split` reads index 0** when the column has no active layers —
+   `_get_layer(mass, _n_active(...), idx)` with no guard. chion raises an explicit error.
+3. **(A) `_htessel_thermal_metamorphism` is dead above ~150 kg m-3.**
+   `xi = 2.8e-6*exp(-4.2e-2*(T0-T) - 460*max(0, rho-150))` — the `460` multiplies a density
+   excess in kg m-3, so the exponential underflows to exactly zero for any density above
+   ~150.15. The term only ever acts on the freshest snow. Looks like a missing unit
+   conversion (460 per Mg m-3?).
+4. **(A) PDD on GPU has never run.** Both GPU call sites in `runtime.jl` pass one argument
+   too many; no matching method exists. Separately, `active_indices` is silently ignored on
+   every CPU PDD path, while BESSI honours it.
+5. **(A) PDD refreezing is uncapped** — a flat fraction of all snow melt refreezes with no
+   cold-content or capacity limit. smbpal caps at `min(melt_snow, acc*f_refrz_max)`, where
+   capacity scales with *accumulation*. Biases SMB positive, unbounded in combination with 7.
+6. **(A) PDD refrozen mass re-enters the melt-able reservoir**, so the snowpack decays only
+   as `0.4^n` and is never exhausted.
+7. **(A) PDD `snowpack_swe` is unbounded** — no cap, no aging, no densification, so the
+   ablation buffer depends on spin-up length.
+
+### B — latent
+
+8. **(B) `merge_surface_layer` divides by `subsurface_mass` unguarded.** Safe only because the
+   defaults make the divisor positive (600 vs 100); a namelist with
+   `mass_min > 2*mass_split` divides by zero.
+9. **(B) `enforce_snow_depth_cap` handles zero-density layers inconsistently** between its
+   forward and reverse passes — excluded from the depth sum, but the full mass is exported
+   without reducing the remaining depth demand, so the cap can over-export.
+10. **(B) `continuous_bottom_deplete`'s empty-layer skip drops a layer without consuming
+    demand**, so a column of near-empty layers unwinds completely under an arbitrarily small
+    depletion request.
+11. **(B) Rain on a bare column is silently dropped.** `_apply_accumulation_resolved!` adds
+    rain only when `mass[1] > 0` strictly and creates no layer for rain-only forcing, so the
+    routine is not mass-closed on its own.
+12. **(B) `_state_dict` divides `mass ./ density` with no guard** (diagnostics.jl:32), so a
+    zero-density active layer yields `Inf` in `thickness` and `total_thickness`. The kernel
+    path is guarded; only the snapshot path is exposed.
+13. **(B) Three copies of the PDD core have already diverged** — the `ddf_snow > 0` guard
+    exists in only one, and the vectorised methods take `ddf_snow` positionally, bypassing
+    constructor validation.
+14. **(B) `_apply_melt!`'s fast path returns the full request** while the general path returns
+    the amount actually melted. `step.jl:346` relies on the difference to trigger bare-ice
+    melt.
+
+### C — doc and cosmetic
+
+15. **(C) `percolation.md` contradicts `percolation.jl`** on where liquid water in a massless
+    layer goes: the doc says the next layer down, the code sends it straight to runoff.
+16. **(C) `_column_has_liquid_water` docstring** says "above the empty-layer tolerance" but
+    the code uses `EPS_TINY`.
+17. **(C) `_surface_liquid_water_content` guards `mass[1]` on `EPS_TINY`** while
+    `_update_surface_albedo_arrays!` guards on `EPS_EMPTY_LAYER` one line earlier. Trap 1
+    territory, but this particular pair is almost certainly unintentional.
+18. **(C) PDD hard-codes `273.15` and `86400.0`** rather than using a constants struct, and
+    uses a single `sigma` where smbpal uses three by surface type.
+
+The full PDD analysis, with quantified impacts and recommended fixes, is in
+`docs/pdd_defects.md` (12 Chion.jl defects, 1 smbpal defect).
+
+---
+
+## Open items to report upstream to smbpal
+
+1. **(A) `calc_ablation_pdd` counts snow that was never there.** It sets
+   `melt = melt_snow + melt_ice` with `melt_snow` the *uncapped potential*, so `melt`,
+   `runoff` and `smb` are all wrong by `melt_snow - acc`, always in the ablation direction.
+   **This matters for WP12 and WP19**, which use smbpal as the equivalence target — we would
+   be validating against a buggy reference. Must be raised before the yelmox cutover.
+2. **(B) `calc_albedo_surface` tests `H_ice .eq. 0.0` exactly**, so `H_ice = 1e-6 m` selects
+   the ice branch rather than land.
+3. **(B) `H_snow_crit` has no zero guard**; `H_snow_crit_desert = 0` divides by zero.
+4. **(B)** The `else` branch of `melt_net` computes `refrz - melted_snow` with a comment
+   asserting `refrz` is zero there. It is not enforced, and with `H_ice = 0` and snow present
+   `refrz` can be nonzero.
+5. **(C)** Mixed sp/dp literals (`0.d0`, `1.d0`, `1d3`) compile only as a gfortran extension.
