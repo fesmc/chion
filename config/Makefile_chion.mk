@@ -95,6 +95,27 @@ $(objdir)/snow_itm.o: $(physdir)/snow_itm.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+## chion core ##################################
+#
+# Dispatcher, public API and facade. These sit above the physics modules and
+# must be archived after them.
+
+$(objdir)/chion_model.o: $(srcdir)/chion_model.f90 \
+						  	$(objdir)/chion_defs.o $(objdir)/snow_bessi.o \
+						  	$(objdir)/snow_pdd.o $(objdir)/snow_itm.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
+$(objdir)/chion_api.o: $(srcdir)/chion_api.f90 \
+						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o \
+						  	$(objdir)/snow_bessi.o $(objdir)/snow_pdd.o $(objdir)/snow_itm.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
+$(objdir)/chion.o: $(srcdir)/chion.f90 \
+						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o $(objdir)/chion_api.o \
+						  	$(objdir)/snow_bessi.o $(objdir)/snow_pdd.o $(objdir)/snow_itm.o \
+						  	$(objdir)/snow_diagnostics.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 ###############################################
 ##
 ## Object lists
@@ -118,3 +139,7 @@ chion_physics = $(objdir)/snow_column_utils.o \
 				$(objdir)/snow_bessi.o \
 				$(objdir)/snow_pdd.o \
 				$(objdir)/snow_itm.o
+
+chion_core =    $(objdir)/chion_model.o \
+                $(objdir)/chion_api.o \
+                $(objdir)/chion.o

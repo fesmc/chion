@@ -240,6 +240,30 @@ module chion_defs
 
         real(wp), allocatable :: latitude_deg(:)         ! [deg N]
 
+        ! --- ITM-only fields (WP11) ------------------------------------
+        !
+        ! These three are deliberately NOT part of chion_step_forcing_class.
+        ! That type mirrors Chion.jl's SnowpackStepForcing and is the shared,
+        ! model-neutral contract every kernel takes; adding ice-sheet state to
+        ! it would make BESSI and PDD carry fields they can never use. ITM
+        ! instead receives them as explicit arguments from the dispatcher
+        ! (itm_step(itm,icol,fc,z_srf,H_ice,PDDs)).
+        !
+        ! ITM's z_srf is the EXISTING surface_height(:) field above -- there is
+        ! no separate array for it.
+        !
+        ! PDDs is a WHOLE-YEAR total, not a per-step value. smbpal recomputes
+        ! it once per year from the annual temperature series
+        ! (smbpal.f90: calc_pdds / the annual loop) and holds it fixed for
+        ! every step of that year. It is used only to interpolate the critical
+        ! snow depth between the "desert" and "forest" end members in
+        ! calc_albedo_surface. A host that overwrites it every step with a
+        ! per-step degree-day increment will get the desert branch always, and
+        ! a systematically different albedo. Set it once per year.
+
+        real(wp), allocatable :: H_ice(:)                ! [m] ice thickness
+        real(wp), allocatable :: PDDs(:)                 ! [K d] ANNUAL positive degree days
+
         ! Time metadata, uniform across columns
         real(wp) :: day_of_year                          ! [d] fractional, 1-based
         real(wp) :: solar_longitude_deg                  ! [deg]
@@ -281,7 +305,8 @@ module chion_defs
         character(len=56)  :: nml_itm
         character(len=56)  :: nml_const
 
-        character(len=512) :: phys_const     ! group name in chion_phys_const.nml
+        character(len=512) :: phys_const_file ! path to the physical constants file
+        character(len=512) :: phys_const     ! group name within phys_const_file
         character(len=512) :: restart        ! restart file, or "none"
 
         logical :: use_omp                   ! set at init from OpenMP availability
@@ -440,6 +465,9 @@ contains
 
         allocate(forc%latitude_deg(ncol))
 
+        allocate(forc%H_ice(ncol))
+        allocate(forc%PDDs(ncol))
+
         forc%air_temperature = 273.15_wp
         forc%snowfall_rate   = 0.0_wp
         forc%rainfall_rate   = 0.0_wp
@@ -465,6 +493,12 @@ contains
         forc%has_prescribed_albedo = .FALSE.
 
         forc%latitude_deg = 0.0_wp
+
+        ! ITM-only. H_ice = 0 selects calc_albedo_surface's land branch, and
+        ! PDDs = 0 selects the "desert" critical snow depth. Both are neutral
+        ! starting points; a host running model="itm" must set them.
+        forc%H_ice = 0.0_wp
+        forc%PDDs  = 0.0_wp
 
         forc%day_of_year         = 1.0_wp
         forc%solar_longitude_deg = 0.0_wp
@@ -499,6 +533,8 @@ contains
         if (allocated(forc%prescribed_albedo))     deallocate(forc%prescribed_albedo)
         if (allocated(forc%has_prescribed_albedo)) deallocate(forc%has_prescribed_albedo)
         if (allocated(forc%latitude_deg))          deallocate(forc%latitude_deg)
+        if (allocated(forc%H_ice))                 deallocate(forc%H_ice)
+        if (allocated(forc%PDDs))                  deallocate(forc%PDDs)
 
         forc%ncol = 0
 

@@ -169,6 +169,46 @@ These are listed in full in `docs/PLAN.md` section 5. Restated here as they are 
 
 ---
 
+## WP11 — public API
+
+### D13. `chion_get_smb` returns one reconciled ice-facing rate in `[kg m-2 s-1]`
+**What:** the three models disagree natively on what "SMB" means. BESSI's `smb_ice` is
+ice-only; PDD's `smb_ice` is a whole-column change; ITM reports both `smb` (whole-column) and
+`smbi` (ice-facing), as a per-step rate in mm/d. `chion_get_smb` returns a single quantity for
+all three: **net mass flux to the ice sheet, `[kg m-2 s-1]`, positive = ice gains mass,
+averaged over the step just completed.**
+
+| model | source quantity | note |
+|---|---|---|
+| BESSI | `smb_ice` | already ice-facing (bottom export, bare-ice vapour, bare melt, ice melt) |
+| PDD | `smb_ice - snowpack_swe` | identically `-ice_melt`; removes the whole-column reservoir term (defect D2) |
+| ITM | `smbi_cum` | smbpal's `snow_to_ice + refrz - melted_ice`; **not** its `smb`, which is whole-column |
+
+`chion_class` retains `smb_cum_prev` and `dt_last`, refreshed at the top of every
+`chion_update`, so the host tracks nothing.
+
+**Why:** the consumer is an ice-sheet model, which needs a flux to apply over its own
+timestep, not a running total. SI matches the units `chion_forcing_class` already uses for
+`snowfall_rate`/`rainfall_rate`, so every mass flux across the boundary is in one unit.
+Returning `m i.e. yr-1` would bake chion's `sec_year`/`rho_ice` into the host's mass budget;
+the header documents the conversion for a host that wants yelmo's convention.
+
+**Impact:** all three mappings are exact identities on the models' own bookkeeping —
+`sum(smb*dt_seconds)` reproduces the cumulative accumulator to `sp` round-off, asserted in
+the test. Two consequences worth knowing before WP19:
+
+- **PDD's ice-facing flux is never positive**, structurally. PDD has no densification and no
+  snow-to-ice conversion, so the only ice-facing term is `-ice_melt`. Not a bug.
+- **PDD's recovery differences an `sp`-stored reservoir**, so it carries unbiased round-off
+  bounded by `eps_sp*snowpack_swe` per step (~4e-10 kg m-2 s-1 at 300 kg m-2). It errs in both
+  directions and cancels over a run; the only visible effect is that a purely accumulating
+  PDD column may report ~-1e-10 rather than exactly 0. Upstream fix: add a `wp_acc` cumulative
+  `ice_melt` to `pdd_state_class`.
+- BESSI and PDD legitimately return exactly 0 for a fresh accumulating column. An ice-facing
+  flux is not the surface accumulation rate.
+
+---
+
 ## WP-wide build note
 
 ### D12. `debug=1` drops `underflow` from the FPE trap set

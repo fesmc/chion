@@ -73,8 +73,8 @@ check-hash:
 	./check_githash > git_chion.txt
 
 # Static library compilation
-chion-static: $(chion_base) $(chion_physics)
-	ar rc $(objdir)/libchion.a $(chion_base) $(chion_physics)
+chion-static: $(chion_base) $(chion_physics) $(chion_core)
+	ar rc $(objdir)/libchion.a $(chion_base) $(chion_physics) $(chion_core)
 	ranlib $(objdir)/libchion.a
 	./check_githash > git_chion.txt
 	@echo " "
@@ -136,13 +136,18 @@ bessi : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_bessi.x is ready."
 
+api : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_api.x $(testdir)/test_api.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_api.x is ready."
+
 itm : chion-static
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_itm.x $(testdir)/test_itm.f90 \
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_itm.x is ready."
 
 # All acceptance tests
-tests : defs utils layers energy water surface wp7 bessi pdd diagnostics itm
+tests : defs utils layers energy water surface wp7 bessi pdd diagnostics itm api
 
 .PHONY : usage
 usage:
