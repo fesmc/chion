@@ -24,12 +24,28 @@ program test_defs
     write(*,*)
 
     ! --- Precision -------------------------------------------------------
-    ! wp = sp for state and interfaces (yelmo-compatible); wp_acc = dp for
-    ! cumulative accumulators. See the precision policy in chion_defs.
-    call check("wp is single precision",  wp .eq. kind(1.0),   nfail)
-    call check("wp == sp",                wp .eq. sp,          nfail)
+    ! wp is selected at compile time: `make ... precision=dp` defines
+    ! CHION_DP (config/Makefile). sp is the production setting and the
+    ! yelmo/yelmox interface kind; dp exists for validation against Chion.jl.
+    ! wp_acc is dp in BOTH builds -- the accumulator argument is about
+    ! summation over 10^4-10^5 steps, not about the precision of the state.
+    ! See the precision policy in chion_defs and docs/porting_notes.md D19.
+    !
+    ! These assertions are therefore written per build rather than pinned to
+    ! sp: a test that hard-codes `wp == sp` does not verify the policy, it
+    ! just forbids one of the two supported builds.
+    call check("wp is sp or dp",          wp .eq. sp .or. wp .eq. dp, nfail)
     call check("wp_acc is double",        wp_acc .eq. kind(1.d0), nfail)
-    call check("wp_acc /= wp",            wp_acc .ne. wp,      nfail)
+
+    if (wp .eq. sp) then
+        write(*,"(a)") "  ..... build precision: wp = sp (production)"
+        call check("wp == sp",            wp .eq. kind(1.0),   nfail)
+        call check("wp_acc /= wp",        wp_acc .ne. wp,      nfail)
+    else
+        write(*,"(a)") "  ..... build precision: wp = dp (validation)"
+        call check("wp == dp",            wp .eq. kind(1.d0),  nfail)
+        call check("wp_acc == wp",        wp_acc .eq. wp,      nfail)
+    end if
 
     ! --- Tolerances ------------------------------------------------------
     call check("TOL_TINY        = 1e-12", abs(TOL_TINY        - 1.0e-12_wp_acc) .lt. 1.0e-24_wp_acc, nfail)
@@ -39,10 +55,19 @@ program test_defs
 
     ! The reason TOL_TINY must be compared against dp-computed quantities:
     ! in sp arithmetic it vanishes against anything of order 1 or larger.
-    call check("TOL_TINY vanishes in sp arithmetic at O(1)", &
-               1.0_wp + real(TOL_TINY,wp) .eq. 1.0_wp, nfail)
+    ! This is a property of sp, so it is asserted only in the sp build --
+    ! but it is exactly WHY the guard hazard exists there, and the dp build
+    ! is asserted to be free of it rather than left untested.
     call check("TOL_TINY survives in dp arithmetic at O(1)", &
                1.0_wp_acc + TOL_TINY .ne. 1.0_wp_acc, nfail)
+
+    if (wp .eq. sp) then
+        call check("TOL_TINY vanishes in wp arithmetic at O(1) [sp build]", &
+                   1.0_wp + real(TOL_TINY,wp) .eq. 1.0_wp, nfail)
+    else
+        call check("TOL_TINY survives in wp arithmetic at O(1) [dp build]", &
+                   1.0_wp + real(TOL_TINY,wp) .ne. 1.0_wp, nfail)
+    end if
 
     ! --- Constants defaults, against Chion.jl/src/constants.jl:173-200 ---
     call chion_const_init(c)

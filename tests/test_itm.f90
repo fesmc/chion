@@ -19,10 +19,11 @@ program test_itm
     ! Plus the two physical invariants that must hold regardless: surface
     ! albedo stays inside the parameter bounds, and melt is never negative.
     !
-    ! Expected residual: chion evaluates the ITM expressions entirely in
-    ! wp = sp, whereas smbpal's `1.d0`, `0.d0` and `1d3` literals promote
-    ! two of them to dp and round back. The difference is sp round-off; the
-    ! tolerance below is 1e-5 relative, and the measured value is printed.
+    ! The reference is algebraically identical to chion's ITM, so the only
+    ! expected residual is round-off from expression ordering: 1.1e-7
+    ! relative at wp = sp and 5.1e-15 at wp = dp. The gate is 128 ulp of the
+    ! build's own precision and the measured values are printed. See the
+    ! notes at the reference block and at check_rel.
 
     use chion_defs, only : wp, wp_acc, chion_step_forcing_class
     use snow_itm
@@ -226,14 +227,14 @@ program test_itm
         call check_rel("equivalence, "//trim(fname(i)), nmax(i), nfail)
     end do
 
-    ! Direct statement of the underlying claim, in ulp: the prognostic
-    ! variable and the albedo -- the two quantities that are not formed by
-    ! differencing -- agree with smbpal to within one sp ulp at their own
-    ! magnitude. Everything else in the budget inherits its absolute error
-    ! from these; see the derivation at check_rel.
-    call check("H_snow agrees with smbpal to within 1 ulp of sp", &
+    ! Direct statement of the underlying claim, in ulp of the BUILD's own
+    ! precision: the prognostic variable and the albedo -- the two quantities
+    ! that are not formed by differencing -- agree with the reference to
+    ! within one ulp at their own magnitude. Everything else in the budget
+    ! inherits its absolute error from these; see the derivation at check_rel.
+    call check("H_snow agrees with the reference to within 1 ulp of wp", &
                dmax(1) .le. real(epsilon(1.0_wp),wp_acc)*fscale(1), nfail)
-    call check("alb_s agrees with smbpal to within 4 ulp of sp", &
+    call check("alb_s agrees with the reference to within 4 ulp of wp", &
                dmax(2) .le. 4.0_wp_acc*real(epsilon(1.0_wp),wp_acc)*fscale(2), nfail)
     call check("tsrf is bit-identical (no ITM arithmetic enters it)", &
                dmax(9) .eq. 0.0_wp_acc, nfail)
@@ -374,10 +375,33 @@ contains
     !   * `type(itm_par_class)` is chion's, whose 19 smbpal fields have
     !     identical names, so every par% reference is unchanged;
     !   * `elemental` dropped (scalar call here);
-    !   * `ref_` name prefix.
-    ! The mixed sp/dp literals (0.d0, 1.d0, 1d3, 0d0) are LEFT AS THEY ARE.
-    ! They are what smbpal compiles, and reproducing them is the whole
-    ! point of this reference.
+    !   * `ref_` name prefix;
+    !   * EVERY floating literal typed `_wp`.
+    !
+    ! On that last change. smbpal's source mixes untyped literals with dp
+    ! ones (`0.d0`, `1.d0`, `1d3`, `0d0`, and a bare `273.15`) -- upstream
+    ! smbpal defect 5. An earlier version of this reference reproduced them
+    ! verbatim, on the reasoning that smbpal-as-compiled was the thing to
+    ! match. That reasoning does not survive the precision switch:
+    !
+    !   - Under wp = sp the untyped literals ARE the working precision, so
+    !     the choice is invisible and the only residual is smbpal's
+    !     incidental dp promotion, ~3e-6 relative.
+    !   - Under wp = dp a bare `273.15` still parses as SINGLE precision --
+    !     273.1499938964844 -- and is then widened. Against chion's true-dp
+    !     `273.15_wp` that is a 6.1035e-06 K offset in the ITM temperature
+    !     term, which propagates to ~1.8e-3 mm/d in melt and, on one step,
+    !     flips `melt` across `melt_crit` so the albedo jumps between
+    !     alb_snow_dry and alb_snow_wet.
+    !
+    ! So the verbatim form silently tested a DIFFERENT MODEL at dp: one with
+    ! a 6 microkelvin offset baked in. Typing the literals `_wp` makes this
+    ! reference assert the claim actually worth asserting -- that chion's ITM
+    ! is ALGEBRAICALLY identical to smbpal's -- and makes that claim testable
+    ! at both precisions. What it gives up is the ability to detect a
+    ! divergence from smbpal-as-compiled; that is an acceptable trade,
+    ! because smbpal is not itself a validated reference (see the smbpal
+    ! defect list in docs/porting_notes.md, in particular defect 1).
     ! =================================================================
 
     subroutine ref_calc_snowpack_budget_step(par,dt,lat,z_srf,H_ice,S,t2m,PDDs,pr,sf, &
@@ -407,31 +431,31 @@ contains
         H_snow = H_snow + sf*dt
 
         atrans = ref_calc_atmos_transmissivity(z_srf,par%trans_a,par%trans_b)
-        if (abs(par%itm_lat0) .lt. 90.0) then
+        if (abs(par%itm_lat0) .lt. 90.0_wp) then
             itm_c = ref_itm_c_lat(par%itm_c,par%itm_b,par%itm_lat0,lat)
         else
             itm_c = par%itm_c
         end if
-        melt_pot = ref_calc_itm(S,t2m-273.15,alb_s,atrans,itm_c,par%itm_t)
+        melt_pot = ref_calc_itm(S,t2m-273.15_wp,alb_s,atrans,itm_c,par%itm_t)
 
         if (melt_pot*dt .gt. H_snow) then
             melted_snow = H_snow
             melted_ice  = melt_pot*dt - H_snow
         else
             melted_snow = melt_pot*dt
-            melted_ice  = 0.0
+            melted_ice  = 0.0_wp
         end if
 
         melt = melted_snow + melted_ice
 
         H_snow = H_snow - melted_snow
 
-        H_snow = max(H_snow,0.0)
+        H_snow = max(H_snow,0.0_wp)
 
         alb_s = ref_calc_albedo_surface(par,z_srf,H_ice,H_snow,PDDs,melt=melt/dt)
 
-        rfac = par%Pmaxfrac * sf/max(1e-3,pr)
-        rfac = rfac + min(1.0,H_snow/1e3) * (1.0 - rfac)
+        rfac = par%Pmaxfrac * sf/max(1.0e-3_wp,pr)
+        rfac = rfac + min(1.0_wp,H_snow/1.0e3_wp) * (1.0_wp - rfac)
 
         refrz_rain     = min(rf*dt*rfac,H_snow)
         refrz_snow     = min(melted_snow*rfac,H_snow-refrz_rain)
@@ -450,7 +474,7 @@ contains
 
         smbi = snow_to_ice + refrz - melted_ice
 
-        if (H_ice .gt. 0.0) then
+        if (H_ice .gt. 0.0_wp) then
             melt_net = refrz - melt
         else
             melt_net = refrz - melted_snow
@@ -479,25 +503,25 @@ contains
         ! Local variables
         real(wp) :: H_snow_crit, depth, as_snow, alb_bg, melt_now
 
-        if ( PDDs .le. 100.0 ) then
+        if ( PDDs .le. 100.0_wp ) then
             H_snow_crit = par%H_snow_crit_desert
-        else if (PDDs .le. 1000.0) then
+        else if (PDDs .le. 1000.0_wp) then
             H_snow_crit = par%H_snow_crit_desert +   &
-                (par%H_snow_crit_forest-par%H_snow_crit_desert) * (PDDs-100.0)/(1000.0-100.0)
+                (par%H_snow_crit_forest-par%H_snow_crit_desert) * (PDDs-100.0_wp)/(1000.0_wp-100.0_wp)
         else
             H_snow_crit = par%H_snow_crit_forest
         end if
 
-        depth = min( H_snow / H_snow_crit, 1.0 )
+        depth = min( H_snow / H_snow_crit, 1.0_wp )
 
-        melt_now = par%melt_crit+1.0
+        melt_now = par%melt_crit+1.0_wp
         if ( present(melt) ) melt_now = melt
 
-        if (z_srf .le. 0.0) then
+        if (z_srf .le. 0.0_wp) then
             alb_bg = par%alb_ocean
-        else if (z_srf .gt. 0.0 .and. H_ice .eq. 0.0) then
-            alb_bg = par%alb_land*(1d3-min(PDDs,1d3))/(1d3-0d0) &
-                                       + par%alb_forest*(min(PDDs,1d3))/(1d3-0d0)
+        else if (z_srf .gt. 0.0_wp .and. H_ice .eq. 0.0_wp) then
+            alb_bg = par%alb_land*(1.0e3_wp-min(PDDs,1.0e3_wp))/(1.0e3_wp-0.0_wp) &
+                                       + par%alb_forest*(min(PDDs,1.0e3_wp))/(1.0e3_wp-0.0_wp)
         else
             alb_bg = par%alb_ice
         end if
@@ -518,7 +542,7 @@ contains
         real(wp), intent(IN) :: z_srf, a, b
         real(wp) :: at
 
-        at = a + b*max(z_srf,0.d0)**0.5
+        at = a + b*max(z_srf,0.0_wp)**0.5_wp
 
         return
 
@@ -531,13 +555,13 @@ contains
         real(wp), intent(IN) :: S, t2m, alb_s, atrans, c, t
         real(wp) :: melt
 
-        real(wp), parameter :: sec_day = 86400.0
-        real(wp), parameter :: rho_w   = 1.d3
-        real(wp), parameter :: L_m     = 3.35e5
+        real(wp), parameter :: sec_day = 86400.0_wp
+        real(wp), parameter :: rho_w   = 1.0e3_wp
+        real(wp), parameter :: L_m     = 3.35e5_wp
 
-        melt = (atrans*(1.d0 - alb_s)*S + c + t*t2m) / (rho_w*L_m)
+        melt = (atrans*(1.0_wp - alb_s)*S + c + t*t2m) / (rho_w*L_m)
 
-        melt = max( melt, 0.d0 ) * sec_day * 1d3
+        melt = max( melt, 0.0_wp ) * sec_day * 1.0e3_wp
 
         return
 
@@ -564,9 +588,9 @@ contains
         real(wp), intent(IN) :: tann, H_ice, melt_net, fac
         real(wp) :: ts
 
-        if (H_ice .gt. 0.0) then
-            ts = tann + fac * max(0.0, melt_net)
-            ts = min(273.15, ts)
+        if (H_ice .gt. 0.0_wp) then
+            ts = tann + fac * max(0.0_wp, melt_net)
+            ts = min(273.15_wp, ts)
         else
             ts = tann
         end if
@@ -626,31 +650,38 @@ contains
 
     subroutine check_rel(label,relerr,nfail)
         ! Equivalence tolerance, applied to the scale-normalized difference
-        ! max|chion - smbpal| / max|smbpal|.
+        ! max|chion - reference| / max|reference|.
         !
         ! DERIVATION OF THE TOLERANCE -- it is not a fitted number.
         !
-        ! wp = sp gives eps = 1.19e-7 (docs/PLAN.md section 3.1). The only
-        ! source of disagreement is smbpal's incidental promotion of two
-        ! expressions to dp via its `1.d0` / `0.d0` / `1d3` literals, which
-        ! perturbs the potential melt at sp round-off. That perturbation
-        ! lands first on the prognostic H_snow, which agrees to 1 ulp.
+        ! The reference above is now algebraically IDENTICAL to chion's ITM,
+        ! literal for literal (see the note at the reference block). There is
+        ! therefore no modelled difference left to bound: the only residual is
+        ! floating-point round-off arising from differences in how the two
+        ! transcriptions associate and order otherwise-equal expressions --
+        ! e.g. chion's `(1000 - min(PDDs,1000))/1000` against the reference's
+        ! `(1d3 - min(PDDs,1d3))/(1d3 - 0d0)`.
         !
-        ! Every other field is then either capped by H_snow (refrz, via the
-        ! min(...,H_snow) capacity limit) or formed by differencing against
-        ! it (melted_ice = melt_pot*dt - H_snow), so all of them inherit an
-        ! ABSOLUTE error of one H_snow ulp regardless of their own
-        ! magnitude. A field whose own scale is F therefore has a relative
-        ! error bound
-        !       eps * scale(H_snow) / F
-        ! and the smallest F in this run is refrz at ~8.4 mm w.e. d-1
-        ! against an H_snow scale of ~770 mm w.e., giving 1.1e-5. Hence the
-        ! 1e-5 gate; the measured worst value is 3.2e-6, and H_snow itself
-        ! agrees to 4e-8. The tight statements are asserted separately
-        ! above, in ulp.
+        ! That is a few operations deep, and the min(...,H_snow) capacity
+        ! chain can carry a difference from one field into the next, so the
+        ! budget is set at 128 ulp of the working precision, at each field's
+        ! own scale. Measured worst values:
+        !
+        !     build    worst rel(scale)   in ulp of eps(wp)
+        !     sp       1.14e-07  (refrz)   0.96
+        !     dp       5.09e-15  (refrz)  22.9
+        !
+        ! The sp build shows FEWER ulp than dp, which looks backwards but is
+        ! not: sp rounds coarsely enough that most of these differences fall
+        ! below the last stored bit and cancel to exactly zero (alb_s, melt
+        ! and tsrf are bit-identical at sp). dp resolves them instead of
+        ! discarding them, so it reports more ulp at a far smaller absolute
+        ! error. 128 ulp covers both with margin (5.6x at dp, 267x at sp).
         !
         ! A failure here means a real divergence in the physics, not
-        ! round-off -- diagnose it, do not loosen the tolerance.
+        ! round-off -- diagnose it, do not loosen the tolerance. The printed
+        ! table above is the sensitive regression signal; this gate is the
+        ! backstop.
 
         implicit none
 
@@ -659,7 +690,7 @@ contains
         integer,          intent(INOUT) :: nfail
 
         ! Local variables
-        real(wp_acc), parameter :: tol = 1.0e-5_wp_acc
+        real(wp_acc), parameter :: tol = 128.0_wp_acc*real(epsilon(1.0_wp),wp_acc)
 
         if (relerr .le. tol) then
             write(*,"(a,a,a,es12.4)") "  ok   : ", trim(label), " rel = ", relerr

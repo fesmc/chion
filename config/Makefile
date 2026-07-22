@@ -1,16 +1,42 @@
 .SUFFIXES: .f .F .F90 .f90 .o .mod
 .SHELL: /bin/sh
 
+# Command-line options at make call
+debug     ?= 0
+openmp    ?= 0
+precision ?= sp
+
+# Working precision of the chion state and public interfaces (docs/PLAN.md
+# section 3.1). `sp` is the production setting and the yelmo/yelmox interface
+# kind; `dp` exists so that chion can be compared against Chion.jl, which is
+# Float64 throughout, without sp round-off masquerading as a porting error --
+# and so that the sp-vs-dp difference is a measured number rather than an
+# assumption. See docs/porting_notes.md D19.
+#
+# The nine cumulative accumulators are wp_acc = dp in BOTH builds; this switch
+# moves only `wp`. In a dp build wp and wp_acc are the same kind, which is
+# harmless: chion declares no generic interfaces, so nothing becomes ambiguous.
+ifeq ($(precision), dp)
+	psuffix = -dp
+else ifeq ($(precision), sp)
+	psuffix =
+else
+$(error precision must be 'sp' or 'dp', got '$(precision)')
+endif
+
 # PATH options
+#
+# The sp build keeps the unsuffixed paths, so the artifact locations named by
+# .configme/manifest.toml and .runme/info.json are unchanged and the dp build
+# is purely additive. The two builds therefore coexist without `make clean`.
+#
+# NOTE (pre-existing): openmp=0 and openmp=1 still share these directories, so
+# switching openmp does need a clean. Only fesm-utils' include dir is swapped.
 srcdir  = src
 physdir = src/physics
-objdir  = libchion/include
-bindir  = libchion/bin
+objdir  = libchion/include$(psuffix)
+bindir  = libchion/bin$(psuffix)
 testdir = tests
-
-# Command-line options at make call
-debug  ?= 0
-openmp ?= 0
 
 ## COMPILER CONFIGURATION ##
 # Assembled by `configme` from a compiler fragment, a machine fragment and an
@@ -53,6 +79,14 @@ endif
 # Debugging flags with profiling output enabled
 ifeq ($(debug), 2)
 	DFLAGS = $(DFLAGS_PROFILE)
+endif
+
+# Select the working precision. src/chion_defs.F90 is the only preprocessed
+# source; its .F90 extension makes both gfortran and ifort preprocess it
+# automatically, so no -cpp/-fpp flag is needed and no configme compiler
+# fragment has to know about this switch.
+ifeq ($(precision), dp)
+	DFLAGS += -DCHION_DP
 endif
 
 ###############################################

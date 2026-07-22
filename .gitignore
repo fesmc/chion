@@ -3,9 +3,12 @@
 # every level and silently excludes it.
 /Makefile
 
-# Build products
+# Build products. The precision=dp build gets its own suffixed directories so
+# it can coexist with the sp build (config/Makefile: psuffix).
 libchion/include/*
 libchion/bin/*
+libchion/include-dp/
+libchion/bin-dp/
 !libchion/include/.gitkeep
 !libchion/bin/.gitkeep
 *.o
@@ -29,3 +32,6 @@ tmp/
 
 # macOS
 .DS_Store
+
+# WP16 harness run products
+validation/work/

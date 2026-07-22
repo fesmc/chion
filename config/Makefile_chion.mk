@@ -15,7 +15,10 @@
 
 ## chion base ##################################
 
-$(objdir)/chion_defs.o: $(srcdir)/chion_defs.f90
+# chion_defs is the ONLY preprocessed source. The .F90 extension makes both
+# gfortran and ifort preprocess it without a -cpp/-fpp flag; the Makefile
+# passes -DCHION_DP when precision=dp. See docs/porting_notes.md D19.
+$(objdir)/chion_defs.o: $(srcdir)/chion_defs.F90
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 ## chion physics ###############################

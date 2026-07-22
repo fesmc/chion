@@ -243,9 +243,12 @@ program chion_grid
     write(*,"(a,f10.4,a,f10.4)") " dt, dt_out : ", dt_use, "  ", dt_out
     write(*,"(a)")        "==========================================================="
 
+    ! Record 1 is the INITIAL state, before any step, at the initial time.
     call chion_write_init(chn,file_out,times(1),"days")
     call chion_write_step(chn,file_out,times(1))
 
+    ! Every later record is written at the time the state is valid AT, which
+    ! is the END of the step that produced it -- see the note in the run loop.
     time_next_out = times(1) + dt_out
     n_out         = 1
 
@@ -257,6 +260,9 @@ program chion_grid
 
     do it = 1, nt
 
+        ! `time` is the START of step it, which is when the forcing sample
+        ! times(it) applies. The state produced by the step is valid at
+        ! time + dt_use, and that is the stamp it is written under below.
         time = times(it)
 
         call nc_read(file_forcing,trim(name_t2m),t2m,start=[1,1,it],count=[nx,ny,1])
@@ -282,8 +288,19 @@ program chion_grid
 
         call chion_update(chn,dt_use)
 
-        if (time .ge. time_next_out - 0.5_wp*dt_use) then
-            call chion_write_step(chn,file_out,time)
+        ! Output. The state now in `chn` is the state AFTER the step, so it is
+        ! valid at time + dt_use and is stamped with that, not with `time`.
+        !
+        ! Getting this wrong is not cosmetic: labelling a post-step state with
+        ! the pre-step time shifts the whole output series one step earlier
+        ! than the physics, which silently biases any comparison against a
+        ! reference model by one timestep. The test is written on the same
+        ! post-step time so that dt_out <= dt_use emits a record after EVERY
+        ! step, including the first and last -- the previous form compared
+        ! `time` against a threshold seeded from times(1) + dt_out and so
+        ! dropped the after-step-1 record entirely.
+        if (time + dt_use .ge. time_next_out - 0.5_wp*dt_use) then
+            call chion_write_step(chn,file_out,time+dt_use)
             n_out         = n_out + 1
             time_next_out = time_next_out + dt_out
         end if
@@ -292,7 +309,9 @@ program chion_grid
 
     call system_clock(clock1)
 
-    call chion_restart_write(chn,file_restart,time)
+    ! Same convention as the output records: the restart holds the state after
+    ! the final step, so it is stamped at the end of that step.
+    call chion_restart_write(chn,file_restart,time+dt_use)
 
     write(*,"(a)") ""
     write(*,"(a)") "== chion_grid summary ====================================="

@@ -49,7 +49,21 @@ module chion_defs
     ! Use real(wp_acc) locals, convert back on store. This is a few operations
     ! per column per step -- the cost is not measurable.
 
+    ! wp is selectable at COMPILE TIME: `make ... precision=dp` defines
+    ! CHION_DP. sp is the production setting and the yelmo/yelmox interface
+    ! kind; dp exists so that the port can be compared against Chion.jl, which
+    ! is Float64 throughout, without sp round-off being mistaken for a porting
+    ! error -- and so that the sp-vs-dp difference is measured rather than
+    ! assumed. See docs/porting_notes.md D19 and validation/.
+    !
+    ! Note this moves ONLY wp. wp_acc stays dp in both builds: the accumulator
+    ! argument below is about summation over 10^4-10^5 steps, not about the
+    ! precision of the state, and it holds regardless of what wp is.
+#ifdef CHION_DP
+    integer, parameter, public :: wp     = dp
+#else
     integer, parameter, public :: wp     = sp
+#endif
     integer, parameter, public :: wp_acc = dp      ! cumulative accumulators
     integer, parameter, public :: wp_chion = wp    ! exposed to external models
 
