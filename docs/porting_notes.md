@@ -116,9 +116,14 @@ future package.
 in `~/models/configme` (commit `a5656da`); full configme test suite passes (210 tests).
 After `pip install -U`, `configme -m macbook -c gfortran` generates the root `Makefile`
 correctly and `make chion-static` builds against it.
-**Still open:** the branch is pushed (`fesmc/configme:add-chion-package`) but unmerged, and
-chion is not yet listed in `data/orchestrators/yelmox.toml` `default_packages` — that belongs
-to WP19 phase A.
+**Merged.** `a5656da` ("Add chion package", 2026-07-21) is in `fesmc/configme:main`; the
+`add-chion-package` branch has been deleted. configme 0.14.0 ships `chion.toml`, so WP18 is
+complete and needs nothing further.
+
+**Still open:** chion is not listed in `data/orchestrators/yelmox.toml` `default_packages`,
+which currently reads `fesm-utils, yelmo, FastIsostasy, FastHydrology, rembo1`. That is
+WP19 phase A, not WP18 — adding chion to an orchestrator's defaults is a statement that
+yelmox builds it by default, which should not happen before the cutover evidence exists.
 
 ### D11. `.gitignore` patterns must anchor `Makefile` to the repo root
 **What:** `/Makefile`, not `Makefile`.
