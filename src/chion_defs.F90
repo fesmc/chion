@@ -113,6 +113,39 @@ module chion_defs
     real(wp), parameter, public :: DEF_MOLAR_MASS_DRY_AIR     = 0.0289644_wp
     real(wp), parameter, public :: DEF_UNIVERSAL_GAS_CONSTANT = 8.31446261815324_wp
 
+    ! === Reference-reproduction mode =========================================
+    !
+    ! `make ... legacy_chion=1` defines CHION_LEGACY, which reverts the
+    ! DELIBERATE PHYSICS CORRECTIONS chion has made against Chion.jl, so that
+    ! the validation harness can still prove the port is faithful.
+    !
+    ! It exists because "is the port correct?" and "is the reference correct?"
+    ! are different questions and must not be conflated. Without it, every
+    ! upstream bug chion fixes would show up as a WP16 gate failure, and the
+    ! only way to keep the gate green would be to stop testing those fields --
+    ! so the harness would get weaker exactly as the port got better.
+    !
+    ! THIS IS NOT A PRODUCTION SETTING. It selects physics believed to be
+    ! wrong. Nothing but validation/ should ever build with it.
+    !
+    ! Currently reverted under CHION_LEGACY:
+    !   * DENSIFY_R_GAS -> 8.13, Chion.jl's typo for the gas constant
+    !     (Chion.jl issue #18, docs/porting_notes.md D22).
+    !
+    ! Deliberately NOT covered: the PDD smb_ice convention (Chion.jl issue #19,
+    ! D23). Chion.jl's PDD is not authoritative (docs/PLAN.md section 3.2), so
+    ! reproducing its convention would mean maintaining a second PDD core --
+    ! which is upstream defect 13 (three diverged copies) reintroduced on
+    ! purpose. PDD is compared to Chion.jl as a REPORTED diagnostic instead,
+    ! and gated on its own mass-closure identity.
+#ifdef CHION_LEGACY
+    real(wp_acc), parameter, public :: DENSIFY_R_GAS = 8.13_wp_acc
+    logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
+#else
+    real(wp_acc), parameter, public :: DENSIFY_R_GAS = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
+    logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
+#endif
+
     integer,  parameter, public :: DEF_NTOT             = 15
     real(wp), parameter, public :: DEF_MASS_MAX         = 500.0_wp
     real(wp), parameter, public :: DEF_MASS_SPLIT       = 300.0_wp

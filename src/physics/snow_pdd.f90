@@ -5,12 +5,25 @@ module snow_pdd
     ! against smbpal/src/smb_pdd.f90 (calc_ablation_pdd, calc_temp_effective),
     ! which is the PDD scheme actually in production use in yelmox.
     !
-    ! WARNING. Chion.jl's PDDModel is known NOT to be fully working, so this
-    ! module is a port of a defective reference. The physics below reproduces
-    ! Chion.jl deliberately, defect for defect, so that the two models can be
-    ! compared field by field in WP16. Every known defect is catalogued, with
-    ! its physical consequence and a recommended upstream fix, in
-    ! docs/pdd_defects.md. Read that file before changing anything here.
+    ! WARNING. Chion.jl's PDDModel is known NOT to be fully working, and is
+    ! NOT authoritative for this module (docs/PLAN.md section 3.2). Every known
+    ! defect is catalogued, with its physical consequence and a recommended
+    ! upstream fix, in docs/pdd_defects.md. Read that file before changing
+    ! anything here.
+    !
+    ! This module DELIBERATELY DIVERGES from Chion.jl on the snowpack budget:
+    ! smb_ice is ice-facing, refreezing is capacity-limited by the snowpack,
+    ! refrozen mass becomes ice rather than re-entering the reservoir, and the
+    ! reservoir is capped. That is the capped one-layer scheme smbpal and
+    ! Chion.jl's own BESSI use. See pdd_column_apply's header for the full
+    ! rationale, docs/porting_notes.md D23, and Chion.jl issue #19.
+    !
+    ! Consequence for WP16: PDD is NOT gated against Chion.jl any more, because
+    ! the two now implement different budgets on purpose. It is gated on its own
+    ! mass-closure identity instead, and the Chion.jl comparison is reported as
+    ! a diagnostic. Reproducing Chion.jl's convention behind the CHION_LEGACY
+    ! switch was considered and rejected: it would mean maintaining a second
+    ! copy of this core, which is upstream defect 13 reintroduced on purpose.
     !
     ! This is a BULK model: no layers, no temperature profile, no density, no
     ! energy balance, no albedo. State is four per-column scalars.
@@ -59,8 +72,9 @@ module snow_pdd
 
         real(wp) :: ddf_snow             ! [kg m-2 K-1 d-1] snow degree-day factor
         real(wp) :: ddf_ice              ! [kg m-2 K-1 d-1] ice degree-day factor
-        real(wp) :: refreezing_fraction  ! [1] fraction of SNOW melt that refreezes
+        real(wp) :: refreezing_fraction  ! [1] refreezing capacity per unit snowpack
         real(wp) :: temperature_sigma    ! [K] std dev of unresolved T variability
+        real(wp) :: H_snow_max           ! [kg m-2] snowpack cap; excess -> ice
 
         integer  :: pdd_method           ! CHION_PDD_SIMPLE | CHION_PDD_PISM
     end type pdd_par_class
@@ -73,11 +87,11 @@ module snow_pdd
         ! snowpack_swe is a reservoir, so wp. The other three are cumulative
         ! and never reset, so they MUST be wp_acc -- see docs/PLAN.md 3.1.
         !
-        ! NOTE snowpack_swe has no cap, no aging and no densification, so it
-        ! grows without bound in any column that never melts (defect D3). If
-        ! that defect is not fixed upstream, this field will eventually reach
-        ! magnitudes where sp cannot resolve a daily snowfall increment, and it
-        ! must then be promoted to wp_acc as well.
+        ! snowpack_swe is capped at par%H_snow_max (docs/porting_notes.md D23),
+        ! so unlike Chion.jl it is bounded and sp is safe for it. Chion.jl has
+        ! no cap, so there the field grows without bound in any column that
+        ! never melts (defect D3) and would eventually reach magnitudes where
+        ! sp cannot resolve a daily snowfall increment.
 
         integer :: ncol
 
@@ -133,6 +147,10 @@ contains
         par%refreezing_fraction = 0.6_wp
         par%temperature_sigma   = 5.0_wp
 
+        ! Snowpack cap, matching smbpal/ITM's H_snow_max (5000 mm w.e. in the
+        ! yelmox Greenland configuration). Chion.jl has no cap; see D23.
+        par%H_snow_max          = 5000.0_wp
+
         ! Default reproduces Chion.jl for sub-monthly forcing, which is the
         ! only regime Chion.jl's daily path exercises.
         par%pdd_method          = CHION_PDD_SIMPLE
@@ -172,6 +190,12 @@ contains
         if (par%temperature_sigma .le. 0.0_wp) then
             write(io_unit_err,*) "pdd_par_validate:: Error: temperature_sigma must be positive."
             write(io_unit_err,*) "temperature_sigma = ", par%temperature_sigma
+            stop "Program stopped."
+        end if
+
+        if (par%H_snow_max .le. 0.0_wp) then
+            write(io_unit_err,*) "pdd_par_validate:: Error: H_snow_max must be positive."
+            write(io_unit_err,*) "H_snow_max = ", par%H_snow_max
             stop "Program stopped."
         end if
 
@@ -443,47 +467,75 @@ contains
     ! =====================================================================
 
     subroutine pdd_column_apply(snowpack_swe,smb_ice,runoff,pdd_sum, &
-                                snowfall,rainfall,pdd,par)
-        ! The six-line PDD core, one column, one step.
-        ! Chion.jl _pdd_apply_column_pdd! (pdd.jl:32-58).
+                                snowfall,rainfall,pdd,par, &
+                                snow_melt_out,ice_melt_out,refrozen_out,snow_to_ice_out)
+        ! The PDD core, one column, one step.
         !
-        ! ORDER MATTERS and is reproduced exactly:
+        ! DIVERGES FROM Chion.jl DELIBERATELY (docs/porting_notes.md D23,
+        ! Chion.jl issue #19). Chion.jl's PDD is not authoritative -- see
+        ! docs/PLAN.md section 3.2 -- and its convention is wrong in a way that
+        ! matters to the host ice-sheet model. The scheme below is the
+        ! capped one-layer snowpack that smbpal and Chion.jl's own BESSI use.
         !
         !   pdd_sum        += pdd
         !   available_snow  = snowpack_swe + snowfall    ! snowfall BEFORE melt
         !   snow_melt       = min(available_snow, ddf_snow*pdd)
         !   remaining_pdd   = max(pdd - snow_melt/ddf_snow, 0)
         !   ice_melt        = ddf_ice*remaining_pdd
-        !   refrozen        = refreezing_fraction*snow_melt
-        !   snowpack_swe    = available_snow - snow_melt + refrozen
-        !   smb_ice        += snowfall - snow_melt + refrozen - ice_melt
+        !   H_snow          = available_snow - snow_melt
+        !   refrozen        = min(refreezing_fraction*H_snow, snow_melt)
+        !   snow_to_ice     = refrozen
+        !   if H_snow > H_snow_max:
+        !       snow_to_ice += H_snow - H_snow_max ;  H_snow = H_snow_max
+        !   snowpack_swe    = H_snow
+        !   smb_ice        += snow_to_ice - ice_melt          ! ICE-FACING
         !   runoff         += rainfall + snow_melt - refrozen + ice_melt
         !
-        ! Snowfall is added to the reservoir BEFORE melt is applied, so snow
-        ! falling within a step can be melted within the same step. Rainfall
-        ! contributes to runoff ONLY -- it never enters the snowpack, never
-        ! refreezes and never releases latent heat. Ice melt is drawn only
-        ! from the degree days left over after the snow reservoir is exhausted,
-        ! which is the same construction as smbpal's
-        !     melt_ice = max(0,(melt_snow-acc)*mm_ice/mm_snow)
-        ! (smb_pdd.f90:43), rewritten in terms of remaining degree days.
+        ! WHAT CHANGED, AND WHY
         !
-        ! DEFECTS reproduced here deliberately, see docs/pdd_defects.md:
-        !   D1  refrozen has no cold-content and no capacity limit; smbpal
-        !       caps it with refrz = min(melt_snow, acc*f_refrz_max).
-        !   D2  smb_ice is credited with the change in snowpack_swe as well as
-        !       with the flux to the ice, so it is a whole-column mass change,
-        !       not the "net mass forcing to the ice sheet" it is documented
-        !       to be. This is why the three-reservoir identity
-        !       dsmb + drunoff == snowfall + rainfall - dsnowpack does NOT
-        !       hold; what holds instead is dsmb + drunoff == snowfall +
-        !       rainfall. Both are asserted in tests/test_pdd.f90.
-        !   D6  refrozen re-enters snowpack_swe as ordinary snow, so it can be
-        !       melted again at ddf_snow and refrozen again next step.
+        !   1. smb_ice is ICE-FACING. Chion.jl credits it with the change in
+        !      snowpack_swe too, making it a whole-column mass change despite
+        !      its own metadata calling it "Net mass forcing to the ice sheet".
+        !      That double-counts: a merely accumulating column reports mass to
+        !      the ice sheet while that mass is still seasonal snow, and again
+        !      when it later melts and refreezes. PDD has NO firn
+        !      representation, so a whole-column smb_ice implies a reservoir
+        !      the model does not have. BESSI and ITM are both ice-facing;
+        !      PDD was the odd one out.
+        !
+        !   2. Refreezing is CAPACITY-LIMITED by the remaining snowpack rather
+        !      than a flat fraction of all snow melt. A flat 0.6 refreezes
+        !      regardless of how much snow is there to hold it.
+        !
+        !   3. Refrozen mass becomes superimposed ICE and leaves the melt-able
+        !      reservoir. In Chion.jl it re-enters snowpack_swe, so the pack
+        !      decays only as 0.4^n and is never exhausted -- bare-ice ablation
+        !      is deferred indefinitely.
+        !
+        !   4. The reservoir is CAPPED at H_snow_max, with the excess converted
+        !      to ice. Uncapped, the ablation buffer depends on spin-up length,
+        !      which makes runs with different spin-ups non-comparable. The cap
+        !      is also what lets PDD report a legitimately POSITIVE ice-facing
+        !      flux in the accumulation zone; without it the only ice-facing
+        !      term is -ice_melt and the flux is structurally never positive.
+        !
+        ! Preserved from Chion.jl: snowfall enters the reservoir BEFORE melt,
+        ! so snow falling within a step can melt within it; rainfall goes to
+        ! runoff only, never entering the snowpack, refreezing, or releasing
+        ! latent heat; ice melt is drawn only from the degree days left after
+        ! the snow reservoir is exhausted, matching smbpal's
+        !     melt_ice = max(0,(melt_snow-acc)*mm_ice/mm_snow)
+        ! (smb_pdd.f90:43) rewritten in terms of remaining degree days.
+        !
+        ! MASS CLOSURE, which now actually holds:
+        !     snowfall + rainfall
+        !         == d(snowpack_swe) + snow_to_ice + (runoff - ice_melt)
+        ! ice_melt is excluded because it comes from the ice below, not from
+        ! anything this column received. Asserted in tests/test_pdd.f90.
         !
         ! All arithmetic in wp_acc. snowpack_swe is wp on entry and exit;
-        ! everything between is dp so that the closure identity holds to
-        ! round-off rather than to sp resolution.
+        ! everything between is dp so the closure identity holds to round-off
+        ! rather than to sp resolution.
 
         implicit none
 
@@ -496,14 +548,26 @@ contains
         real(wp_acc),        intent(IN)    :: pdd            ! [K d]    this step
         type(pdd_par_class), intent(IN)    :: par
 
-        ! Local variables
-        real(wp_acc) :: ddf_snow, ddf_ice, f_refrz
-        real(wp_acc) :: available_snow, snow_melt, remaining_pdd
-        real(wp_acc) :: ice_melt, refrozen
+        ! Optional per-step diagnostics. The budget terms are not recoverable
+        ! from the four state variables by algebra -- an earlier version of the
+        ! acceptance test inferred ice melt as d(snowpack_swe) - d(smb_ice),
+        ! which was an identity of the OLD whole-column convention and became
+        ! silently wrong when the convention changed. Reporting them directly
+        ! removes that class of error.
+        real(wp_acc), optional, intent(OUT) :: snow_melt_out   ! [kg m-2]
+        real(wp_acc), optional, intent(OUT) :: ice_melt_out    ! [kg m-2]
+        real(wp_acc), optional, intent(OUT) :: refrozen_out    ! [kg m-2]
+        real(wp_acc), optional, intent(OUT) :: snow_to_ice_out ! [kg m-2]
 
-        ddf_snow = real(par%ddf_snow,wp_acc)
-        ddf_ice  = real(par%ddf_ice,wp_acc)
-        f_refrz  = real(par%refreezing_fraction,wp_acc)
+        ! Local variables
+        real(wp_acc) :: ddf_snow, ddf_ice, f_refrz, H_snow_max
+        real(wp_acc) :: available_snow, snow_melt, remaining_pdd
+        real(wp_acc) :: ice_melt, refrozen, H_snow, snow_to_ice
+
+        ddf_snow   = real(par%ddf_snow,wp_acc)
+        ddf_ice    = real(par%ddf_ice,wp_acc)
+        f_refrz    = real(par%refreezing_fraction,wp_acc)
+        H_snow_max = real(par%H_snow_max,wp_acc)
 
         pdd_sum = pdd_sum + pdd
 
@@ -521,17 +585,39 @@ contains
         end if
 
         ice_melt = ddf_ice*remaining_pdd
-        refrozen = f_refrz*snow_melt
 
-        snowpack_swe = real(available_snow - snow_melt + refrozen,wp)
-        smb_ice      = smb_ice + (snowfall - snow_melt + refrozen - ice_melt)
+        ! Snow left in the reservoir after melt. Refreezing capacity scales
+        ! with it, so a thin pack cannot hold much meltwater and a deep cold
+        ! pack can retain all of it.
+        H_snow   = available_snow - snow_melt
+        refrozen = min(f_refrz*H_snow,snow_melt)
+
+        ! Refrozen meltwater becomes superimposed ice: it leaves the melt-able
+        ! reservoir rather than re-entering it as snow.
+        snow_to_ice = refrozen
+
+        ! Cap the reservoir. The excess is the firn-to-ice conversion that PDD
+        ! has no explicit densification to represent.
+        if (H_snow .gt. H_snow_max) then
+            snow_to_ice = snow_to_ice + (H_snow - H_snow_max)
+            H_snow      = H_snow_max
+        end if
+
+        snowpack_swe = real(H_snow,wp)
+        smb_ice      = smb_ice + (snow_to_ice - ice_melt)
         runoff       = runoff  + (rainfall + snow_melt - refrozen + ice_melt)
+
+        if (present(snow_melt_out))   snow_melt_out   = snow_melt
+        if (present(ice_melt_out))    ice_melt_out    = ice_melt
+        if (present(refrozen_out))    refrozen_out    = refrozen
+        if (present(snow_to_ice_out)) snow_to_ice_out = snow_to_ice
 
         return
 
     end subroutine pdd_column_apply
 
-    subroutine pdd_column_step(snowpack_swe,smb_ice,runoff,pdd_sum,forc,par,c)
+    subroutine pdd_column_step(snowpack_swe,smb_ice,runoff,pdd_sum,forc,par,c, &
+                               snow_melt_out,ice_melt_out,refrozen_out,snow_to_ice_out)
         ! One column, one step, from the standard per-column forcing contract.
         ! Chion.jl _pdd_step_column! (pdd.jl:60-90), generalised to both PDD
         ! flavours.
@@ -551,6 +637,12 @@ contains
         type(pdd_par_class),             intent(IN)    :: par
         type(chion_const_class),         intent(IN)    :: c
 
+        ! Optional per-step diagnostics, passed straight through.
+        real(wp_acc), optional,          intent(OUT)   :: snow_melt_out
+        real(wp_acc), optional,          intent(OUT)   :: ice_melt_out
+        real(wp_acc), optional,          intent(OUT)   :: refrozen_out
+        real(wp_acc), optional,          intent(OUT)   :: snow_to_ice_out
+
         ! Local variables
         real(wp_acc) :: snowfall, rainfall, pdd
 
@@ -559,7 +651,11 @@ contains
         pdd      = pdd_degree_days(forc%air_temperature,forc%dt_days,par,c)
 
         call pdd_column_apply(snowpack_swe,smb_ice,runoff,pdd_sum, &
-                              snowfall,rainfall,pdd,par)
+                              snowfall,rainfall,pdd,par, &
+                              snow_melt_out=snow_melt_out, &
+                              ice_melt_out=ice_melt_out, &
+                              refrozen_out=refrozen_out, &
+                              snow_to_ice_out=snow_to_ice_out)
 
         return
 

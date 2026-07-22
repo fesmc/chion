@@ -8,26 +8,39 @@ module snow_densify
     ! CALLING CONVENTION: contiguous column slices plus the active layer count
     ! n, per docs/porting_notes.md D8.
     !
-    ! MAGIC CONSTANTS CARRIED OVER VERBATIM (docs/PLAN.md section 5, item 3).
-    ! Two of these disagree with the constants chion uses everywhere else, and
-    ! that disagreement is NOT resolved here:
+    ! MAGIC CONSTANTS CARRIED OVER VERBATIM (docs/PLAN.md section 5, item 3),
+    ! with ONE deliberate exception:
     !
-    !   DENSIFY_GRAVITY   = 9.81   while DEF_GRAVITY               = 9.80665
-    !   DENSIFY_R_GAS     = 8.13   while DEF_UNIVERSAL_GAS_CONSTANT = 8.31446...
+    !   DENSIFY_GRAVITY = 9.81  while DEF_GRAVITY = 9.80665   -- still verbatim
+    !   DENSIFY_R_GAS   = the universal gas constant          -- CORRECTED
     !
-    ! docs/PLAN.md section 4.1 permits reconciling both, BUT ONLY after
-    ! measuring the impact on a decade-long column run and recording it. That
-    ! measurement has not been done (it needs WP8), so both are ported exactly
-    ! as Chion.jl has them and are named, not inlined, so the experiment is a
-    ! one-line change when WP8 exists.
+    ! DENSIFY_R_GAS: Chion.jl has 8.13. That is a typo for the gas constant.
+    ! Resolved rather than preserved, on provenance (docs/porting_notes.md D22):
     !
-    !   * 9.81 vs 9.80665 is a 3.6e-4 relative change in overburden, entering
-    !     the mid/high branches cubed -> ~1.1e-3 relative on those tendencies.
-    !   * 8.13 vs 8.314 is the load-bearing one: it sits inside an Arrhenius
-    !     exponent, so exp(-10160/(8.13*T)) / exp(-10160/(8.314*T)) at T=260 K
-    !     is a factor of ~2.6. Substituting the gas constant would change the
-    !     low-density BESSI rate by more than a factor of two. This is a
-    !     modelling question, not a typo to fix silently.
+    !   Herron & Langway (1980), "Firn densification: an empirical model",
+    !   J. Glaciol. 25(93), give the rho < 550 stage as
+    !       k0 = 11 * exp(-10160/(R*T)),   R = 8.314 J K-1 mol-1
+    !   The activation energy 10160 J mol-1 matches this module EXACTLY, and
+    !   Chion.jl's leading 0.011 is H&L's 11 with the kg/Mg unit conversion.
+    !   Ea/(R*T) is then dimensionless and equals 4.70 at 260 K, a sensible
+    !   Arrhenius exponent. There is no reading in which a bare 8.13 multiplies
+    !   a temperature in an activation-energy denominator.
+    !
+    ! PLAN.md section 4.1 previously listed this as NOT reconcilable without a
+    ! modelling decision, on the grounds that the substitution was "a factor of
+    ! ~2.6" at 260 K. THAT FIGURE WAS WRONG. Recomputed:
+    !
+    !       exp(-10160/(8.314*T)) / exp(-10160/(8.13*T))  at 260 K  =  1.11
+    !       exp(-60000/(8.314*T)) / exp(-60000/(8.13*T))  at 263 K  =  1.86
+    !
+    ! i.e. +11% on the low-density rate and +86% on the mid/high rates, not a
+    ! doubling and not a factor of 1400. Both branches move in the same
+    ! direction and by a similar order, which is what a single shared constant
+    ! should do -- the earlier asymmetry was an artefact of the arithmetic error
+    ! and was itself the main argument for treating 8.13 as calibrated.
+    !
+    ! The mid/high branches carry Ea = 60000 J mol-1, which is not H&L's 21400
+    ! but the standard ice-creep activation energy; it expects the same R.
     !
     ! PRESERVED QUIRKS:
     !   * The overburden is sigma = g*(M_above + m/2), with M_above accumulated
@@ -45,6 +58,7 @@ module snow_densify
     use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
 
     use chion_defs, only : wp, wp_acc, TOL_TINY, chion_const_class, &
+                           DENSIFY_R_GAS, &
                            io_unit_err, CHION_DENSIFY_BESSI, CHION_DENSIFY_HTESSEL
 
     implicit none
@@ -53,7 +67,11 @@ module snow_densify
 
     ! --- Constants that differ from chion's standard ones. See header. -----
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc      ! [m s-2] NOT DEF_GRAVITY
-    real(wp_acc), parameter, public :: DENSIFY_R_GAS   = 8.13_wp_acc      ! [-]     NOT the gas constant
+
+    ! DENSIFY_R_GAS [J K-1 mol-1] is defined in chion_defs, because it is
+    ! selected by the CHION_LEGACY preprocessor switch and chion_defs is the
+    ! only preprocessed source. It is the universal gas constant in a normal
+    ! build and Chion.jl's 8.13 under legacy_chion=1.
 
     ! --- Density regime thresholds -----------------------------------------
     real(wp), parameter, public :: DENSIFY_RHO_LOW = 550.0_wp   ! [kg m-3] low  | mid boundary
@@ -76,7 +94,8 @@ contains
     pure function bessi_low_density_rate(density,temperature,rho_i,accumulation_rate) result(drho)
         ! Chion.jl/src/processes/densification.jl:5-11:
         !     0.011*exp(-10160/(8.13*T))*(rho_i - rho)*max(A_t, 0)
-        ! NOTE 8.13, not the gas constant. See the module header.
+        ! chion uses the gas constant where Chion.jl has 8.13 -- this is
+        ! Herron & Langway (1980) stage 1. See the module header.
 
         implicit none
 

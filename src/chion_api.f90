@@ -856,6 +856,7 @@ contains
         call nml_read(filename,group,"ddf_ice",            par%ddf_ice,            init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
         call nml_read(filename,group,"refreezing_fraction",par%refreezing_fraction,init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
         call nml_read(filename,group,"temperature_sigma",  par%temperature_sigma,  init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
+        call nml_read(filename,group,"H_snow_max",         par%H_snow_max,         init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
         call nml_read(filename,group,"pdd_method",         pdd_method,             init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
 
         call chion_check_enum(group,"pdd_method",pdd_method,CHION_PDD_CHOICES)

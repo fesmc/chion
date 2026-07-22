@@ -84,6 +84,7 @@
     ddf_ice             = 8.0               ! [kg m-2 K-1 d-1]
     refreezing_fraction = 0.6               ! [1]
     temperature_sigma   = 5.0               ! [K]
+    H_snow_max          = 5000.0            ! [kg m-2] Snowpack cap; excess -> ice
     pdd_method          = "pism"            ! "simple" | "pism"
 /
 

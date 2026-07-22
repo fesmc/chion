@@ -420,23 +420,20 @@ contains
         !   merely sits in the pack is not in it. That is already the
         !   ice-sheet-facing quantity.
         !
-        ! PDD -- smb_ice MINUS snowpack_swe.
-        !   Chion.jl's PDD credits smb_ice with the change in the snowpack
-        !   reservoir as well as the flux to the ice, making it a whole-column
-        !   mass change (docs/porting_notes.md C2, defect D2). From the PDD
-        !   core (snow_pdd.f90:445):
-        !       d(smb_ice)      = snowfall - snow_melt + refrozen - ice_melt
-        !       d(snowpack_swe) = snowfall - snow_melt + refrozen
-        !   so the difference is EXACTLY -ice_melt, which is the only mass
-        !   PDD ever exchanges with the ice body (it has no densification and
-        !   therefore no snow-to-ice conversion). Subtracting the reservoir is
-        !   not a correction factor or an approximation -- it is the algebraic
-        !   identity that recovers the ice-facing flux. No PDD state is
-        !   modified and no physics is changed; this is an accessor.
-        !   CAVEAT: snowpack_swe is stored in wp (sp), so the recovered flux
-        !   carries an unbiased round-off term bounded by eps_sp*snowpack_swe
-        !   per step. See chion_get_smb's header for the magnitude and for the
-        !   upstream fix.
+        ! PDD -- smb_ice is used unchanged.
+        !   chion's PDD is ice-facing by construction: it accumulates
+        !   snow_to_ice - ice_melt (docs/porting_notes.md D23). No reservoir
+        !   term to remove.
+        !
+        !   This REPLACES the earlier `smb_ice - snowpack_swe` accessor, which
+        !   existed only to undo Chion.jl's whole-column convention at the API
+        !   boundary. That reconciliation had two costs, both now gone: it
+        !   differenced an sp-stored reservoir, so the recovered flux carried
+        !   round-off bounded by eps_sp*snowpack_swe per step; and because PDD
+        !   had no snow-to-ice pathway, the result was identically -ice_melt
+        !   and therefore structurally never positive. With the capped
+        !   reservoir, excess snow above H_snow_max converts to ice, so PDD
+        !   reports a genuine positive flux in the accumulation zone.
         !
         ! ITM -- smbi_cum is used unchanged.
         !   smbpal's smbi is "the mass balance seen by the ice sheet":
@@ -464,7 +461,7 @@ contains
 
             case("pdd")
                 if (size(smb_cum) .ne. pdd%now%ncol) call chion_size_error(size(smb_cum),pdd%now%ncol)
-                smb_cum = pdd%now%smb_ice - real(pdd%now%snowpack_swe,wp_acc)
+                smb_cum = pdd%now%smb_ice
 
             case("itm")
                 if (size(smb_cum) .ne. itm%now%ncol) call chion_size_error(size(smb_cum),itm%now%ncol)

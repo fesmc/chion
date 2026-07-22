@@ -99,7 +99,7 @@ own resolution rather than an absolute number that means different things in the
 sp and dp builds.
 """
 function compare_files(chion_path::AbstractString, julia_path::AbstractString,
-                       vars::Vector{String}; eps_wp::Float64)
+                       vars::Vector{String}; eps_wp::Float64, drop_first::Bool=true)
     diffs = FieldDiff[]
     NCDataset(chion_path) do dc
         NCDataset(julia_path) do dj
@@ -111,7 +111,9 @@ function compare_files(chion_path::AbstractString, julia_path::AbstractString,
             # counts, and chion's own axis is checked for uniformity.
             tc = Array(dc["time"])
             njl = dj.dim[haskey(dj.dim, "t") ? "t" : "time"]
-            length(tc) == njl + 1 || error(
+            # drop_first=false compares two chion files, which both carry the
+            # initial pre-step record, so the counts match exactly.
+            length(tc) == njl + (drop_first ? 1 : 0) || error(
                 "record-count mismatch: chion has $(length(tc)), Chion.jl has " *
                 "$njl; expected chion = Chion.jl + 1 (chion's initial record). " *
                 "Check dt_out == dt in the chion namelist.")
@@ -128,7 +130,9 @@ function compare_files(chion_path::AbstractString, julia_path::AbstractString,
                 aj, layj = read_canonical(dj, name)
                 layc == layj || error("'$name' is layer-resolved in one file only")
 
-                ac = layc ? ac[2:end, :, :, :] : ac[2:end, :, :]   # drop initial record
+                if drop_first
+                    ac = layc ? ac[2:end, :, :, :] : ac[2:end, :, :]
+                end
 
                 size(ac) == size(aj) || error(
                     "'$name' shape mismatch after alignment: chion $(size(ac)) " *
@@ -243,4 +247,51 @@ function report(diffs::Vector{FieldDiff}, label::AbstractString)
                 d.name, d.scale, d.maxabs, d.relscale, d.ulps,
                 d.onset === nothing ? "-" : string(d.onset))
     end
+end
+
+"""
+    pdd_closure(chion_path, forcing_path) -> (residual, input_total, terms)
+
+End-to-end mass closure for chion's PDD, read straight off the output file.
+
+    snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)
+
+This REPLACES the Chion.jl comparison as PDD's gate. chion's PDD deliberately
+implements a different budget from Chion.jl's (docs/porting_notes.md D23,
+Chion.jl issue #19), so agreement with Chion.jl is no longer the property worth
+asserting -- and Chion.jl's own PDD cannot satisfy this identity, because it
+credits `smb_ice` with `d(snowpack_swe)` as well and therefore counts the
+reservoir twice.
+
+Ice melt cancels between `smb_ice` (negative) and `runoff` (positive), which is
+correct: it is mass drawn from the ice body below, not from anything the column
+received.
+"""
+function pdd_closure(chion_path::AbstractString, forcing_path::AbstractString)
+    local swe, smb, runoff, sf, rf, times
+    NCDataset(chion_path) do dc
+        swe, _ = read_canonical(dc, "snowpack_swe")
+        smb, _ = read_canonical(dc, "smb_ice")
+        runoff, _ = read_canonical(dc, "runoff")
+        times = Array(dc["time"])
+    end
+    NCDataset(forcing_path) do df
+        sf = Array(df["SF"]);  rf = Array(df["RF"])   # (x, y, time)
+    end
+
+    dt_sec = (times[2] - times[1]) * 86400.0
+    ncol = size(swe, 3)
+    worst = 0.0; worst_in = 0.0
+    for i in 1:ncol
+        input = sum(Float64(sf[i, 1, k]) + Float64(rf[i, 1, k])
+                    for k in 1:size(sf, 3)) * dt_sec
+        dswe = Float64(swe[end, 1, i]) - Float64(swe[1, 1, i])
+        dsmb = Float64(smb[end, 1, i]) - Float64(smb[1, 1, i])
+        drun = Float64(runoff[end, 1, i]) - Float64(runoff[1, 1, i])
+        res = abs(dswe + dsmb + drun - input)
+        if res / max(input, 1.0) > worst / max(worst_in, 1.0)
+            worst = res; worst_in = input
+        end
+    end
+    return worst, worst_in
 end

@@ -2,9 +2,15 @@
 .SHELL: /bin/sh
 
 # Command-line options at make call
-debug     ?= 0
-openmp    ?= 0
-precision ?= sp
+debug        ?= 0
+openmp       ?= 0
+precision    ?= sp
+legacy_chion ?= 0
+
+# legacy_chion=1 reverts chion's deliberate physics corrections to Chion.jl's
+# values, so validation/ can prove the port is faithful without every upstream
+# bug chion fixes turning into a WP16 gate failure. NOT a production setting:
+# it selects physics believed to be wrong. See src/chion_defs.F90.
 
 # Working precision of the chion state and public interfaces (docs/PLAN.md
 # section 3.1). `sp` is the production setting and the yelmo/yelmox interface
@@ -22,6 +28,10 @@ else ifeq ($(precision), sp)
 	psuffix =
 else
 $(error precision must be 'sp' or 'dp', got '$(precision)')
+endif
+
+ifeq ($(legacy_chion), 1)
+	psuffix := $(psuffix)-legacy
 endif
 
 # PATH options
@@ -87,6 +97,10 @@ endif
 # fragment has to know about this switch.
 ifeq ($(precision), dp)
 	DFLAGS += -DCHION_DP
+endif
+
+ifeq ($(legacy_chion), 1)
+	DFLAGS += -DCHION_LEGACY
 endif
 
 ###############################################

@@ -125,6 +125,7 @@
     ddf_ice             = 8.0               ! [kg m-2 K-1 d-1] Degree-day factor for ice
     refreezing_fraction = 0.6               ! [1] Fraction of SNOW melt that refreezes
     temperature_sigma   = 5.0               ! [K] Std dev of unresolved temperature variability
+    H_snow_max          = 5000.0            ! [kg m-2] Snowpack cap; the excess is converted to ice
     pdd_method          = "pism"            ! PDD integral: "simple" | "pism"
 /
 

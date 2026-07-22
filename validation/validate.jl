@@ -199,21 +199,36 @@ function main()
     jl_bessi = run_julia_bessi(; forcing=fbessi, outfile="julia_bessi.nc",
                                workdir=WORKDIR, ntot=15, years=1)
 
-    for prec in (:dp, :sp)
-        ch = run_chion(; precision=prec, forcing=fbessi,
-                       outfile="chion_bessi_$(prec).nc", workdir=WORKDIR,
-                       model="bessi", dt_out=1.0, dt=1.0)
-        d = compare_files(ch, jl_bessi, BESSI_VARS; eps_wp=eps_of(prec))
-        report(d, "BESSI, chion precision=$prec vs Chion.jl")
-        if prec === :dp
-            nfail += gate(d, "BESSI dp")
-            cov = coverage(ch, [s.name for s in BESSI_SCENARIOS])
-            report_coverage(cov)
-            nfail += check_coverage(cov)
-        else
-            println("\n--- BESSI sp: reported, not gated (see the header of validate.jl) ---")
-        end
-    end
+    # PORT FIDELITY (gated): dp + legacy, so chion runs Chion.jl's own
+    # constants and any residual is attributable to the port itself.
+    ch_legacy = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
+                          outfile="chion_bessi_dp_legacy.nc", workdir=WORKDIR,
+                          model="bessi", dt_out=1.0, dt=1.0)
+    d = compare_files(ch_legacy, jl_bessi, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity: chion dp+legacy vs Chion.jl")
+    nfail += gate(d, "BESSI port fidelity")
+
+    cov = coverage(ch_legacy, [s.name for s in BESSI_SCENARIOS])
+    report_coverage(cov)
+    nfail += check_coverage(cov)
+
+    # PRECISION COST (reported): sp vs dp, chion against itself, so the number
+    # is the cost of wp = sp alone with no reference-model effects mixed in.
+    ch_sp = run_chion(; precision=:sp, forcing=fbessi,
+                      outfile="chion_bessi_sp.nc", workdir=WORKDIR,
+                      model="bessi", dt_out=1.0, dt=1.0)
+    ch_dp = run_chion(; precision=:dp, forcing=fbessi,
+                      outfile="chion_bessi_dp.nc", workdir=WORKDIR,
+                      model="bessi", dt_out=1.0, dt=1.0)
+    report(compare_files(ch_sp, ch_dp, BESSI_VARS; eps_wp=eps_of(:sp),
+                         drop_first=false),
+           "BESSI precision cost: chion sp vs chion dp (reported)")
+
+    # PHYSICS CORRECTION (reported): the measured effect of using the gas
+    # constant in the densification Arrhenius terms (Chion.jl issue #18).
+    report(compare_files(ch_dp, ch_legacy, BESSI_VARS; eps_wp=eps_of(:dp),
+                         drop_first=false),
+           "BESSI densification correction: gas constant vs 8.13 (reported)")
 
     # =================================================================
     # PDD -- Chion.jl for STRUCTURE only. Monthly steps exercise the
@@ -227,14 +242,31 @@ function main()
     jl_pdd = run_julia_pdd(; forcing=fpdd, outfile="julia_pdd.nc",
                            workdir=WORKDIR, years=1)
 
+    # PDD is NOT gated against Chion.jl. chion implements a different snowpack
+    # budget on purpose (D23 / Chion.jl issue #19), so agreement with Chion.jl
+    # is no longer the property worth asserting. It is gated on its own
+    # mass-closure identity instead -- which is strictly stronger, and which
+    # Chion.jl's PDD cannot satisfy at all.
     for prec in (:dp, :sp)
         ch = run_chion(; precision=prec, forcing=fpdd,
                        outfile="chion_pdd_$(prec).nc", workdir=WORKDIR,
                        model="pdd", dt_out=30.0, dt=30.0)
-        d = compare_files(ch, jl_pdd, PDD_VARS; eps_wp=eps_of(prec))
-        report(d, "PDD, chion precision=$prec vs Chion.jl")
-        if prec === :dp
-            nfail += gate(d, "PDD dp")
+        report(compare_files(ch, jl_pdd, PDD_VARS; eps_wp=eps_of(prec)),
+               "PDD, chion $prec vs Chion.jl (REPORTED, not gated -- " *
+               "different budget by design)")
+
+        res, inp = pdd_closure(ch, fpdd)
+        tol = prec === :dp ? 1.0e-9 : 4.0 * eps(Float32)
+        println()
+        println("--- gate: PDD mass closure, precision=$prec ---")
+        @printf("  d(swe)+d(smb_ice)+d(runoff) - (snowfall+rainfall)\n")
+        @printf("    worst column: residual = %.4E on input %.4E  -> rel %.3E\n",
+                res, inp, res / max(inp, 1.0))
+        if res / max(inp, 1.0) <= tol
+            @printf("  ok   : mass closes to %.1E relative\n", tol)
+        else
+            @printf("  FAIL : mass closure exceeds %.1E relative\n", tol)
+            nfail += 1
         end
     end
 

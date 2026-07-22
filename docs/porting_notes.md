@@ -260,6 +260,104 @@ and never split.
 
 ## WP16 — validation harness
 
+### D22. `8.13` in the densification Arrhenius denominators is a typo; corrected
+**What:** `DENSIFY_R_GAS` is the universal gas constant, not Chion.jl's `8.13`.
+Reported upstream as Chion.jl issue #18.
+
+**Why:** provenance. The low-density branch is **Herron & Langway (1980)**,
+*Firn densification: an empirical model*, J. Glaciol. 25(93), stage 1:
+`k0 = 11*exp(-10160/(R*T))` with `R = 8.314 J K-1 mol-1`. The activation energy
+`10160 J mol-1` matches this module exactly and is H&L's published value for
+rho < 550; Chion.jl's leading `0.011` is their `k0 = 11` with the kg/Mg
+conversion; `Ea/(R*T)` is dimensionless and equals 4.70 at 260 K. The expression
+is only dimensionally coherent with `R`. The mid/high branches carry
+`Ea = 60000 J mol-1`, the standard ice-creep value, which expects the same `R`.
+
+PLAN.md §4.1 previously listed this as NOT reconcilable without a modelling
+decision, because the substitution was measured at "a factor of ~2.6" at 260 K
+and "~1400" on the mid/high branches. **Those figures were wrong.** Recomputed:
+
+| branch | at | factor |
+|---|---|---|
+| low-density (`-10160`) | 260 K | **1.11** |
+| mid/high (`-60000`) | 263 K | **1.86** |
+
+Both branches move in the same direction and by a similar order, which is what a
+single shared constant should do. The earlier asymmetry was an artefact of the
+arithmetic error, and it was itself the main argument for treating `8.13` as
+calibrated rather than mistyped.
+
+**Impact:** the *integrated* effect is small, because densification self-limits
+against the `(rho_i - rho)` gap and the `rho_i` cap. Over a 10-year single-column
+percolation-zone run (the §4.1 measurement requirement, now discharged):
+
+| | `8.13` | gas constant | change |
+|---|---|---|---|
+| final bulk density | 651 kg m-3 | 657.0 | +0.9% |
+| cumulative refreezing | 2437 | 2456.3 | +0.8% |
+| cumulative runoff | 4109 | 4114.8 | +0.14% |
+| cumulative melt | 5532 | 5531.4 | -0.01% |
+| peak layer count | 12 | 12 | — |
+
+So it is a correction, not a recalibration. Against Chion.jl it is a 1-9%
+divergence in the density-driven fields, which is why D24 exists.
+
+### D23. PDD adopts BESSI's ice-facing `smb_ice` convention and a capped reservoir
+**What:** chion's PDD no longer reproduces Chion.jl's snowpack budget. `smb_ice`
+is ice-facing (`snow_to_ice - ice_melt`); refreezing is capacity-limited by the
+snow remaining after melt (`min(f*H_snow, snow_melt)`); refrozen mass becomes
+superimposed ice and leaves the melt-able reservoir; and the reservoir is capped
+at the new `H_snow_max` parameter (default 5000 kg m-2, matching smbpal/ITM),
+with the excess converted to ice. Reported upstream as Chion.jl issue #19.
+
+**Why:** Chion.jl's PDD credits `smb_ice` with `d(snowpack_swe)`, making it a
+whole-column mass change despite its own metadata calling it "Net mass forcing
+to the ice sheet". That double-counts against a host ice-sheet model. PDD has no
+firn representation, so a whole-column `smb_ice` implies a reservoir the model
+does not have. BESSI and ITM are both ice-facing; PDD was the odd one out. The
+capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
+
+**Impact:**
+- **The full three-reservoir closure now holds:**
+  `snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)`.
+  Correction C2 below records that this identity *cannot* hold — that was true
+  of Chion.jl's convention and is no longer true of chion's. It is now the WP16
+  gate for PDD, measured at 2.3e-15 relative in dp and 3.8e-07 in sp.
+- `chion_get_smb`'s PDD special case (D13, `smb_ice - snowpack_swe`) is deleted.
+  All three models now share one definition of the ice-facing flux, and the
+  sp round-off that case carried is gone with it.
+- **PDD can now report a positive ice-facing flux.** D13 recorded that it was
+  structurally never positive; the cap's snow-to-ice export is what fixes that.
+- `snowpack_swe` is bounded, so `wp` is safe for it. Uncapped it was not.
+- Three test assertions were inverted, because they had pinned the upstream
+  defects in place — most starkly a "D6 guard" asserting that the snowpack is
+  *never exhausted* under sustained melt.
+- `pdd_column_apply` / `pdd_column_step` gained optional `snow_melt_out`,
+  `ice_melt_out`, `refrozen_out`, `snow_to_ice_out` diagnostics. The test used
+  to infer ice melt as `d(snowpack_swe) - d(smb_ice)`, an identity of the old
+  convention that became silently wrong when the convention changed.
+
+### D24. `legacy_chion=1` build variant
+**What:** `make ... legacy_chion=1` defines `CHION_LEGACY`, which reverts the
+deliberate physics corrections (currently D22) to Chion.jl's values. Builds land
+in `libchion/{include,bin}[-dp]-legacy`.
+
+**Why:** "is the port faithful?" and "is the reference correct?" are different
+questions. Without this, every upstream bug chion fixes turns into a WP16 gate
+failure, and the only way to keep the gate green is to stop testing those fields
+— so the harness gets weaker exactly as the port gets better. D22 alone would
+have ungated 15 of BESSI's 18 fields.
+
+**Impact:** WP16 gates BESSI port fidelity with the dp+legacy build, and reports
+the correction's effect separately as chion-dp vs chion-dp-legacy. **Not a
+production setting** — it selects physics believed to be wrong.
+
+D23 is deliberately NOT covered by the switch: reproducing Chion.jl's PDD
+convention would mean maintaining a second copy of the PDD core, which is
+upstream defect 13 (three diverged copies) reintroduced on purpose. PDD is
+gated on its own mass closure instead, which is a stronger property than
+agreement with a reference that cannot satisfy it.
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was
@@ -380,7 +478,13 @@ depth carries only the energy needed to warm the mass below it. A genuine consta
 would need a Dirichlet base, which the scheme deliberately lacks, and faking one with a
 massive bottom layer distorts `interface_conductance` because `dz = m/rho`.
 
-### C2. WP9 — the requested mass-balance identity cannot hold
+### C2. WP9 — the requested mass-balance identity cannot hold *(superseded by D23)*
+**Superseded.** This was true of Chion.jl's convention, which chion reproduced
+at the time. chion's PDD is now ice-facing (D23) and the full identity
+`d(smb_ice) + d(runoff) + d(snowpack_swe) == snowfall + rainfall` holds exactly
+and is asserted. The analysis below remains accurate as a description of
+Chion.jl.
+
 The brief asked to assert
 `d(smb_ice) + d(runoff) == snowfall + rainfall - d(snowpack_swe)`.
 Chion.jl credits `smb_ice` with `d(snowpack_swe)`, so `smb_ice` is a whole-column mass change,

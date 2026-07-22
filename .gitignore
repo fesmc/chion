@@ -9,6 +9,10 @@ libchion/include/*
 libchion/bin/*
 libchion/include-dp/
 libchion/bin-dp/
+libchion/include-dp-legacy/
+libchion/bin-dp-legacy/
+libchion/include-legacy/
+libchion/bin-legacy/
 !libchion/include/.gitkeep
 !libchion/bin/.gitkeep
 *.o

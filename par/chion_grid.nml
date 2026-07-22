@@ -87,6 +87,7 @@
     ddf_ice             = 8.0               ! [kg m-2 K-1 d-1] Ice degree-day factor
     refreezing_fraction = 0.6               ! [1] Fraction of snow melt that refreezes
     temperature_sigma   = 5.0               ! [K] Unresolved temperature variability
+    H_snow_max          = 5000.0            ! [kg m-2] Snowpack cap; excess -> ice
 /
 
 ! ============================================================

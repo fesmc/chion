@@ -37,7 +37,15 @@ whatever precision either model runs at.
 """
 eps_of(precision::Symbol) = Float64(precision === :dp ? eps(Float64) : eps(Float32))
 
-bindir(precision::Symbol) = precision === :dp ? "libchion/bin-dp" : "libchion/bin"
+"""
+Build variants. `legacy` reverts chion's deliberate physics corrections to
+Chion.jl's values so port fidelity can still be measured -- see
+src/chion_defs.F90 and README.md.
+"""
+function bindir(precision::Symbol; legacy::Bool=false)
+    d = precision === :dp ? "libchion/bin-dp" : "libchion/bin"
+    return legacy ? d * "-legacy" : d
+end
 
 """
     run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra)
@@ -51,12 +59,14 @@ a symlink to the repository's `input/`.
 function run_chion(; precision::Symbol, forcing::AbstractString,
                    outfile::AbstractString, workdir::AbstractString,
                    model::AbstractString="bessi", dt_out::Float64=1.0,
-                   dt::Float64=-1.0, nml_extra::AbstractString="")
+                   dt::Float64=-1.0, nml_extra::AbstractString="",
+                   legacy::Bool=false)
     mkpath(workdir)
     link = joinpath(workdir, "input")
     islink(link) || ispath(link) || symlink(joinpath(CHION_ROOT, "input"), link)
 
-    nml = joinpath(workdir, "chion_$(model)_$(precision).nml")
+    tag = string(precision, legacy ? "_legacy" : "")
+    nml = joinpath(workdir, "chion_$(model)_$(tag).nml")
     open(nml, "w") do io
         print(io, """
 &ctrl
@@ -113,10 +123,11 @@ $(nml_extra)
 """)
     end
 
-    exe = joinpath(CHION_ROOT, bindir(precision), "chion_grid.x")
+    exe = joinpath(CHION_ROOT, bindir(precision; legacy=legacy), "chion_grid.x")
     isfile(exe) || error("$exe not built. Run: make grid" *
-                         (precision === :dp ? " precision=dp" : ""))
-    logfile = joinpath(workdir, "chion_$(model)_$(precision).log")
+                         (precision === :dp ? " precision=dp" : "") *
+                         (legacy ? " legacy_chion=1" : ""))
+    logfile = joinpath(workdir, "chion_$(model)_$(tag).log")
     open(logfile, "w") do log
         run(pipeline(Cmd(`$exe $(basename(nml))`; dir=workdir); stdout=log, stderr=log))
     end

@@ -14,11 +14,12 @@ First run only:
 julia --project=validation -e 'using Pkg; Pkg.develop(path=joinpath(homedir(),"models","Chion.jl")); Pkg.instantiate()'
 ```
 
-Requires both chion builds:
+Requires three chion builds:
 
 ```sh
-make all                 # libchion/bin
-make all precision=dp    # libchion/bin-dp
+make all                                  # libchion/bin
+make all precision=dp                     # libchion/bin-dp
+make all precision=dp legacy_chion=1      # libchion/bin-dp-legacy
 ```
 
 ## What it runs
@@ -26,7 +27,7 @@ make all precision=dp    # libchion/bin-dp
 | target | reference | authority |
 |---|---|---|
 | BESSI | Chion.jl | authoritative — tight tolerances |
-| PDD | Chion.jl | structure only; Chion.jl's PDD is not fully working (PLAN.md §3.2) |
+| PDD | its own mass closure | chion's PDD deliberately implements a different budget from Chion.jl's (D23); the Chion.jl comparison is reported, not gated |
 | ITM | smbpal | no Chion.jl ITM exists; runs `test_itm.x`, not a reimplementation |
 
 One forcing file drives both models per target, so a difference is attributable
@@ -41,7 +42,32 @@ pins its own manifest, which leaves the reference model's repository untouched
 and means a future change to its manifest cannot silently alter what WP16
 validates against.
 
-## Why chion is built twice
+## The three comparisons
+
+| comparison | question | gated? |
+|---|---|---|
+| chion dp+legacy vs Chion.jl | is the **port** faithful? | **yes** |
+| chion sp vs chion dp | what does `wp = sp` cost? | reported |
+| chion dp vs chion dp+legacy | what does the gas-constant correction do? | reported |
+
+`legacy_chion=1` reverts chion's deliberate physics corrections to Chion.jl's
+values (D24). It exists because "is the port faithful?" and "is the reference
+correct?" are different questions: without it, every upstream bug chion fixes
+becomes a gate failure, and the only way to stay green is to stop testing those
+fields — the harness would weaken exactly as the port improved. The gas-constant
+fix alone (D22) would have ungated 15 of BESSI's 18 fields.
+
+PDD is not covered by the switch, on purpose: reproducing Chion.jl's budget
+would mean a second copy of the PDD core, which is upstream defect 13 (three
+diverged copies) reintroduced deliberately. PDD is gated on the full closure
+
+    snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)
+
+which is a stronger property than agreeing with a reference that cannot satisfy
+it at all — Chion.jl credits `smb_ice` with `d(snowpack_swe)` as well, so it
+counts the reservoir twice. Measured: 2.3e-15 relative at dp, 3.8e-07 at sp.
+
+## Why chion is built at more than one precision
 
 `wp` is a compile-time switch (`precision=sp|dp`, see porting_notes D19).
 
@@ -82,14 +108,19 @@ claim: it asserts the layer *structure* is identical, not merely similar.
 
 ### Measured (365 daily steps, 4 columns)
 
-Worst field, dp build: **0.47 ulp** (`temperature`, `density`). `N` is exactly
-0 — the layer counts agree at every step of every column. PDD worst: **0.73
-ulp** (`pdd_sum`). ITM agrees with smbpal to 1.1e-07 relative at sp and 5.1e-15
-at dp.
+Worst field, port-fidelity gate (dp+legacy vs Chion.jl): **0.47 ulp**
+(`temperature`, `density`). `N` is exactly 0 — the layer counts agree at every
+step of every column. ITM agrees with smbpal to 1.1e-07 relative at sp and
+5.1e-15 at dp. PDD mass closure: 2.3e-15 at dp.
 
-sp build, reported: worst ~4e-06 relative (`liquid_water`, `density`), first
-divergence typically within a few records. That is the cost of `wp = sp`,
-measured end to end.
+Reported, not gated:
+
+- **`wp = sp` costs** ~4e-06 relative worst case, first divergence typically
+  within a few records.
+- **The gas-constant correction** moves the density-driven fields by 2-3%
+  against Chion.jl's `8.13`. Integrated over a 10-year column run it is <1% on
+  every cumulative quantity, because densification self-limits against the
+  `(rho_i - rho)` gap and the `rho_i` cap.
 
 ## Coverage is asserted, not assumed
 

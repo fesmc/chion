@@ -295,21 +295,42 @@ contains
             write(*,"(a,g16.8)") "         d(snowpack)   [kg m-2] = ", dswe
             write(*,"(a,g16.8)") "         pdd_sum       [K d]    = ", pdd_sum
 
-            ! --- the closure that holds ---
-            residual = (smb-smb0) + (runoff-runoff0) - input_total
-            call check_close("closure: d(smb)+d(runoff) == snowfall+rainfall", &
+            ! --- full three-reservoir closure -------------------------------
+            ! Everything the column received is accounted for in exactly one
+            ! of: the snow reservoir, the flux to the ice, or runoff.
+            !
+            !     snowfall + rainfall
+            !         == d(snowpack_swe) + d(smb_ice) + d(runoff)
+            !
+            ! Ice melt cancels between smb_ice (negative) and runoff
+            ! (positive), which is correct: it is mass drawn from the ice body
+            ! below, not from anything this column received.
+            !
+            ! docs/porting_notes.md C2 recorded that this identity CANNOT hold,
+            ! and under Chion.jl's convention it cannot -- smb_ice is credited
+            ! with d(snowpack_swe) as well, so the reservoir is counted twice
+            ! and the residual is exactly d(snowpack_swe). Making smb_ice
+            ! ice-facing (D23) restores it. It is asserted here rather than the
+            ! weaker two-term form precisely because it is the identity a host
+            ! ice-sheet model needs to be true.
+            ! TOLERANCE. smb_ice, runoff and the internal arithmetic are all
+            ! wp_acc, so they contribute nothing at this level. The bound comes
+            ! entirely from snowpack_swe, which is stored in wp: both endpoints
+            ! of dswe are rounded to wp, so the residual carries up to
+            ! ~2*eps_wp*max|swe|. At the 5000 kg m-2 cap in sp that is 1.2e-3.
+            ! Under precision=dp the same expression tightens automatically by
+            ! nine orders, which is the point of writing it this way rather
+            ! than hard-coding a number.
+            residual = (smb-smb0) + (runoff-runoff0) + dswe - input_total
+            call check_close("closure: d(swe)+d(smb)+d(runoff) == snowfall+rainfall", &
                              residual, 0.0_wp_acc, &
-                             1.0e-10_wp_acc*max(input_total,1.0_wp_acc), nfail)
+                             4.0_wp_acc*real(epsilon(1.0_wp),wp_acc) &
+                                       *real(par%H_snow_max,wp_acc), nfail)
 
-            ! --- the closure that does not, and by exactly how much ---
-            residual = (smb-smb0) + (runoff-runoff0) &
-                     - (input_total - dswe)
-
-            call check("D2 guard: three-reservoir identity is violated (non-vacuous)", &
+            ! Non-vacuity: the reservoir must actually have moved, or the
+            ! identity above is satisfied trivially.
+            call check("closure is non-vacuous (the reservoir moved)", &
                        abs(dswe) .gt. 1.0_wp_acc, nfail)
-            call check_close("D2 guard: residual equals d(snowpack_swe) exactly", &
-                             residual, dswe, &
-                             1.0e-6_wp_acc*max(abs(dswe),1.0_wp_acc), nfail)
 
             call check("runoff is non-negative", runoff .ge. 0.0_wp_acc, nfail)
             call check("pdd_sum is non-negative", pdd_sum .ge. 0.0_wp_acc, nfail)
@@ -369,8 +390,16 @@ contains
                    swe .eq. 0.0_wp, nfail)
         call check("f_refrz = 0: never negative", swe_min .ge. 0.0_wp, nfail)
 
-        ! Case 2: default refreezing_fraction = 0.6. The reservoir decays
-        ! geometrically by (1-f) each step and is NEVER exhausted -- defect D6.
+        ! Case 2: default refreezing_fraction = 0.6. Refrozen mass now becomes
+        ! superimposed ICE and leaves the melt-able reservoir, so the pack IS
+        ! exhausted under sustained melt.
+        !
+        ! This is the inverse of the assertion that used to stand here. Under
+        ! Chion.jl's scheme refrozen mass re-entered the reservoir, so it
+        ! decayed only as 0.4^n and could never reach zero -- meaning bare-ice
+        ! ablation was deferred indefinitely (Chion.jl issue #13). The old test
+        ! asserted that non-exhaustion as a "D6 guard", i.e. it pinned the
+        ! defect in place. See docs/porting_notes.md D23.
         p = par
 
         swe     = 50.0_wp
@@ -378,19 +407,60 @@ contains
         runoff  = 0.0_wp_acc
         pdd_sum = 0.0_wp_acc
 
-        call pdd_column_step(swe,smb,runoff,pdd_sum,forc,p,c)
-        call check_val("f_refrz = 0.6: one step of infinite melt leaves 0.6*swe", &
-                       swe, 30.0_wp, nfail)
-
         swe_min = swe
-        do n = 1, 20
+        do n = 1, 21
             call pdd_column_step(swe,smb,runoff,pdd_sum,forc,p,c)
             swe_min = min(swe_min,swe)
         end do
 
         call check("f_refrz = 0.6: never negative", swe_min .ge. 0.0_wp, nfail)
-        call check("D6 guard: reservoir still non-zero after 21 steps of &
-                   &infinite melt", swe .gt. 0.0_wp, nfail)
+        call check("refrozen mass leaves the reservoir, so it CAN be exhausted", &
+                   swe .eq. 0.0_wp, nfail)
+
+        ! Note refreezing goes to ZERO as the pack empties, which is correct:
+        ! capacity scales with the snow left after melt, so a pack that melts
+        ! away entirely has nothing left to refreeze into. smb_ice is therefore
+        ! dominated by -ice_melt here and is negative. Asserting it were
+        ! positive would be asserting that mass appears from nowhere.
+        call check("an ablating column reports negative smb_ice", &
+                   smb .lt. 0.0_wp_acc, nfail)
+
+        ! --- the H_snow_max cap ------------------------------------------
+        write(*,*)
+        write(*,"(a)") "--- snowpack cap converts the excess to ice ---"
+
+        p = par
+        p%H_snow_max = 100.0_wp
+
+        call step_forcing_init(forc)
+        forc%dt_days         = 1.0_wp
+        forc%air_temperature = c%T0 - 20.0_wp       ! cold: no melt at all
+        forc%snowfall_rate   = 5.0e-4_wp            ! ~43 kg m-2 d-1
+        forc%rainfall_rate   = 0.0_wp
+
+        swe     = 0.0_wp
+        smb     = 0.0_wp_acc
+        runoff  = 0.0_wp_acc
+        pdd_sum = 0.0_wp_acc
+
+        swe_min = 0.0_wp        ! reused here as the running MAXIMUM
+        do n = 1, 30
+            call pdd_column_step(swe,smb,runoff,pdd_sum,forc,p,c)
+            swe_min = max(swe_min,swe)
+        end do
+
+        call check("snowpack never exceeds H_snow_max", &
+                   swe_min .le. p%H_snow_max, nfail)
+        call check("the cap is actually reached (non-vacuous)", &
+                   swe_min .ge. 0.99_wp*p%H_snow_max, nfail)
+
+        ! A purely accumulating column must report a POSITIVE ice-facing flux
+        ! once the cap is reached. Under the previous convention the only
+        ! ice-facing term was -ice_melt, so this was structurally impossible.
+        call check("a capped accumulating column reports positive smb_ice", &
+                   smb .gt. 0.0_wp_acc, nfail)
+        call check("no runoff on a cold accumulating column", &
+                   runoff .eq. 0.0_wp_acc, nfail)
 
         ! Case 3: negative precipitation rates are clipped, not subtracted.
         swe     = 10.0_wp
@@ -418,7 +488,8 @@ contains
         ! Ice melt may only draw on degree days LEFT OVER after the snow
         ! reservoir is exhausted within the step.
         !
-        ! ice_melt is not stored, but it is recoverable exactly:
+        ! ice_melt is reported directly by the kernel (see run_one). It used
+        ! to be recovered from the state, via the old-convention identity:
         !     d(snowpack) = snowfall - snow_melt + refrozen
         !     d(smb_ice)  = snowfall - snow_melt + refrozen - ice_melt
         ! so  ice_melt   = d(snowpack) - d(smb_ice).
@@ -446,22 +517,21 @@ contains
         ! available_snow = 90 + 6 = 96; ddf_snow = 3, so 32 K d exhausts it.
 
         ! (a) pdd = 1: deep in the snow-limited regime.
-        ! ice_melt is recovered through snowpack_swe, which is stored in sp,
-        ! so the recovery carries sp round-off (~1e-5 of the reservoir). The
-        ! zero-ice-melt checks therefore use a small absolute tolerance rather
-        ! than an exact comparison; 1e-3 kg m-2 is four orders of magnitude
-        ! below the ~8 kg m-2 that a single leftover degree day would produce.
+        ! ice_melt now comes straight from the kernel in wp_acc, so the
+        ! zero-ice-melt checks are exact rather than tolerance-based. The old
+        ! 1e-3 kg m-2 allowance existed only to absorb the sp round-off of
+        ! recovering it through the sp-stored reservoir.
         forc%air_temperature = c%T0 + 1.0_wp
         call run_one(swe0,swe,smb,runoff,pdd_sum,ice_melt,90.0_wp,forc,par,c)
-        call check_close("pdd =  1 K d (potential  3 << 96): no ice melt", &
-                         ice_melt, 0.0_wp_acc, 1.0e-3_wp_acc, nfail)
+        call check("pdd =  1 K d (potential  3 << 96): no ice melt", &
+                   ice_melt .eq. 0.0_wp_acc, nfail)
         call check("pdd =  1 K d: snowpack still present", swe .gt. 0.0_wp, nfail)
 
         ! (b) pdd = 31: potential snow melt 93 < 96, still snow-limited.
         forc%air_temperature = c%T0 + 31.0_wp
         call run_one(swe0,swe,smb,runoff,pdd_sum,ice_melt,90.0_wp,forc,par,c)
-        call check_close("pdd = 31 K d (potential 93 <  96): still no ice melt", &
-                         ice_melt, 0.0_wp_acc, 1.0e-3_wp_acc, nfail)
+        call check("pdd = 31 K d (potential 93 <  96): still no ice melt", &
+                   ice_melt .eq. 0.0_wp_acc, nfail)
 
         ! (c) pdd = 33: potential 99 > 96, so 1 K d is left for ice.
         forc%air_temperature = c%T0 + 33.0_wp
@@ -599,8 +669,13 @@ contains
 
         call chion_forcing_alloc(forc,ncol)
 
+        ! 30 kg m-2 d-1 of snow against 15 kg m-2 d-1 of potential melt
+        ! (ddf_snow=3, pdd=5), so the pack grows while still melting -- both
+        ! branches exercised, and a surviving reservoir for the reset check
+        ! below. At 10 kg m-2 d-1 the pack cannot survive at all now that
+        ! refrozen mass leaves the reservoir (docs/porting_notes.md D23).
         forc%air_temperature = c%T0 + 5.0_wp
-        forc%snowfall_rate   = 10.0_wp/real(c%seconds_per_day,wp)
+        forc%snowfall_rate   = 30.0_wp/real(c%seconds_per_day,wp)
         forc%rainfall_rate   = 0.0_wp
 
         ! Column 3 is deactivated.
@@ -660,9 +735,12 @@ contains
         runoff  = 0.0_wp_acc
         pdd_sum = 0.0_wp_acc
 
-        call pdd_column_step(swe,smb,runoff,pdd_sum,forc,par,c)
-
-        ice_melt = (real(swe,wp_acc) - real(swe0,wp_acc)) - smb
+        ! Ice melt is REPORTED by the kernel, not inferred. It used to be
+        ! recovered as d(snowpack_swe) - d(smb_ice), which was an identity of
+        ! the old whole-column smb_ice convention and became silently wrong
+        ! when that convention changed (docs/porting_notes.md D23).
+        call pdd_column_step(swe,smb,runoff,pdd_sum,forc,par,c, &
+                             ice_melt_out=ice_melt)
 
         return
 
