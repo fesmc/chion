@@ -31,7 +31,7 @@ module chion_model
     !   pdd     call pdd_column_step(swe,smb,runoff,pdd_sum,fc,par,c)
     !               -- takes four scalars by reference; it has no layers and
     !                  no state object worth threading.
-    !   itm     call itm_step(itm,icol,fc,z_srf,H_ice,PDDs)
+    !   itm     call itm_step(itm,icol,fc,z_srf,H_ice,PDDs,c)
     !               -- takes the state object plus three extra arguments that
     !                  are deliberately NOT in chion_step_forcing_class,
     !                  because they are ice-sheet state, not atmosphere.
@@ -217,7 +217,7 @@ contains
             case("itm")
                 ! No H_snow argument: itm_init_state then seeds the snowpack
                 ! at H_snow_max, matching a fresh smbpal run (smbpal.f90:117).
-                call itm_init_state(itm)
+                call itm_init_state(itm,c)
             case DEFAULT
                 call chion_model_error("chion_model_init_state",par%model)
         end select
@@ -387,7 +387,7 @@ contains
                     icol = grd%active_idx(i)
                     call chion_pack_step_forcing(forc,icol,dt_days,fc)
                     call itm_step(itm,icol,fc,forc%surface_height(icol), &
-                                  forc%H_ice(icol),forc%PDDs(icol))
+                                  forc%H_ice(icol),forc%PDDs(icol),c)
                 end do
                 !$omp end parallel do
 

@@ -358,6 +358,49 @@ upstream defect 13 (three diverged copies) reintroduced on purpose. PDD is
 gated on its own mass closure instead, which is a stronger property than
 agreement with a reference that cannot satisfy it.
 
+### D25. Gravity is unified onto standard gravity
+**What:** `DENSIFY_GRAVITY` is `DEF_GRAVITY = 9.80665 m s-2`. Chion.jl carries `9.81` in
+densification and `9.80665` everywhere else. Reverted under `legacy_chion=1`.
+
+**Why:** there is one gravitational acceleration. `9.80665` is standard gravity, **exact by
+definition** (CGPM 1901) rather than a rounded measurement, so it is both the more precise
+value and the one chion already used elsewhere. Two values for one constant in one model is
+a latent inconsistency, not a modelling choice.
+
+**Impact:** 3.6e-4 relative on the overburden, entering the mid/high branches cubed for
+~1.1e-3 on those tendencies — an order of magnitude below the gas-constant correction (D22)
+in the same expression. Chion.jl still has `9.81`, so this is covered by the legacy switch to
+keep WP16's BESSI gate meaningful.
+
+### D26. ITM's physical constants come from `chion_const_class`
+**What:** `snow_itm` no longer defines `ITM_SEC_DAY`, `ITM_RHO_W` or `ITM_L_M`, and no longer
+hard-codes `273.15`. `itm_step`, `itm_init_state`, `calc_itm` and `calc_temp_surf` take
+`chion_const_class` (named `cn`, because ITM's own `c` is the offset coefficient) and read
+`seconds_per_day`, `rho_w`, `Lm` and `T0` from it.
+
+**Why:** three of the four merely duplicated a value chion already had. The fourth actually
+disagreed: smbpal's `L_m = 3.35e5` against `chion_const_class%Lm = 3.34e5`. The latent heat of
+fusion of ice is 3.337e5 J kg-1, so **3.34e5 is the more accurate of the two**. `docs/PLAN.md`
+§4.1 had ruled this out on the grounds that a host retuning `T0` would silently retune ITM's
+melt — but that argument cuts the other way once stated plainly: with two sets of constants,
+a host retuning `T0` or `Lm` leaves ITM silently running different physics from BESSI, which
+is the failure mode worth preventing.
+
+**Impact:**
+- `1/L_m` rises by 0.30%, so ITM's potential melt rises by the same fraction. Measured
+  end-to-end in `tests/test_itm.f90`: the `smb` field scale moves from 56.469 to 56.640,
+  i.e. +0.30% exactly as predicted. §4.1 notes `itm_c`/`itm_t` are calibrated against the
+  smbpal values, so treat this as within their tuning uncertainty rather than a free change.
+- ITM has no Chion.jl counterpart, so this needs no `legacy_chion` coverage.
+- `test_itm`'s reference now takes the same constants. It asserts **algebraic** equivalence
+  (D20), so feeding the two sides different constants would silently turn it into a constants
+  comparison and leave the algebra untested.
+- One assertion there was re-derived rather than re-tuned. `alb_s` is not independent: it is
+  `alb_bg + depth*(as_snow - alb_bg)` with `depth = H_snow/H_snow_crit`, so an absolute error
+  in `H_snow` is amplified by `1/H_snow_crit` (worst case 10 mm w.e.) and scaled by the albedo
+  contrast. The flat "4 ulp" bound that stood there was passing at 3.3 ulp — on luck, not on
+  a stated error path.
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was

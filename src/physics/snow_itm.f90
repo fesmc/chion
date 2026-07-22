@@ -58,22 +58,31 @@ module snow_itm
     ! The conversion (x SEC_DAY) is done inside itm_step, so all ITM state
     ! remains in smbpal's units and is directly comparable.
 
-    use chion_defs, only : wp, wp_acc, io_unit_err, chion_step_forcing_class
+    use chion_defs, only : wp, wp_acc, io_unit_err, chion_step_forcing_class, &
+                           chion_const_class
     use nml,        only : nml_read
 
     implicit none
 
     private
 
-    ! Local physical constants, values taken verbatim from
-    ! smbpal/src/smb_itm.f90:12-14. NOTE L_M = 3.35e5 differs from chion's
-    ! chion_const_class%Lm = 3.34e5 (Chion.jl's value); the smbpal value is
-    ! kept here because ITM's melt rate is calibrated against it and the
-    ! acceptance test is equivalence with smbpal. Do not "reconcile" these
-    ! without re-tuning itm_c/itm_t.
-    real(wp), parameter, public :: ITM_SEC_DAY = 86400.0_wp   ! [s d-1]
-    real(wp), parameter, public :: ITM_RHO_W   = 1.0e3_wp     ! [kg m-3] pure water
-    real(wp), parameter, public :: ITM_L_M     = 3.35e5_wp    ! [J kg-1] latent heat of melting
+    ! ITM's physical constants come from chion_const_class, NOT from private
+    ! copies. smbpal carries its own (smb_itm.f90:12-14), and this module used
+    ! to reproduce them: sec_day = 86400, rho_w = 1e3, L_m = 3.35e5, plus a
+    ! hard-coded 273.15 for the Celsius conversion and the surface-temperature
+    ! cap. Three of the four merely duplicated a value chion already had; the
+    ! fourth, L_m, actually disagreed -- 3.35e5 against chion's 3.34e5.
+    !
+    ! Unified onto chion_const_class (docs/porting_notes.md D26). The latent
+    ! heat of fusion of ice is 3.337e5 J kg-1, so 3.34e5 is the more accurate
+    ! of the two, and having one value means a host that retunes T0 or Lm
+    ! cannot leave ITM silently running on different physics from BESSI.
+    !
+    ! This DOES shift ITM's melt: 1/L_m rises by 0.30%, so potential melt rises
+    ! by the same fraction. docs/PLAN.md section 4.1 flagged that itm_c/itm_t
+    ! are calibrated against the smbpal values, so treat a 0.3% melt increase
+    ! as within the tuning uncertainty of those coefficients rather than as a
+    ! free change -- and see the measured end-to-end effect in tests/test_itm.
 
     type itm_par_class
         ! smbpal itm_par_class (smb_itm.f90:16-27), same names and order, plus
@@ -298,7 +307,7 @@ contains
 
     end subroutine itm_dealloc
 
-    subroutine itm_init_state(itm,H_snow)
+    subroutine itm_init_state(itm,cn,H_snow)
         ! Cold start. smbpal seeds the snowpack at its maximum thickness
         ! (smbpal.f90:117: smb%now%H_snow = smb%par%itm%H_snow_max), which is
         ! preserved as the default so a chion ITM run starting from scratch
@@ -307,8 +316,9 @@ contains
 
         implicit none
 
-        type(itm_class),    intent(INOUT) :: itm
-        real(wp), optional, intent(IN)    :: H_snow(:)
+        type(itm_class),         intent(INOUT) :: itm
+        type(chion_const_class), intent(IN)    :: cn
+        real(wp), optional,      intent(IN)    :: H_snow(:)
 
         if (.not. allocated(itm%now%H_snow)) then
             write(io_unit_err,*) "itm_init_state:: Error: state not allocated. Call itm_alloc first."
@@ -333,7 +343,7 @@ contains
         itm%now%runoff   = 0.0_wp
         itm%now%refrz    = 0.0_wp
         itm%now%melt_net = 0.0_wp
-        itm%now%tsrf     = 273.15_wp
+        itm%now%tsrf     = cn%T0
 
         itm%now%smb_cum    = 0.0_wp_acc
         itm%now%smbi_cum   = 0.0_wp_acc
@@ -345,7 +355,7 @@ contains
 
     end subroutine itm_init_state
 
-    subroutine itm_step(itm,icol,forc,z_srf,H_ice,PDDs)
+    subroutine itm_step(itm,icol,forc,z_srf,H_ice,PDDs,cn)
         ! Advance one column by one step.
         !
         ! Port of smbpal calc_snowpack_budget_step (smb_itm.f90:80-206), in
@@ -369,6 +379,7 @@ contains
         real(wp),        intent(IN)    :: z_srf   ! [m] surface elevation
         real(wp),        intent(IN)    :: H_ice   ! [m] ice thickness
         real(wp),        intent(IN)    :: PDDs    ! [K d] annual positive degree days
+        type(chion_const_class), intent(IN) :: cn  ! physical constants (D26)
 
         ! Local variables
         real(wp) :: dt, lat, t2m, S
@@ -399,8 +410,8 @@ contains
         end if
 
         ! [kg m-2 s-1] -> [mm w.e. d-1], smbpal's working units.
-        sf = forc%snowfall_rate*ITM_SEC_DAY
-        rf = forc%rainfall_rate*ITM_SEC_DAY
+        sf = forc%snowfall_rate*cn%seconds_per_day
+        rf = forc%rainfall_rate*cn%seconds_per_day
         pr = sf + rf
         ! smbpal receives (pr,sf) and forms rf = pr - sf (smb_itm.f90:107).
         ! chion receives snowfall and rainfall separately and forms pr
@@ -429,10 +440,9 @@ contains
         end if
 
         ! calc_itm takes air temperature in CELSIUS. smbpal hard-codes the
-        ! 273.15 conversion at the call site (smb_itm.f90:123); preserved
-        ! rather than routed through chion_const_class%T0, so that a host
-        ! that retunes T0 cannot silently retune ITM's melt.
-        melt_pot = calc_itm(S,t2m-273.15_wp,alb_s,atrans,itm_c_now,itm%par%itm_t)
+        ! 273.15 conversion at the call site (smb_itm.f90:123); chion routes
+        ! it through cn%T0 so the model has ONE freezing point (D26).
+        melt_pot = calc_itm(cn,S,t2m-cn%T0,alb_s,atrans,itm_c_now,itm%par%itm_t)
 
         ! === Partition melt between snow and ice ========================
         if (melt_pot*dt .gt. H_snow) then
@@ -519,7 +529,7 @@ contains
         ! makes it a nonlinear function, so a per-step mean is not the same
         ! as a function of the mean. Recorded as a deviation; the host can
         ! recover smbpal's exact behaviour by averaging tsrf's inputs itself.
-        itm%now%tsrf(icol) = calc_temp_surf(t2m,H_ice,melt_net,itm%par%firn_fac)
+        itm%now%tsrf(icol) = calc_temp_surf(cn,t2m,H_ice,melt_net,itm%par%firn_fac)
 
         ! Cumulative accumulators, in wp_acc. Rates x dt, so these are the
         ! integrated quantities in [mm w.e.].
@@ -641,7 +651,7 @@ contains
 
     end function calc_atmos_transmissivity
 
-    pure function calc_itm(S,t2m,alb_s,atrans,c,t) result(melt)
+    pure function calc_itm(cn,S,t2m,alb_s,atrans,c,t) result(melt)
         ! smbpal calc_itm (smb_itm.f90:311-327). Insolation-temperature-melt:
         ! potential melt from absorbed shortwave plus a linear temperature
         ! term, clipped at zero.
@@ -651,9 +661,13 @@ contains
         ! DEVIATION (round-off only): smbpal's `(atrans*(1.d0 - alb_s)*S ...)`
         ! and `max(melt,0.d0)*sec_day*1d3` promote to dp via the literals.
         ! chion evaluates in wp throughout.
+        !
+        ! rho_w, Lm and seconds_per_day come from the constants struct, which
+        ! is named `cn` here because ITM's own `c` is the offset coefficient.
 
         implicit none
 
+        type(chion_const_class), intent(IN) :: cn
         real(wp), intent(IN) :: S         ! [W m-2] insolation
         real(wp), intent(IN) :: t2m       ! [degC] air temperature
         real(wp), intent(IN) :: alb_s     ! [1] surface albedo
@@ -663,10 +677,10 @@ contains
         real(wp) :: melt                  ! [mm w.e. d-1]
 
         ! Potential melt [m s-1]
-        melt = (atrans*(1.0_wp - alb_s)*S + c + t*t2m)/(ITM_RHO_W*ITM_L_M)
+        melt = (atrans*(1.0_wp - alb_s)*S + c + t*t2m)/(cn%rho_w*cn%Lm)
 
         ! [m s-1] -> [mm d-1], positive melt only
-        melt = max(melt,0.0_wp)*ITM_SEC_DAY*1.0e3_wp
+        melt = max(melt,0.0_wp)*cn%seconds_per_day*1.0e3_wp
 
         return
 
@@ -690,16 +704,18 @@ contains
 
     end function itm_c_lat
 
-    pure function calc_temp_surf(tann,H_ice,melt_net,fac) result(ts)
+    pure function calc_temp_surf(cn,tann,H_ice,melt_net,fac) result(ts)
         ! smbpal calc_temp_surf (smbpal.f90:644-661). Lives in smbpal.f90,
         ! not smb_itm.f90, but tsrf is part of chion's ITM state and yelmox
         ! consumes it (yelmox/libs/yelmox_domain.f90:1167), so it is ported
         ! here.
         !
-        ! NOTE the 273.15 cap is hard-coded in smbpal; preserved.
+        ! smbpal hard-codes the 273.15 cap; chion takes it from cn%T0 so
+        ! there is a single freezing point in the model (D26).
 
         implicit none
 
+        type(chion_const_class), intent(IN) :: cn
         real(wp), intent(IN) :: tann      ! [K] air temperature
         real(wp), intent(IN) :: H_ice     ! [m]
         real(wp), intent(IN) :: melt_net  ! [mm w.e. d-1] refrz - melt
@@ -710,7 +726,7 @@ contains
             ! Positive melt_net (net refreezing) warms the firn.
             ts = tann + fac*max(0.0_wp,melt_net)
             ! Cap at the freezing point on the ice sheet.
-            ts = min(273.15_wp,ts)
+            ts = min(cn%T0,ts)
         else
             ts = tann
         end if

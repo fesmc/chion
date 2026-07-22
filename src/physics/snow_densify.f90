@@ -11,8 +11,16 @@ module snow_densify
     ! MAGIC CONSTANTS CARRIED OVER VERBATIM (docs/PLAN.md section 5, item 3),
     ! with ONE deliberate exception:
     !
-    !   DENSIFY_GRAVITY = 9.81  while DEF_GRAVITY = 9.80665   -- still verbatim
+    !   DENSIFY_GRAVITY = DEF_GRAVITY (9.80665)               -- CORRECTED
     !   DENSIFY_R_GAS   = the universal gas constant          -- CORRECTED
+    !
+    ! DENSIFY_GRAVITY: Chion.jl carries 9.81 here and 9.80665 everywhere else.
+    ! There is only one gravitational acceleration, and 9.80665 m s-2 is
+    ! standard gravity, which is EXACT BY DEFINITION (CGPM 1901) rather than a
+    ! rounded measurement -- so it is both the more precise value and the one
+    ! already used elsewhere in chion. Unified onto it (docs/porting_notes.md
+    ! D25). Impact measured at 3.6e-4 relative on the overburden, entering the
+    ! mid/high branches cubed for ~1.1e-3 on those tendencies.
     !
     ! DENSIFY_R_GAS: Chion.jl has 8.13. That is a typo for the gas constant.
     ! Resolved rather than preserved, on provenance (docs/porting_notes.md D22):
@@ -58,20 +66,18 @@ module snow_densify
     use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
 
     use chion_defs, only : wp, wp_acc, TOL_TINY, chion_const_class, &
-                           DENSIFY_R_GAS, &
+                           DENSIFY_R_GAS, DENSIFY_GRAVITY, &
                            io_unit_err, CHION_DENSIFY_BESSI, CHION_DENSIFY_HTESSEL
 
     implicit none
 
     private
 
-    ! --- Constants that differ from chion's standard ones. See header. -----
-    real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc      ! [m s-2] NOT DEF_GRAVITY
-
-    ! DENSIFY_R_GAS [J K-1 mol-1] is defined in chion_defs, because it is
-    ! selected by the CHION_LEGACY preprocessor switch and chion_defs is the
-    ! only preprocessed source. It is the universal gas constant in a normal
-    ! build and Chion.jl's 8.13 under legacy_chion=1.
+    ! DENSIFY_GRAVITY [m s-2] and DENSIFY_R_GAS [J K-1 mol-1] are defined in
+    ! chion_defs, because both are selected by the CHION_LEGACY preprocessor
+    ! switch and chion_defs is the only preprocessed source. In a normal build
+    ! they are standard gravity and the universal gas constant; under
+    ! legacy_chion=1 they revert to Chion.jl's 9.81 and 8.13.
 
     ! --- Density regime thresholds -----------------------------------------
     real(wp), parameter, public :: DENSIFY_RHO_LOW = 550.0_wp   ! [kg m-3] low  | mid boundary
@@ -311,7 +317,7 @@ contains
 
             if (m_s .gt. 0.0_wp) then
 
-                ! Overburden: g*(M_above + m/2). NOTE g = 9.81, see header.
+                ! Overburden: g*(M_above + m/2), g = standard gravity (header).
                 sigma = real(DENSIFY_GRAVITY*(mass_above + real(m_s,wp_acc)/2.0_wp_acc),wp)
 
                 if (rho .lt. DENSIFY_RHO_LOW) then

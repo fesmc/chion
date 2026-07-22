@@ -25,7 +25,8 @@ program test_itm
     ! build's own precision and the measured values are printed. See the
     ! notes at the reference block and at check_rel.
 
-    use chion_defs, only : wp, wp_acc, chion_step_forcing_class
+    use chion_defs, only : wp, wp_acc, chion_step_forcing_class, &
+                          chion_const_class, chion_const_init
     use snow_itm
 
     implicit none
@@ -38,6 +39,7 @@ program test_itm
 
     type(itm_class)                :: itm
     type(chion_step_forcing_class) :: forc
+    type(chion_const_class)        :: cn
 
     ! Per-column geometry / vegetation, supplied by the host
     real(wp) :: z_srf(ncol), H_ice(ncol), PDDs(ncol), lat(ncol)
@@ -60,6 +62,8 @@ program test_itm
     logical  :: albedo_ok, melt_ok
 
     nfail = 0
+
+    call chion_const_init(cn)
 
     write(*,"(a)") "=========================================================="
     write(*,"(a)") " chion WP12 acceptance test: snow_itm vs smbpal"
@@ -96,7 +100,7 @@ program test_itm
     ! Start from a moderate snowpack rather than H_snow_max, so that the
     ! melt season actually strips the snow and the melted_snow/melted_ice
     ! branch of the budget is exercised in both implementations.
-    call itm_init_state(itm,H_snow=[400.0_wp, 60.0_wp, 5.0_wp])
+    call itm_init_state(itm,cn,H_snow=[400.0_wp, 60.0_wp, 5.0_wp])
     r_H_snow = itm%now%H_snow
 
     call check("itm_init_state without H_snow would seed at H_snow_max", &
@@ -160,15 +164,15 @@ program test_itm
 
             forc%latitude_deg = lat(i)
 
-            call itm_step(itm,i,forc,z_srf(i),H_ice(i),PDDs(i))
+            call itm_step(itm,i,forc,z_srf(i),H_ice(i),PDDs(i),cn)
 
             ! smbpal reference, driven with exactly the same numbers, in
             ! smbpal's own units: pr and sf in [mm w.e. d-1].
-            call ref_calc_snowpack_budget_step(itm%par,dt,lat(i),z_srf(i),H_ice(i), &
+            call ref_calc_snowpack_budget_step(itm%par,cn,dt,lat(i),z_srf(i),H_ice(i), &
                                                S,t2m,PDDs(i),sf_mmd+rf_mmd,sf_mmd,   &
                                                r_H_snow(i),r_alb_s,r_smbi,r_smb,     &
                                                r_melt,r_runoff,r_refrz,r_melt_net)
-            r_tsrf = ref_calc_temp_surf(t2m,H_ice(i),r_melt_net,itm%par%firn_fac)
+            r_tsrf = ref_calc_temp_surf(cn,t2m,H_ice(i),r_melt_net,itm%par%firn_fac)
 
             call track(1,itm%now%H_snow(i),  r_H_snow(i))
             call track(2,itm%now%alb_s(i),   r_alb_s)
@@ -234,8 +238,24 @@ program test_itm
     ! inherits its absolute error from these; see the derivation at check_rel.
     call check("H_snow agrees with the reference to within 1 ulp of wp", &
                dmax(1) .le. real(epsilon(1.0_wp),wp_acc)*fscale(1), nfail)
-    call check("alb_s agrees with the reference to within 4 ulp of wp", &
-               dmax(2) .le. 4.0_wp_acc*real(epsilon(1.0_wp),wp_acc)*fscale(2), nfail)
+    ! alb_s is not independent: it is DERIVED from H_snow, so its bound is
+    ! derived too rather than set as a flat ulp count.
+    !
+    !     alb = alb_bg + depth*(as_snow - alb_bg),  depth = H_snow/H_snow_crit
+    !
+    ! so an absolute error in H_snow is amplified by 1/H_snow_crit and scaled
+    ! by the albedo contrast. The smallest H_snow_crit in play is
+    ! H_snow_crit_desert = 10 mm w.e., which is the worst case. Factor 4 for
+    ! margin, and a floor of 4 ulp of alb_s's own scale so the bound does not
+    ! collapse to zero on a build where H_snow happens to agree exactly.
+    !
+    ! A flat "4 ulp of wp" stood here before and passed only by luck: it was
+    ! measuring 3.3 ulp against a bound of 4. Tying it to H_snow makes the
+    ! amplification explicit, so the check states the actual error path.
+    call check("alb_s agrees with the reference to within the H_snow-derived bound", &
+               dmax(2) .le. max(4.0_wp_acc*dmax(1)/real(itm%par%H_snow_crit_desert,wp_acc) &
+                                              *real(alb_hi - alb_lo,wp_acc), &
+                                4.0_wp_acc*real(epsilon(1.0_wp),wp_acc)*fscale(2)), nfail)
     call check("tsrf is bit-identical (no ITM arithmetic enters it)", &
                dmax(9) .eq. 0.0_wp_acc, nfail)
 
@@ -253,7 +273,7 @@ program test_itm
 
     ! calc_itm's max(.,0) clip
     call check_val("calc_itm clips negative potential melt to zero", &
-                   calc_itm(0.0_wp,-40.0_wp,0.9_wp,0.5_wp,-45.0_wp,10.0_wp), 0.0_wp, nfail)
+                   calc_itm(cn,0.0_wp,-40.0_wp,0.9_wp,0.5_wp,-45.0_wp,10.0_wp), 0.0_wp, nfail)
 
     ! Bare snow-free ice sheet column: albedo is exactly alb_ice.
     call check_val("calc_albedo_surface with no snow over ice -> alb_ice", &
@@ -302,13 +322,13 @@ program test_itm
     forc%rainfall_rate   = 0.0_wp
 
     itm%now%H_snow(1) = 100.0_wp
-    call itm_step(itm,1,forc,z_srf(1),H_ice(1),PDDs(1))
+    call itm_step(itm,1,forc,z_srf(1),H_ice(1),PDDs(1),cn)
     call check("q_sw_net drives melt when has_q_sw_net is set", &
                itm%now%melt(1) .gt. 0.0_wp, nfail)
 
     forc%has_q_sw_net = .FALSE.
     itm%now%H_snow(1) = 100.0_wp
-    call itm_step(itm,1,forc,z_srf(1),H_ice(1),PDDs(1))
+    call itm_step(itm,1,forc,z_srf(1),H_ice(1),PDDs(1),cn)
     call check("with has_q_sw_net cleared and shortwave_down = 0, melt collapses", &
                itm%now%melt(1) .lt. 1.0e-6_wp, nfail)
 
@@ -404,12 +424,13 @@ contains
     ! defect list in docs/porting_notes.md, in particular defect 1).
     ! =================================================================
 
-    subroutine ref_calc_snowpack_budget_step(par,dt,lat,z_srf,H_ice,S,t2m,PDDs,pr,sf, &
+    subroutine ref_calc_snowpack_budget_step(par,cn,dt,lat,z_srf,H_ice,S,t2m,PDDs,pr,sf, &
                                              H_snow,alb_s,smbi,smb,melt,runoff,refrz,melt_net)
 
         implicit none
 
-        type(itm_par_class), intent(IN)    :: par
+        type(itm_par_class),     intent(IN) :: par
+        type(chion_const_class), intent(IN) :: cn
         real(wp),            intent(IN)    :: dt
         real(wp),            intent(IN)    :: lat
         real(wp),            intent(IN)    :: z_srf, H_ice, S, t2m, PDDs, pr, sf
@@ -436,7 +457,7 @@ contains
         else
             itm_c = par%itm_c
         end if
-        melt_pot = ref_calc_itm(S,t2m-273.15_wp,alb_s,atrans,itm_c,par%itm_t)
+        melt_pot = ref_calc_itm(cn,S,t2m-cn%T0,alb_s,atrans,itm_c,par%itm_t)
 
         if (melt_pot*dt .gt. H_snow) then
             melted_snow = H_snow
@@ -548,20 +569,23 @@ contains
 
     end function ref_calc_atmos_transmissivity
 
-    function ref_calc_itm(S,t2m,alb_s,atrans,c,t) result(melt)
+    function ref_calc_itm(cn,S,t2m,alb_s,atrans,c,t) result(melt)
 
         implicit none
 
+        type(chion_const_class), intent(IN) :: cn
         real(wp), intent(IN) :: S, t2m, alb_s, atrans, c, t
         real(wp) :: melt
 
-        real(wp), parameter :: sec_day = 86400.0_wp
-        real(wp), parameter :: rho_w   = 1.0e3_wp
-        real(wp), parameter :: L_m     = 3.35e5_wp
+        ! smbpal has its own sec_day = 86400, rho_w = 1d3 and L_m = 3.35e5.
+        ! The reference takes them from the SAME constants struct chion uses,
+        ! because this test asserts ALGEBRAIC equivalence (see the note at the
+        ! reference block); feeding the two sides different constants would
+        ! make it a constants comparison instead, and the algebra would go
+        ! untested. The constant change itself is D26, measured separately.
+        melt = (atrans*(1.0_wp - alb_s)*S + c + t*t2m) / (cn%rho_w*cn%Lm)
 
-        melt = (atrans*(1.0_wp - alb_s)*S + c + t*t2m) / (rho_w*L_m)
-
-        melt = max( melt, 0.0_wp ) * sec_day * 1.0e3_wp
+        melt = max( melt, 0.0_wp ) * cn%seconds_per_day * 1.0e3_wp
 
         return
 
@@ -580,17 +604,18 @@ contains
 
     end function ref_itm_c_lat
 
-    function ref_calc_temp_surf(tann,H_ice,melt_net,fac) result(ts)
+    function ref_calc_temp_surf(cn,tann,H_ice,melt_net,fac) result(ts)
         ! ~/models/smbpal/src/smbpal.f90:644-661, verbatim.
 
         implicit none
 
+        type(chion_const_class), intent(IN) :: cn
         real(wp), intent(IN) :: tann, H_ice, melt_net, fac
         real(wp) :: ts
 
         if (H_ice .gt. 0.0_wp) then
             ts = tann + fac * max(0.0_wp, melt_net)
-            ts = min(273.15_wp, ts)
+            ts = min(cn%T0, ts)
         else
             ts = tann
         end if
