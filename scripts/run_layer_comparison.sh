@@ -28,6 +28,8 @@ configs=(
   "bessi_n7  bessi 7"
   "bessi_n5  bessi 5"
   "bessi_n3  bessi 3"
+  "bessi_n2  bessi 2"
+  "bessi_n1  bessi 1"
   "pdd       pdd   15"
   "itm       itm   15"
 )

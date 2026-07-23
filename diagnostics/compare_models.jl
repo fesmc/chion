@@ -21,6 +21,8 @@ configs = [
     "bessi_n7"  => "BESSI n=7",
     "bessi_n5"  => "BESSI n=5",
     "bessi_n3"  => "BESSI n=3",
+    "bessi_n2"  => "BESSI n=2",
+    "bessi_n1"  => "BESSI n=1",
     "pdd"       => "PDD",
     "itm"       => "ITM",
 ]

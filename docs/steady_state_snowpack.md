@@ -177,8 +177,8 @@ gradient but does not move the domain-scale skill.
 
 How fast can BESSI be pushed, and where do the cheaper models break? A 50-year
 GRL-16KM spin-up (identical ERA5 forcing, serial/1 core) for BESSI at
-`Ntot = 15/7/5/3` and for PDD and ITM. Everything but `model` and `Ntot` is the
-GRL-16KM default (diurnal substep, gate −1 °C). Reproduce with
+`Ntot = 15/7/5/3/2/1` and for PDD and ITM. Everything but `model` and `Ntot` is
+the GRL-16KM default (diurnal substep, gate −1 °C). Reproduce with
 `scripts/run_layer_comparison.sh` and
 `diagnostics/compare_models.jl` (writes `output/cmp_smb_stats.csv`).
 
@@ -190,18 +190,21 @@ GRL-16KM default (diurnal substep, gate −1 °C). Reproduce with
 | BESSI n=7  | 36.6 | 2.82e-7 | 1.3× |
 | BESSI n=5  | 32.7 | 2.52e-7 | 1.5× |
 | BESSI n=3  | 28.4 | 2.19e-7 | 1.7× |
+| BESSI n=2  | 25.4 | 1.96e-7 | 1.9× |
+| BESSI n=1  | 22.5 | 1.73e-7 | 2.1× |
 | PDD        |  3.7 | 2.88e-8 | 12.9× |
 | ITM        |  8.4 | 6.47e-8 | 5.7× |
 
-Halving the BESSI layer cap barely helps: 15→3 is only **1.7×**, not 5×. The
-per-column layer loop (energy balance, densification, percolation) is not the
-whole cost — accumulation, surface fluxes and the diurnal substep are fixed
-overhead per column, so cutting layers hits diminishing returns fast. The real
-speed comes from dropping the layered column entirely: PDD (bulk degree-day) is
-**13×** faster and ITM (insolation–temperature) **6×**.
+Cutting the BESSI layer cap barely helps: even all the way to a single layer is
+only **2.1×**, not 15×. The per-column layer loop (energy balance, densification,
+percolation) is not the whole cost — accumulation, surface fluxes and the diurnal
+substep are fixed overhead per column, so dropping layers hits diminishing
+returns fast. The real speed comes from dropping the layered column *and* the
+energy balance: PDD (bulk degree-day) is **13×** faster and ITM
+(insolation–temperature) **6×**.
 
-**BESSI layer count barely touches the SMB.** Domain skill is flat — in fact
-marginally *better* at fewer layers:
+**BESSI layer count barely touches the SMB — and a single layer is best.**
+Domain skill is flat, in fact marginally *better* toward fewer layers:
 
 | BESSI Ntot | bias | RMSE | R² |
 |---|---|---|---|
@@ -209,18 +212,22 @@ marginally *better* at fewer layers:
 | 7  | +18 | 213 | 0.84 |
 | 5  | +16 | 210 | 0.84 |
 | 3  | +14 | 208 | 0.85 |
+| 2  | −0.5 | 197 | 0.86 |
+| 1  | −2.3 | 197 | 0.86 |
 
 Every elevation band is statistically identical across `Ntot` (interior
 bit-for-bit: R² 0.99, RMSE 19; margins −640→−646). SMB is a column-*integrated*
 quantity — storage tendency + ice export — and the depth cap that bounds the
 firn column is the hard-coded 15-layer reference depth **regardless of `Ntot`**
-(see `enforce_snow_depth_cap`), so 3 layers hold the same total firn, just
-coarsely. The vertical structure that extra layers resolve (thermal gradient,
-refreeze profile) does not move the *annual* mass balance at domain scale. The
-slight drift toward MAR at fewer layers is a coarser percolation zone refreezing
-a touch less — a rounding effect, not a signal. **On Greenland SMB, BESSI n=5
-is a free 1.5× and n=3 a 1.7×; the layers earn their keep only if you need the
-firn-column state itself** (temperature, density, refreeze depth), not just SMB.
+(see `enforce_snow_depth_cap`), so even one layer holds the same total firn, as a
+single thick layer. The vertical structure that extra layers resolve (thermal
+gradient, refreeze profile) does not move the *annual* mass balance at domain
+scale; the single evolving-density layer even lands closest to MAR (bias ≈ 0).
+`Ntot=1` uses chion's dedicated single-layer closed-form energy solve, so it is a
+genuine single-layer energy-balance column, not a degenerate multilayer run.
+**On Greenland SMB, BESSI n=1 is the fastest config (2.1×) AND the most accurate;
+the layers earn their keep only if you need the firn-column state itself**
+(temperature, density, refreeze depth), not just SMB.
 
 **PDD and ITM trade skill for speed, and exactly where the physics lives.** All
 three models are near-perfect in the interior (pure accumulation, no melt: R²
