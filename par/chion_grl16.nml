@@ -1,0 +1,112 @@
+! ============================================================
+! chion_grid.x — steady-state snowpack on Greenland GRL-16KM
+! ============================================================
+!
+! Usage:  chion_grid.x path/to/this_file.nml
+!
+! Standalone steady-state snowpack run: assemble a monthly climatology from the
+! raw ~/models/ice_data datasets (MAR v3.11 + ERA5 radiation + TOA insolation),
+! interpolate it to a daily cycle that conserves the monthly means, and repeat
+! that annual cycle for n_years to spin the snowpack up.
+!
+! The &ctrl group is the DRIVER's schema (chion never reads it). Everything
+! below &ctrl is library configuration and IS validated against
+! input/chion_defaults.nml.
+!
+! Set path_ice_data to your ice_data root. path_insol points at the vendored
+! orbital tables (libs/insol/input), relative to the run directory.
+! ============================================================
+
+&ctrl
+    forcing_source      = "domain"          ! "file" | "domain"
+    file_out            = "chion_grl16.nc"  ! Output, written to the run directory
+
+    domain              = "greenland"       ! selects the dataset loader
+    grid_name           = "GRL-16KM"        ! target grid
+    path_ice_data       = "/Users/alrobi001/models/ice_data"
+    path_insol          = "/Users/alrobi001/models/chion/libs/insol/input"
+
+    mask_threshold      = 50.0              ! [1] MAR ice fraction; >50% -> column
+    wind_default        = 5.0              ! [m s-1] no wind field for Greenland
+
+    n_years             = 50               ! annual cycles to repeat
+    dt_out              = 360.0            ! [d] output once per year (drift)
+
+    swd_source          = "file"           ! "file" (ERA5) | "transmissivity"
+    trans_a             = 0.46             ! [1]  tau = trans_a + trans_b*z_srf
+    trans_b             = 6.0e-5           ! [m-1]
+    H_ice_default       = 1000.0           ! [m]  ice thickness on every column (ITM)
+/
+
+! ============================================================
+! &chion — top-level library configuration
+! ============================================================
+
+&chion
+    model               = "bessi"           ! "bessi" | "pdd" | "itm"
+    phys_const          = "Earth"           ! Group in input/chion_phys_const.nml
+    phys_const_file     = "input/chion_phys_const.nml"
+    restart             = "none"            ! Restart file, or "none"
+/
+
+! ============================================================
+! &bessi — layered snowpack model
+! ============================================================
+
+&bessi
+    Ntot                = 15                ! [1] Maximum number of layers
+    mass_max            = 500.0             ! [kg m-2] Split the surface layer above this
+    mass_split          = 300.0             ! [kg m-2] Mass left in the lower half on split
+    mass_min            = 100.0             ! [kg m-2] Merge the surface layer below this
+    density_init        = 300.0             ! [kg m-3] Initial layer density
+    temperature_init    = 273.0             ! [K] Initial layer temperature
+
+    diurnal_shortwave_substeps          = .FALSE.   ! Resolve the diurnal shortwave cycle
+    diurnal_shortwave_threshold         = 0.0       ! [W m-2] Peak-minus-mean to activate
+    diurnal_shortwave_max_substeps      = 3         ! [1] Substeps per day when active
+    diurnal_shortwave_min_air_temperature = 265.15  ! [K] Below this, do not substep
+    diurnal_temperature_cycle           = .FALSE.   ! Add a diurnal air-temperature cycle
+    diurnal_temperature_amplitude       = 5.0       ! [K] Half-amplitude of that cycle
+/
+
+! ============================================================
+! &pdd — bulk positive-degree-day model
+! ============================================================
+
+&pdd
+    pdd_method          = "pism"            ! "pism" | "simple"
+    ddf_snow            = 3.0               ! [kg m-2 K-1 d-1] Snow degree-day factor
+    ddf_ice             = 8.0               ! [kg m-2 K-1 d-1] Ice degree-day factor
+    refreezing_fraction = 0.6               ! [1] Fraction of snow melt that refreezes
+    temperature_sigma   = 5.0               ! [K] Unresolved temperature variability
+    H_snow_max          = 5000.0            ! [kg m-2] Snowpack cap; excess -> ice
+/
+
+! ============================================================
+! &itm — insolation-temperature-melt model
+! ============================================================
+!
+! NOTE: itm_par_load reads the legacy nml path, so if this group is
+! present it must be COMPLETE. See chion_itm_par_load in src/chion_api.f90.
+
+&itm
+    trans_a             = 0.46              ! [1]
+    trans_b             = 6e-5              ! [m-1]
+    trans_c             = 0.01              ! [1] unused
+    itm_c               = -45.0             ! [W m-2]
+    itm_t               = 10.0              ! [W m-2 K-1]
+    itm_b               = -2.0              ! [W m-2 deg-1]
+    itm_lat0            = 65.0              ! [deg N]
+    H_snow_max          = 5000.0            ! [mm w.e.]
+    Pmaxfrac            = 0.6               ! [1]
+    H_snow_crit_desert  = 10.0              ! [mm w.e.]
+    H_snow_crit_forest  = 100.0             ! [mm w.e.]
+    melt_crit           = 0.5               ! [mm d-1]
+    alb_ocean           = 0.1               ! [1]
+    alb_land            = 0.2               ! [1]
+    alb_forest          = 0.1               ! [1]
+    alb_ice             = 0.4               ! [1]
+    alb_snow_dry        = 0.8               ! [1]
+    alb_snow_wet        = 0.65              ! [1]
+    firn_fac            = 0.0266            ! [K (mm w.e.)-1]
+/
