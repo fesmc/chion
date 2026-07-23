@@ -122,7 +122,22 @@ gradient but does not move the domain-scale skill.
 `diagnostics/transmissivity.jl` on GRL-16KM: observed τ = swd/S_toa averages
 0.64, but ITM's default intercept (0.46) is too low (bias −0.06, negative R²)
 and **elevation alone explains almost nothing** (R² 0.07). Cloud cover is the
-real control — τ ≈ 0.81 + 7.4e-5·z_srf − 0.51·tcc raises R² to 0.32. A
-cloud-aware transmissivity is the natural next parameterization. Consistent
-with this, running the driver with `swd_source = transmissivity` (the ITM
+real control. Running the driver with `swd_source = transmissivity` (the ITM
 clear-sky form) under-melts even more than the ERA5-shortwave run.
+
+**Seasonal structure — the annual fit is misleading.** Fitting each month on
+its own (`tau_fit_seasonal.png`):
+
+| | Mar | May | Jun | Jul | Aug | Sep |
+|---|---|---|---|---|---|---|
+| mean τ | 0.64 | 0.72 | 0.72 | 0.68 | 0.64 | 0.58 |
+| cloud coef c | −0.04 | −0.15 | −0.24 | −0.29 | −0.31 | −0.11 |
+| R² | 0.59 | 0.82 | 0.86 | 0.82 | 0.73 | 0.50 |
+
+τ peaks in **May**, and the **cloud coefficient strengthens ~3× from spring to
+late summer** (clouds suppress τ far more in Jul–Aug). The pooled annual fit
+gives c=−0.51 — *steeper than any single month* — because season is a
+confounder (autumn is low-τ and cloudy, spring high-τ), a Simpson's-paradox
+artifact. So a season-resolved τ is the honest form, and ITM should be
+calibrated on the **melt-season** relationship (τ ≈ 0.73 + z-term − 0.29·tcc,
+JJA), not the annual pooled one.

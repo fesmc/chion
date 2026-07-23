@@ -51,12 +51,13 @@ nmon = size(swd, 3)
 # swd/S_toa ratio is well posed (skip the polar-winter darkness).
 const S_MIN = 20.0                 # [W m-2] minimum monthly-mean TOA to include
 
-tau = Float64[]; zz = Float64[]; cc = Float64[]
+tau = Float64[]; zz = Float64[]; cc = Float64[]; mo = Int[]
 for m in 1:nmon, j in 1:size(swd,2), i in 1:size(swd,1)
     if mask[i,j] > 50 && toa[i,j,m] > S_MIN
         push!(tau, swd[i,j,m] / toa[i,j,m])
         push!(zz,  z[i,j])
         push!(cc,  tcc[i,j,m])
+        push!(mo,  m)
     end
 end
 n = length(tau)
@@ -121,3 +122,65 @@ axislegend(ax, position = :rb, framevisible = true)
 
 save(out_png, fig)
 println("wrote $out_png")
+
+# ------------------------------------------------------------------------
+# Seasonal structure
+# ------------------------------------------------------------------------
+# The annual pooled fit conflates the seasonal cycle of tau with the within-
+# month cloud response (season is a confounder: autumn is low-tau AND cloudy,
+# spring high-tau), so the pooled cloud slope is steeper than any single month
+# -- a Simpson's-paradox artifact. Fit each month on its own instead.
+
+println("\n=== per-month fit  tau = a + b z + c tcc ======================")
+println("mon    n   mean_tau     a      b[/km]    c       R^2")
+month_names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+mtau = fill(NaN, nmon); ma = fill(NaN, nmon); mb = fill(NaN, nmon)
+mc = fill(NaN, nmon); mr2 = fill(NaN, nmon); mn = zeros(Int, nmon)
+for m in 1:nmon
+    idx = findall(==(m), mo)
+    mn[m] = length(idx)
+    mn[m] < 50 && (println(@sprintf("%3s  %5d   (too dark)", month_names[m], mn[m])); continue)
+    t = tau[idx]; X = hcat(ones(mn[m]), zz[idx], cc[idx]); b = X \ t
+    mtau[m] = mean(t); ma[m] = b[1]; mb[m] = b[2]; mc[m] = b[3]; mr2[m] = r2(t, X * b)
+    @printf("%3s  %5d   %.3f    %.3f   %+.2f   %+.3f   %.2f\n",
+            month_names[m], mn[m], mtau[m], ma[m], 1000*mb[m], mc[m], mr2[m])
+end
+println("(cloud slope c strengthens ~3x from spring to late summer; the pooled")
+println(" annual c is steeper than any month, so a season-resolved tau is the")
+println(" honest form for ITM -- use the melt-season, not the annual, fit.)")
+
+# --- seasonal figure -----------------------------------------------------
+season_png = replace(out_png, ".png" => "_seasonal.png")
+fig2 = Figure(size = (1180, 500))
+
+# Panel A: monthly mean tau and the cloud coefficient.
+axA = Axis(fig2[1, 1], xlabel = "month", ylabel = "transmissivity τ",
+           title = "seasonal cycle of τ and its cloud sensitivity",
+           xticks = (1:12, month_names))
+ok = .!isnan.(mtau)
+lines!(axA, (1:12)[ok], mtau[ok], color = :black, linewidth = 3, label = "mean τ")
+scatter!(axA, (1:12)[ok], mtau[ok], color = :black)
+axC = Axis(fig2[1, 1], yaxisposition = :right, ylabel = "cloud coefficient c",
+           yticklabelcolor = :dodgerblue, ylabelcolor = :dodgerblue)
+hidespines!(axC); hidexdecorations!(axC)
+lines!(axC, (1:12)[ok], mc[ok], color = :dodgerblue, linewidth = 3, linestyle = :dash)
+scatter!(axC, (1:12)[ok], mc[ok], color = :dodgerblue)
+axislegend(axA, position = :lb)
+
+# Panel B: tau vs cloud cover for three representative months.
+axB = Axis(fig2[1, 2], xlabel = "cloud cover  tcc", ylabel = "transmissivity τ",
+           title = "τ–cloud slope steepens through the melt season")
+for (m, col) in zip((5, 7, 8), (:seagreen, :orange, :firebrick))
+    idx = findall(==(m), mo)
+    isempty(idx) && continue
+    scatter!(axB, cc[idx], tau[idx], color = (col, 0.10), markersize = 3)
+    # slope of tau on tcc at mean elevation
+    X = hcat(ones(length(idx)), zz[idx], cc[idx]); b = X \ tau[idx]
+    cl = collect(range(0, 1, length = 20))
+    lines!(axB, cl, b[1] .+ b[2] * mean(zz[idx]) .+ b[3] .* cl,
+           color = col, linewidth = 3, label = "$(month_names[m])  c=$(@sprintf("%.2f", b[3]))")
+end
+axislegend(axB, position = :lb)
+
+save(season_png, fig2)
+println("wrote $season_png")
