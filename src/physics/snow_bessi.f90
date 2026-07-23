@@ -626,9 +626,9 @@ contains
         if (use_prescribed_albedo) then
             albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
         else if (c%albedo_scheme .eq. CHION_ALBEDO_SEMIX) then
-            ! Clean-snow scaffold: fresh grain, no dust. Grain aging and
-            ! dust-in-snow are added in the following commits.
-            call semix_surface_albedo(forc,c,c%snow_grain_fresh,0.0_wp,albedo)
+            ! Grain aging from the surface-layer temperature; no dust yet
+            ! (dust-in-snow darkening is added in the following commit).
+            call semix_surface_albedo(forc,c,temperature(1),0.0_wp,albedo)
         else
             call albedo_update(mass,mass_w,density,temperature,n,c,albedo)
         end if

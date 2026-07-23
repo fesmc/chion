@@ -32,30 +32,33 @@ module snow_albedo_semix
     private
 
     public :: semix_surface_albedo
+    public :: semix_snow_grain_size
     public :: semix_snow_albedo_bands
     public :: semix_broadband_albedo
     public :: semix_daily_coszm
 
 contains
 
-    subroutine semix_surface_albedo(forc, c, snow_grain, dust_con, albedo)
-        ! Broadband SEMIX snow albedo for one column. coszm is taken from the
-        ! forcing when supplied, else from the lat/solar-longitude daily mean;
-        ! cloud defaults to clear-sky (all-direct) when absent. Grain size and
-        ! dust concentration are passed in: this commit calls it with the fresh
-        ! grain and zero dust (clean snow); later commits supply the carried
-        ! grain state and the dust-in-snow concentration.
+    subroutine semix_surface_albedo(forc, c, t_skin, dust_con, albedo)
+        ! Broadband SEMIX snow albedo for one column. Grain size is diagnosed
+        ! from the skin temperature and the current snowfall rate; coszm is
+        ! taken from the forcing when supplied, else from the lat/solar-longitude
+        ! daily mean; cloud defaults to clear-sky (all-direct) when absent. Dust
+        ! concentration is passed in: this commit calls it with zero dust (the
+        ! dust-in-snow darkening is added in the following commit).
 
         implicit none
 
         type(chion_step_forcing_class), intent(IN)  :: forc
         type(chion_const_class),        intent(IN)  :: c
-        real(wp),                       intent(IN)  :: snow_grain   ! [um]
+        real(wp),                       intent(IN)  :: t_skin       ! [K] surface temperature
         real(wp),                       intent(IN)  :: dust_con     ! [kg kg-1]
         real(wp),                       intent(OUT) :: albedo       ! [1] broadband
 
-        real(wp) :: coszm, cloud
+        real(wp) :: coszm, cloud, snow_grain
         real(wp) :: av_dir, an_dir, av_dif, an_dif
+
+        snow_grain = semix_snow_grain_size(t_skin, forc%snowfall_rate, c)
 
         if (forc%has_coszm) then
             coszm = forc%coszm
@@ -74,6 +77,37 @@ contains
         return
 
     end subroutine semix_surface_albedo
+
+    pure function semix_snow_grain_size(t_skin, snowfall_rate, c) result(snow_grain)
+        ! Diagnostic snow grain size (aging proxy), CLIMBER-2 form tuned to
+        ! MARv3.6/CROCUS over Greenland (smb_surface_par.f90:143-172). Grain
+        ! grows from fresh toward old as the surface warms and snowfall thins:
+        ! it is a function of the current skin temperature and snowfall rate
+        ! only, carrying no memory. snow_0 is stored per day (as in CLIMBER-X's
+        ! namelist), so the snowfall rate is converted to per-day to match.
+
+        implicit none
+
+        real(wp),                intent(IN) :: t_skin         ! [K]
+        real(wp),                intent(IN) :: snowfall_rate  ! [kg m-2 s-1]
+        type(chion_const_class), intent(IN) :: c
+        real(wp) :: snow_grain                                ! [um]
+
+        real(wp) :: f_tage1, f_tage2, f_tage, f_p, f_age, snow_per_day
+
+        f_tage1 = exp(c%f_age_t*min(0.0_wp, t_skin - (c%T0 - c%dT_age)))
+        f_tage2 = exp(          min(0.0_wp, t_skin - (c%T0 - c%dT_age)))
+        f_tage  = f_tage1 + f_tage2
+
+        snow_per_day = snowfall_rate*c%seconds_per_day
+        f_p   = f_tage*(c%snow_0/max(1.0e-20_wp, snow_per_day))**c%snow_1
+        f_age = 1.0_wp - log(1.0_wp + f_p)/f_p
+
+        snow_grain = c%snow_grain_fresh + (c%snow_grain_old - c%snow_grain_fresh)*f_age
+
+        return
+
+    end function semix_snow_grain_size
 
     subroutine semix_snow_albedo_bands(snow_grain, dust_con, coszm, c, &
                                        alb_vis_dir, alb_nir_dir, alb_vis_dif, alb_nir_dif)

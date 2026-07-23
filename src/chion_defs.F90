@@ -213,6 +213,10 @@ module chion_defs
         real(wp) :: snow_grain_old     ! [um] aged snow grain size
         real(wp) :: d_alb_age_vis      ! [1]  visible aging albedo reduction
         real(wp) :: d_alb_age_nir      ! [1]  near-IR aging albedo reduction
+        real(wp) :: f_age_t            ! [K-1] dry-snow temperature aging factor
+        real(wp) :: dT_age             ! [K]  aging temperature offset
+        real(wp) :: snow_0             ! [kg m-2 d-1] critical snowfall rate for aging
+        real(wp) :: snow_1             ! [1]  snowfall-rate aging exponent
 
         ! Radiation
         real(wp) :: eps_air            ! [1] emissivity of air
@@ -456,6 +460,10 @@ contains
         c%snow_grain_old   = 1000.0_wp
         c%d_alb_age_vis    = 0.05_wp
         c%d_alb_age_nir    = 0.25_wp
+        c%f_age_t          = 0.1_wp
+        c%dT_age           = 0.0_wp
+        c%snow_0           = 1.0_wp
+        c%snow_1           = 0.5_wp
 
         c%eps_air  = 0.80_wp
         c%eps_snow = 0.98_wp

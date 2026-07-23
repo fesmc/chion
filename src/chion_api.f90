@@ -767,6 +767,10 @@ contains
         call nml_read(filename,group,"snow_grain_old",  c%snow_grain_old)
         call nml_read(filename,group,"d_alb_age_vis",   c%d_alb_age_vis)
         call nml_read(filename,group,"d_alb_age_nir",   c%d_alb_age_nir)
+        call nml_read(filename,group,"f_age_t",         c%f_age_t)
+        call nml_read(filename,group,"dT_age",          c%dT_age)
+        call nml_read(filename,group,"snow_0",          c%snow_0)
+        call nml_read(filename,group,"snow_1",          c%snow_1)
 
         call nml_read(filename,group,"eps_air", c%eps_air)
         call nml_read(filename,group,"eps_snow",c%eps_snow)

@@ -64,6 +64,10 @@
     snow_grain_old            = 1000.0      ! [um] Aged snow grain size
     d_alb_age_vis             = 0.05        ! [1]  Visible aging albedo reduction
     d_alb_age_nir             = 0.25        ! [1]  Near-IR aging albedo reduction
+    f_age_t                   = 0.1         ! [K-1] Dry-snow temperature aging factor
+    dT_age                    = 0.0         ! [K]  Aging temperature offset
+    snow_0                    = 1.0         ! [kg m-2 d-1] Critical snowfall rate for grain aging
+    snow_1                    = 0.5         ! [1]  Snowfall-rate aging exponent
 
     ! ## Radiation ##
     eps_air                   = 0.80        ! [1] Emissivity of air
