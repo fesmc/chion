@@ -194,6 +194,11 @@ io : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_io.x is ready."
 
+monthly : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_monthly.x $(testdir)/test_monthly.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_monthly.x is ready."
+
 # Driver programs (note: not test_*.x -- these are the runme executables)
 column : chion-static
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/chion_column.x $(testdir)/chion_column.f90 \
@@ -211,7 +216,7 @@ itm : chion-static
 		@echo "    test_itm.x is ready."
 
 # All acceptance tests
-tests : defs utils layers energy water surface wp7 bessi pdd diagnostics itm api io
+tests : defs utils layers energy water surface wp7 bessi pdd diagnostics itm api io monthly
 
 # Driver executables
 drivers : column grid

@@ -40,4 +40,6 @@ module chion
 
     use snow_diagnostics
 
+    use chion_forcing_monthly
+
 end module chion

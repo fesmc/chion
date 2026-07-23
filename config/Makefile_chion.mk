@@ -21,6 +21,11 @@
 $(objdir)/chion_defs.o: $(srcdir)/chion_defs.F90
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+# Monthly -> daily forcing interface. Model-neutral, depends only on chion_defs.
+$(objdir)/chion_forcing_monthly.o: $(srcdir)/chion_forcing_monthly.f90 \
+						  	$(objdir)/chion_defs.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 ## chion physics ###############################
 #
 # Single-column kernels. Each operates on contiguous column slices (see
@@ -121,7 +126,7 @@ $(objdir)/chion_io.o: $(srcdir)/chion_io.f90 \
 $(objdir)/chion.o: $(srcdir)/chion.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o $(objdir)/chion_api.o \
 						  	$(objdir)/snow_bessi.o $(objdir)/snow_pdd.o $(objdir)/snow_itm.o \
-						  	$(objdir)/snow_diagnostics.o
+						  	$(objdir)/snow_diagnostics.o $(objdir)/chion_forcing_monthly.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 ###############################################
@@ -130,7 +135,8 @@ $(objdir)/chion.o: $(srcdir)/chion.f90 \
 ##
 ###############################################
 
-chion_base =    $(objdir)/chion_defs.o
+chion_base =    $(objdir)/chion_defs.o \
+                $(objdir)/chion_forcing_monthly.o
 
 chion_physics = $(objdir)/snow_column_utils.o \
 				$(objdir)/snow_layers.o \
