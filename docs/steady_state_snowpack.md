@@ -12,7 +12,7 @@ subroutine away.
 | `chion_forcing_monthly` | `src/` (library) | mean-preserving monthly→daily interpolation (360-day, 12×30); the daily series averages back to the input monthly means, so precip totals are conserved |
 | `insolation` | `libs/insol/` (driver layer) | top-of-atmosphere daily insolation (Laskar LA2004); kept out of `libchion.a`, preserving "the host supplies insolation" |
 | `chion_domain` | `libs/domains/` (driver layer) | assembles standardized SI monthly forcing from raw data: MAR v3.11 (t2m, sf, rf, smb/melt/runoff) native on grid, ERA5 shortwave + cloud **conservatively regridded** (coords `map_init(con)`, cache under `maps/`), TOA insolation from latitude |
-| `chion_grid.x` | `tests/chion_grid.f90` | one driver, `forcing_source = file | domain`; the domain path cycles the annual climatology for `n_years`, with `swd_source = file | transmissivity` |
+| `chion_grid.x` | `tests/chion_grid.f90` | one driver, `forcing_source = file | domain`; the domain path cycles the annual climatology for `n_years`, with `swd_source = file | transmissivity | transmissivity_seasonal` |
 | `diagnostics/*.jl` | `diagnostics/` | Julia + CairoMakie analysis (own project env): `compare_smb.jl` (chion vs MAR SMB figure), `transmissivity.jl` (ITM τ vs τ_obs = swd/S_toa) |
 
 ## Run
@@ -25,9 +25,17 @@ ln -s <chion>/input input                 # chion reads input/chion_defaults.nml
 
 Edit `path_ice_data` / `path_insol` in the par file. The conservative ERA5
 weight map is generated on the first run and cached under `maps/` (gitignored,
-regenerated if absent). A 50-year GRL-16KM BESSI run is ~46 s, 7204 columns.
+regenerated if absent). A 50-year GRL-16KM BESSI run (7204 columns) is ~47 s on
+one core; the build is OpenMP by default, so `OMP_NUM_THREADS=8` cuts it to
+~17 s (see Performance).
 
 ## Result (GRL-16KM, BESSI, 50 yr, ERA5 shortwave)
+
+> This section establishes how SMB is measured and the **baseline** (no diurnal
+> substepping) behaviour, whose elevation-dependent under-ablation motivates the
+> two sections that follow. The **current default** (diurnal substepping, gate
+> −1 °C) improves the domain bias from +68 to +18 mm/yr and R² from 0.74 to
+> 0.84 — see *Diurnal shortwave substepping*.
 
 **Which chion field is the MAR-comparable SMB.** MAR `smb` is the surface mass
 balance, precip − runoff − sublimation. The matching chion quantity is the same
@@ -102,7 +110,8 @@ regrid are excluded).
 4× the columns → 4.1× the time: clean linear scaling, no resolution-dependent
 overhead. **A 50-year GRL-16KM run is ~18 000 daily steps, not 18 000 years.**
 
-OpenMP (`make openmp=1`, parallel over columns) on a 4-performance-core machine:
+OpenMP is the default build (parallel over columns; `make openmp=0` for serial;
+runtime threads via `OMP_NUM_THREADS`). On a 4-performance-core machine:
 
 | threads | 1 | 2 | 4 | 8 |
 |---|---|---|---|---|
