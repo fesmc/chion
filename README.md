@@ -12,6 +12,9 @@ from Chion.jl.
   preprocessing), MAR validation, performance, and the transmissivity study
 - [docs/porting_notes.md](docs/porting_notes.md) — decisions made porting from Chion.jl
 - [docs/pdd_defects.md](docs/pdd_defects.md) — PDD model defect notes
+- [docs/semix_port_scope.md](docs/semix_port_scope.md) — staged scope for porting
+  CLIMBER-X SEMIX's surface energy balance + spectral/dust albedo into chion as
+  selectable options
 
 ## Build
 
