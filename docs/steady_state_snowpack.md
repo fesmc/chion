@@ -13,7 +13,7 @@ subroutine away.
 | `insolation` | `libs/insol/` (driver layer) | top-of-atmosphere daily insolation (Laskar LA2004); kept out of `libchion.a`, preserving "the host supplies insolation" |
 | `chion_domain` | `libs/domains/` (driver layer) | assembles standardized SI monthly forcing from raw data: MAR v3.11 (t2m, sf, rf, smb/melt/runoff) native on grid, ERA5 shortwave + cloud **conservatively regridded** (coords `map_init(con)`, cache under `maps/`), TOA insolation from latitude |
 | `chion_grid.x` | `tests/chion_grid.f90` | one driver, `forcing_source = file | domain`; the domain path cycles the annual climatology for `n_years`, with `swd_source = file | transmissivity` |
-| `diagnostics/transmissivity.jl` | `diagnostics/` | confronts ITM's τ = a + b·z_srf with τ_obs = swd/S_toa |
+| `diagnostics/*.jl` | `diagnostics/` | Julia + CairoMakie analysis (own project env): `compare_smb.jl` (chion vs MAR SMB figure), `transmissivity.jl` (ITM τ vs τ_obs = swd/S_toa) |
 
 ## Run
 
@@ -85,6 +85,37 @@ band improves at once — domain bias +68→+18, R² 0.74→**0.84**, net-ablati
 12.4→15.5 % (MAR 14.4 %), lower zone +210→+29. This is one physically-motivated
 threshold moved to a sensible value, not a fit, so it is the GRL-16KM default in
 `par/chion_grl16.nml`. Residual: margins still ~15 % short of MAR (−640 vs −740).
+
+## Performance and resolution
+
+The column loop is the whole cost and columns are independent, so runtime is
+linear in the number of ice columns and the per-column-step cost is fixed
+(~3.8e-7 s, BESSI 15-layer energy balance with diurnal substepping). The
+driver's reported wall time brackets the run loop only (setup and the ERA5
+regrid are excluded).
+
+| grid | ice columns | 50-yr serial | per col-step |
+|---|---|---|---|
+| GRL-16KM | 7 204 | 49 s | 3.79e-7 s |
+| GRL-8KM | 28 879 | 202 s | 3.88e-7 s |
+
+4× the columns → 4.1× the time: clean linear scaling, no resolution-dependent
+overhead. **A 50-year GRL-16KM run is ~18 000 daily steps, not 18 000 years.**
+
+OpenMP (`make openmp=1`, parallel over columns) on a 4-performance-core machine:
+
+| threads | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| GRL-16KM wall | 46.9 s | 30.0 s | 20.9 s | 17.3 s |
+| speedup | 1.0× | 1.6× | 2.2× | 2.7× |
+
+GRL-8KM at 8 threads: 74 s (from 202 s, 2.7×) — same scaling. Returns diminish
+past the 4 performance cores (the machine's other 6 are efficiency cores).
+
+Physics is resolution-robust: GRL-8KM gives bias +15, RMSE 212, R² 0.84 —
+statistically identical to GRL-16KM (+18, 0.84). The SMB pattern is set by
+elevation and temperature, both resolved at 16 km; refining sharpens the margin
+gradient but does not move the domain-scale skill.
 
 ## Transmissivity finding
 

@@ -17,19 +17,24 @@
 #      z_srf together with cloud cover tcc (a natural second predictor, since
 #      clouds are what tau is really responding to).
 #
+# It also writes tau_fit.png: tau_obs vs elevation coloured by cloud cover, with
+# the ITM default and the two refits overlaid.
+#
 # Input is the file written by test_domain.x (monthly swd, tcc, S_toa, z_srf,
 # mask). Usage:
 #
-#   julia --project=validation diagnostics/transmissivity.jl [check_file.nc]
+#   julia --project=diagnostics diagnostics/transmissivity.jl [check_file.nc] [out.png]
 
 using NCDatasets
+using CairoMakie
 using Statistics
 using Printf
 
 const A_ITM = 0.46      # trans_a default
 const B_ITM = 6.0e-5    # trans_b default [m-1]
 
-file = length(ARGS) >= 1 ? ARGS[1] : "domain_greenland_check.nc"
+file    = length(ARGS) >= 1 ? ARGS[1] : "domain_greenland_check.nc"
+out_png = length(ARGS) >= 2 ? ARGS[2] : "tau_fit.png"
 println("reading $file")
 
 ds    = NCDataset(file)
@@ -93,3 +98,26 @@ println("refit        tau = a + b z + c tcc")
 println("---------------------------------------------------------------")
 println("(c<0 as expected: more cloud -> lower transmissivity. The elevation-")
 println(" only ITM form cannot see this, which is why a cloud predictor helps.)")
+
+# --- figure: tau vs elevation, coloured by cloud cover -------------------
+fig = Figure(size = (760, 560))
+ax  = Axis(fig[1, 1], xlabel = "surface elevation  z_srf  [m]",
+           ylabel = "transmissivity  τ = swd / S_toa",
+           title  = "ITM τ vs observed (ERA5), coloured by cloud cover")
+sc = scatter!(ax, zz, tau, color = cc, colormap = :viridis, markersize = 3,
+              colorrange = (0, 1))
+Colorbar(fig[1, 2], sc, label = "cloud cover  tcc")
+
+zline = collect(range(minimum(zz), maximum(zz), length = 100))
+lines!(ax, zline, A_ITM .+ B_ITM .* zline, color = :red, linewidth = 3,
+       label = @sprintf("ITM default  0.46 + 6.0e-5 z  (R²=%.2f)", r2(tau, tau_itm)))
+lines!(ax, zline, b1[1] .+ b1[2] .* zline, color = :black, linewidth = 3,
+       label = @sprintf("refit z       %.2f + %.1e z  (R²=%.2f)", b1[1], b1[2], r2(tau, fit1)))
+# z+tcc fit shown at the mean cloud cover
+lines!(ax, zline, b2[1] .+ b2[2] .* zline .+ b2[3] * mean(cc), color = :dodgerblue,
+       linewidth = 3, linestyle = :dash,
+       label = @sprintf("refit z+tcc  (at mean tcc, R²=%.2f)", r2(tau, fit2)))
+axislegend(ax, position = :rb, framevisible = true)
+
+save(out_png, fig)
+println("wrote $out_png")
