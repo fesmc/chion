@@ -173,6 +173,79 @@ statistically identical to GRL-16KM (+18, 0.84). The SMB pattern is set by
 elevation and temperature, both resolved at 16 km; refining sharpens the margin
 gradient but does not move the domain-scale skill.
 
+## Model and layer-count comparison
+
+How fast can BESSI be pushed, and where do the cheaper models break? A 50-year
+GRL-16KM spin-up (identical ERA5 forcing, serial/1 core) for BESSI at
+`Ntot = 15/7/5/3` and for PDD and ITM. Everything but `model` and `Ntot` is the
+GRL-16KM default (diurnal substep, gate −1 °C). Reproduce with
+`scripts/run_layer_comparison.sh` and
+`diagnostics/compare_models.jl` (writes `output/cmp_smb_stats.csv`).
+
+**Speed.**
+
+| config | wall [s] | per col-step | vs BESSI 15 |
+|---|---|---|---|
+| BESSI n=15 | 48.2 | 3.72e-7 | 1.0× |
+| BESSI n=7  | 36.6 | 2.82e-7 | 1.3× |
+| BESSI n=5  | 32.7 | 2.52e-7 | 1.5× |
+| BESSI n=3  | 28.4 | 2.19e-7 | 1.7× |
+| PDD        |  3.7 | 2.88e-8 | 12.9× |
+| ITM        |  8.4 | 6.47e-8 | 5.7× |
+
+Halving the BESSI layer cap barely helps: 15→3 is only **1.7×**, not 5×. The
+per-column layer loop (energy balance, densification, percolation) is not the
+whole cost — accumulation, surface fluxes and the diurnal substep are fixed
+overhead per column, so cutting layers hits diminishing returns fast. The real
+speed comes from dropping the layered column entirely: PDD (bulk degree-day) is
+**13×** faster and ITM (insolation–temperature) **6×**.
+
+**BESSI layer count barely touches the SMB.** Domain skill is flat — in fact
+marginally *better* at fewer layers:
+
+| BESSI Ntot | bias | RMSE | R² |
+|---|---|---|---|
+| 15 | +18 | 214 | 0.84 |
+| 7  | +18 | 213 | 0.84 |
+| 5  | +16 | 210 | 0.84 |
+| 3  | +14 | 208 | 0.85 |
+
+Every elevation band is statistically identical across `Ntot` (interior
+bit-for-bit: R² 0.99, RMSE 19; margins −640→−646). SMB is a column-*integrated*
+quantity — storage tendency + ice export — and the depth cap that bounds the
+firn column is the hard-coded 15-layer reference depth **regardless of `Ntot`**
+(see `enforce_snow_depth_cap`), so 3 layers hold the same total firn, just
+coarsely. The vertical structure that extra layers resolve (thermal gradient,
+refreeze profile) does not move the *annual* mass balance at domain scale. The
+slight drift toward MAR at fewer layers is a coarser percolation zone refreezing
+a touch less — a rounding effect, not a signal. **On Greenland SMB, BESSI n=5
+is a free 1.5× and n=3 a 1.7×; the layers earn their keep only if you need the
+firn-column state itself** (temperature, density, refreeze depth), not just SMB.
+
+**PDD and ITM trade skill for speed, and exactly where the physics lives.** All
+three models are near-perfect in the interior (pure accumulation, no melt: R²
+0.99) and good in the mid zone. They diverge below ~1500 m, in the percolation
+and margin zones where melt–refreeze detail decides the balance:
+
+| config | all-ice R² | RMSE | margin R² | lower-zone R² |
+|---|---|---|---|---|
+| BESSI (any n) | 0.84–0.85 | 208–214 | 0.58 | 0.69–0.72 |
+| PDD | 0.61 | 331 | −0.04 | 0.18 |
+| ITM | 0.24 | 463 | −1.24 | −0.47 |
+
+PDD keeps the domain bias small (+22) but loses the *pattern* in the melt zones
+(lower-zone R² 0.69→0.18, margins go negative). ITM is worse on both counts:
+with its default melt coefficients it massively **under-ablates the margins**
+(chion +273 vs MAR −740; bias +1013 there), dragging the domain bias to +172 and
+R² to 0.24 — the same margin miscalibration flagged in *Transmissivity finding*,
+here isolated to the melt formulation since ITM is driven by the ERA5 shortwave.
+
+**Bottom line.** For SMB skill, keep BESSI but drop to `Ntot = 5` (1.5× free,
+no measurable cost). If ~13× throughput matters more than margin skill, PDD is
+the honest cheap option — its bias is small and it is only wrong where every
+bulk model is wrong. ITM needs recalibration before it competes. Figures:
+`output/cmp_<config>/smb_chion_vs_mar.png`.
+
 ## Transmissivity finding
 
 `diagnostics/transmissivity.jl` on GRL-16KM: observed τ = swd/S_toa averages

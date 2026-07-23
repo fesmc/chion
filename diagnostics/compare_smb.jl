@@ -28,7 +28,7 @@ close(m)
 # --- chion surface SMB: accum - d(runoff) - d(subl), final year ----------
 d  = NCDataset(chion_file)
 ru = d["runoff"][:, :, :]
-su = d["sublimation"][:, :, :]
+su = haskey(d, "sublimation") ? d["sublimation"][:, :, :] : zero(ru)   # PDD/ITM: no subl term
 close(d)
 chion = accum .- (ru[:, :, end] .- ru[:, :, end-1]) .- (su[:, :, end] .- su[:, :, end-1])
 
