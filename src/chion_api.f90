@@ -104,7 +104,7 @@ module chion_api
     ! Allowed values, in one place so the error messages and the validation
     ! can never disagree. Aliases are included because chion_defs' *_flag
     ! functions accept them (docs/porting_notes.md D4).
-    character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|bessi|legacy"
+    character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|bessi|legacy"
     character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized|bessi|htessel"
     character(len=*), parameter :: CHION_DENSIFY_CHOICES = "bessi|htessel"
     character(len=*), parameter :: CHION_PDD_CHOICES     = "simple|pism"
@@ -759,6 +759,14 @@ contains
         call nml_read(filename,group,"alpha_ice",     c%alpha_ice)
         call nml_read(filename,group,"max_lwc_albedo",c%max_lwc_albedo)
         call nml_read(filename,group,"albedo_scheme", albedo_scheme)
+
+        call nml_read(filename,group,"frac_vu",         c%frac_vu)
+        call nml_read(filename,group,"alb_snow_vis_new",c%alb_snow_vis_new)
+        call nml_read(filename,group,"alb_snow_nir_new",c%alb_snow_nir_new)
+        call nml_read(filename,group,"snow_grain_fresh",c%snow_grain_fresh)
+        call nml_read(filename,group,"snow_grain_old",  c%snow_grain_old)
+        call nml_read(filename,group,"d_alb_age_vis",   c%d_alb_age_vis)
+        call nml_read(filename,group,"d_alb_age_nir",   c%d_alb_age_nir)
 
         call nml_read(filename,group,"eps_air", c%eps_air)
         call nml_read(filename,group,"eps_snow",c%eps_snow)

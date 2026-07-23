@@ -99,6 +99,7 @@ module chion_defs
     integer, parameter, public :: CHION_ALBEDO_CONSTANT   = 1
     integer, parameter, public :: CHION_ALBEDO_DYNAMIC    = 2
     integer, parameter, public :: CHION_ALBEDO_PRESCRIBED = 3
+    integer, parameter, public :: CHION_ALBEDO_SEMIX      = 4
 
     integer, parameter, public :: CHION_DENSIFY_BESSI   = 1
     integer, parameter, public :: CHION_DENSIFY_HTESSEL = 2
@@ -203,6 +204,16 @@ module chion_defs
         real(wp) :: max_lwc_albedo     ! [1] LWC at which albedo reaches alpha_wet
         integer  :: albedo_scheme      ! CHION_ALBEDO_*
 
+        ! SEMIX spectral albedo (CHION_ALBEDO_SEMIX). Warren & Wiscombe 1980
+        ! bands, collapsed to broadband by the incoming-SW spectral weights.
+        real(wp) :: frac_vu            ! [1]  visible+UV fraction of incoming solar
+        real(wp) :: alb_snow_vis_new   ! [1]  fresh-snow visible diffuse albedo
+        real(wp) :: alb_snow_nir_new   ! [1]  fresh-snow near-IR diffuse albedo
+        real(wp) :: snow_grain_fresh   ! [um] fresh snow grain size
+        real(wp) :: snow_grain_old     ! [um] aged snow grain size
+        real(wp) :: d_alb_age_vis      ! [1]  visible aging albedo reduction
+        real(wp) :: d_alb_age_nir      ! [1]  near-IR aging albedo reduction
+
         ! Radiation
         real(wp) :: eps_air            ! [1] emissivity of air
         real(wp) :: eps_snow           ! [1] emissivity of snow
@@ -251,6 +262,13 @@ module chion_defs
         real(wp) :: prescribed_albedo   ! [1]
         logical  :: has_prescribed_albedo
 
+        ! SEMIX albedo inputs. coszm falls back to a lat/solar-longitude daily
+        ! mean when absent; cloud defaults to clear-sky (all-direct) when absent.
+        real(wp) :: coszm               ! [1] daily-mean cos(solar zenith)
+        logical  :: has_coszm
+        real(wp) :: cloud               ! [1] cloud fraction, [0,1]
+        logical  :: has_cloud
+
         real(wp) :: latitude_deg        ! [deg N]
         real(wp) :: day_of_year         ! [d] fractional, 1-based
         real(wp) :: solar_longitude_deg ! [deg]
@@ -288,6 +306,11 @@ module chion_defs
         real(wp), allocatable :: air_pressure(:)         ! [Pa]
         real(wp), allocatable :: prescribed_albedo(:)    ! [1]
         logical,  allocatable :: has_prescribed_albedo(:)
+
+        real(wp), allocatable :: coszm(:)                ! [1] daily-mean cos(zenith)
+        logical,  allocatable :: has_coszm(:)
+        real(wp), allocatable :: cloud(:)                ! [1] cloud fraction
+        logical,  allocatable :: has_cloud(:)
 
         real(wp), allocatable :: latitude_deg(:)         ! [deg N]
 
@@ -425,6 +448,15 @@ contains
         c%max_lwc_albedo = 0.10_wp
         c%albedo_scheme  = CHION_ALBEDO_DYNAMIC
 
+        ! SEMIX spectral albedo defaults (CLIMBER-X smb_par / constants).
+        c%frac_vu          = 0.45_wp
+        c%alb_snow_vis_new = 0.99_wp
+        c%alb_snow_nir_new = 0.65_wp
+        c%snow_grain_fresh = 50.0_wp
+        c%snow_grain_old   = 1000.0_wp
+        c%d_alb_age_vis    = 0.05_wp
+        c%d_alb_age_nir    = 0.25_wp
+
         c%eps_air  = 0.80_wp
         c%eps_snow = 0.98_wp
         c%sigma_sb = 5.670373e-8_wp
@@ -514,6 +546,11 @@ contains
         allocate(forc%prescribed_albedo(ncol))
         allocate(forc%has_prescribed_albedo(ncol))
 
+        allocate(forc%coszm(ncol))
+        allocate(forc%has_coszm(ncol))
+        allocate(forc%cloud(ncol))
+        allocate(forc%has_cloud(ncol))
+
         allocate(forc%latitude_deg(ncol))
 
         allocate(forc%H_ice(ncol))
@@ -542,6 +579,11 @@ contains
         forc%air_pressure          = DEF_SEA_LEVEL_AIR_PRESSURE
         forc%prescribed_albedo     = 0.0_wp
         forc%has_prescribed_albedo = .FALSE.
+
+        forc%coszm     = 0.0_wp
+        forc%has_coszm = .FALSE.
+        forc%cloud     = 0.0_wp
+        forc%has_cloud = .FALSE.
 
         forc%latitude_deg = 0.0_wp
 
@@ -583,6 +625,10 @@ contains
         if (allocated(forc%air_pressure))          deallocate(forc%air_pressure)
         if (allocated(forc%prescribed_albedo))     deallocate(forc%prescribed_albedo)
         if (allocated(forc%has_prescribed_albedo)) deallocate(forc%has_prescribed_albedo)
+        if (allocated(forc%coszm))                 deallocate(forc%coszm)
+        if (allocated(forc%has_coszm))             deallocate(forc%has_coszm)
+        if (allocated(forc%cloud))                 deallocate(forc%cloud)
+        if (allocated(forc%has_cloud))             deallocate(forc%has_cloud)
         if (allocated(forc%latitude_deg))          deallocate(forc%latitude_deg)
         if (allocated(forc%H_ice))                 deallocate(forc%H_ice)
         if (allocated(forc%PDDs))                  deallocate(forc%PDDs)
@@ -749,10 +795,12 @@ contains
                 flag = CHION_ALBEDO_DYNAMIC
             case("prescribed")
                 flag = CHION_ALBEDO_PRESCRIBED
+            case("semix")
+                flag = CHION_ALBEDO_SEMIX
             case DEFAULT
                 write(io_unit_err,*) "chion_albedo_scheme_flag:: Error: albedo scheme not recognized."
                 write(io_unit_err,*) "albedo_scheme should be one of: &
-                                     &['constant','dynamic','prescribed'] &
+                                     &['constant','dynamic','prescribed','semix'] &
                                      &(aliases: 'bessi','legacy' -> 'constant')"
                 write(io_unit_err,*) "albedo_scheme = ", trim(name)
                 stop "Program stopped."

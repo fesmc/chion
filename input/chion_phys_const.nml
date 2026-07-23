@@ -54,7 +54,16 @@
     alpha_wet                 = 0.70        ! [1] Wet snow albedo (lower bound)
     alpha_ice                 = 0.30        ! [1] Bare ice albedo
     max_lwc_albedo            = 0.10        ! [1] LWC at which the albedo reaches alpha_wet
-    albedo_scheme             = "dynamic"   ! "constant" | "dynamic" | "prescribed" (aliases: "bessi", "legacy")
+    albedo_scheme             = "dynamic"   ! "constant" | "dynamic" | "prescribed" | "semix" (aliases: "bessi", "legacy")
+
+    ! ## SEMIX spectral albedo (albedo_scheme = "semix"; CLIMBER-X) ##
+    frac_vu                   = 0.45        ! [1]  Visible+UV fraction of incoming solar
+    alb_snow_vis_new          = 0.99        ! [1]  Fresh-snow visible diffuse albedo
+    alb_snow_nir_new          = 0.65        ! [1]  Fresh-snow near-IR diffuse albedo
+    snow_grain_fresh          = 50.0        ! [um] Fresh snow grain size
+    snow_grain_old            = 1000.0      ! [um] Aged snow grain size
+    d_alb_age_vis             = 0.05        ! [1]  Visible aging albedo reduction
+    d_alb_age_nir             = 0.25        ! [1]  Near-IR aging albedo reduction
 
     ! ## Radiation ##
     eps_air                   = 0.80        ! [1] Emissivity of air

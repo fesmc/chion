@@ -137,6 +137,11 @@ contains
         fc%prescribed_albedo     = forc%prescribed_albedo(icol)
         fc%has_prescribed_albedo = forc%has_prescribed_albedo(icol)
 
+        fc%coszm     = forc%coszm(icol)
+        fc%has_coszm = forc%has_coszm(icol)
+        fc%cloud     = forc%cloud(icol)
+        fc%has_cloud = forc%has_cloud(icol)
+
         fc%latitude_deg        = forc%latitude_deg(icol)
         fc%day_of_year         = forc%day_of_year
         fc%solar_longitude_deg = forc%solar_longitude_deg

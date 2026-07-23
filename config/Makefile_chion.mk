@@ -69,6 +69,10 @@ $(objdir)/snow_albedo.o: $(physdir)/snow_albedo.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+$(objdir)/snow_albedo_semix.o: $(physdir)/snow_albedo_semix.f90 \
+						  	$(objdir)/chion_defs.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 $(objdir)/snow_densify.o: $(physdir)/snow_densify.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
@@ -93,6 +97,7 @@ $(objdir)/snow_pdd.o: $(physdir)/snow_pdd.f90 \
 $(objdir)/snow_bessi.o: $(physdir)/snow_bessi.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
 						  	$(objdir)/snow_layers.o $(objdir)/snow_albedo.o \
+						  	$(objdir)/snow_albedo_semix.o \
 						  	$(objdir)/snow_accumulation.o $(objdir)/snow_densify.o \
 						  	$(objdir)/snow_diurnal.o $(objdir)/snow_surface_fluxes.o \
 						  	$(objdir)/snow_energy.o $(objdir)/snow_melt.o \
@@ -167,6 +172,7 @@ chion_physics = $(objdir)/snow_column_utils.o \
 				$(objdir)/snow_refreezing.o \
 				$(objdir)/snow_melt.o \
 				$(objdir)/snow_albedo.o \
+				$(objdir)/snow_albedo_semix.o \
 				$(objdir)/snow_densify.o \
 				$(objdir)/snow_diurnal.o \
 				$(objdir)/snow_accumulation.o \

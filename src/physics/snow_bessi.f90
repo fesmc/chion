@@ -62,13 +62,15 @@ module snow_bessi
                            TOL_TINY, TOL_EMPTY_LAYER, &
                            DEF_NTOT, DEF_MASS_MAX, DEF_MASS_SPLIT, DEF_MASS_MIN, &
                            DEF_DENSITY_INIT, DEF_TEMPERATURE_INIT, &
-                           CHION_ALBEDO_PRESCRIBED, CHION_DENSIFY_HTESSEL, &
+                           CHION_ALBEDO_PRESCRIBED, CHION_ALBEDO_SEMIX, &
+                           CHION_DENSIFY_HTESSEL, &
                            chion_const_class, chion_step_forcing_class
 
     use snow_column_utils,  only : surface_has_snow, column_has_liquid_water
 
     use snow_accumulation,  only : apply_accumulation
     use snow_albedo,        only : albedo_update
+    use snow_albedo_semix,  only : semix_surface_albedo
     use snow_densify,       only : densify_column, apply_htessel_liquid_water_compaction
     use snow_energy,        only : snow_energy_flux, snow_energy_result_class
     use snow_surface_fluxes,only : bare_ice_ablation_class, bare_ice_ablation_mass, &
@@ -623,6 +625,10 @@ contains
 
         if (use_prescribed_albedo) then
             albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
+        else if (c%albedo_scheme .eq. CHION_ALBEDO_SEMIX) then
+            ! Clean-snow scaffold: fresh grain, no dust. Grain aging and
+            ! dust-in-snow are added in the following commits.
+            call semix_surface_albedo(forc,c,c%snow_grain_fresh,0.0_wp,albedo)
         else
             call albedo_update(mass,mass_w,density,temperature,n,c,albedo)
         end if
