@@ -32,9 +32,15 @@
     n_years             = 50               ! annual cycles to repeat
     dt_out              = 360.0            ! [d] output once per year (drift)
 
-    swd_source          = "file"           ! "file" (ERA5) | "transmissivity"
-    trans_a             = 0.46             ! [1]  tau = trans_a + trans_b*z_srf
-    trans_b             = 6.0e-5           ! [m-1]
+    ! swd_source: "file" uses the regridded ERA5 shortwave (validated default).
+    ! "transmissivity"          -> tau = trans_a + trans_b*z_srf           (ITM clear-sky)
+    ! "transmissivity_seasonal" -> tau = trans_a + trans_b*z_srf + trans_c*tcc,
+    !     with the coefficients below set to the melt-season (JJA) fit from
+    !     diagnostics/transmissivity.jl. tau is clamped to [0,1] and * S_toa.
+    swd_source          = "file"
+    trans_a             = 0.768            ! [1]   JJA fit intercept
+    trans_b             = 6.99e-5          ! [m-1] JJA fit elevation term
+    trans_c             = -0.376           ! [1]   JJA fit cloud term
     H_ice_default       = 1000.0           ! [m]  ice thickness on every column (ITM)
 /
 

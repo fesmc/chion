@@ -139,5 +139,25 @@ late summer** (clouds suppress τ far more in Jul–Aug). The pooled annual fit
 gives c=−0.51 — *steeper than any single month* — because season is a
 confounder (autumn is low-τ and cloudy, spring high-τ), a Simpson's-paradox
 artifact. So a season-resolved τ is the honest form, and ITM should be
-calibrated on the **melt-season** relationship (τ ≈ 0.73 + z-term − 0.29·tcc,
-JJA), not the annual pooled one.
+calibrated on the **melt-season** relationship, not the annual pooled one.
+
+### The seasonal transmissivity reproduces the ERA5 shortwave
+
+`swd_source = "transmissivity_seasonal"` uses the JJA-pooled cloud-aware fit,
+**τ = 0.768 + 6.99e-5·z_srf − 0.376·tcc** (clamped to [0,1], × S_toa; R²=0.67
+within JJA). A 50-year GRL-16KM run driven this way — with NO ERA5 shortwave
+data, only insolation, elevation and cloud cover — matches the ERA5-driven run:
+
+| swd_source | runoff | SMB | bias | R² | net-abl. |
+|---|---|---|---|---|---|
+| MAR | 191 | 190 | — | — | 14.4 % |
+| ERA5 file (default) | 178 | 209 | +18 | 0.84 | 15.5 % |
+| transmissivity_seasonal | 170 | 216 | +26 | 0.82 | 15.2 % |
+
+Band-by-band it tracks the ERA5 run (margins −595 vs −640, interior identical).
+The cloud term is what makes it work: the clear-sky `transmissivity` form
+(τ = 0.46 + 6e-5·z, no cloud) under-melts badly. This is the practical payoff of
+the diagnostic — a shortwave parameterization good enough to stand in for the
+ERA5 field, needing only cloud cover (more widely available, and estimable for
+paleo domains). Still a single fit, not truly month-varying; a month-resolved
+(a,b,c) is the next refinement.

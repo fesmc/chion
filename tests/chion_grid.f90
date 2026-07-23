@@ -69,9 +69,10 @@ program chion_grid
     !       path_ice_data  = "/path/to/ice_data"
     !       path_insol     = "libs/insol/input"
     !       n_years        = 50            ! annual cycles to repeat
-    !       swd_source     = "file"        ! "file" (ERA5) | "transmissivity"
-    !       trans_a        = 0.46          ! tau = trans_a + trans_b*z_srf
+    !       swd_source     = "file"        ! "file" | "transmissivity" | "transmissivity_seasonal"
+    !       trans_a        = 0.46          ! tau = trans_a + trans_b*z_srf (+ trans_c*tcc)
     !       trans_b        = 6.0e-5        ! [m-1]
+    !       trans_c        = 0.0           ! [1] cloud term, used by transmissivity_seasonal
     !       H_ice_default  = 1000.0        ! [m] ice thickness set on every column (ITM)
     !   /
 
@@ -100,7 +101,7 @@ program chion_grid
     character(len=56)  :: domain, grid_name, swd_source
     character(len=512) :: path_ice_data, path_insol
     integer  :: n_years
-    real(wp) :: trans_a, trans_b, H_ice_default
+    real(wp) :: trans_a, trans_b, trans_c, H_ice_default
 
     ! --- Driver state -----------------------------------------------------
     type(chion_class) :: chn
@@ -164,6 +165,7 @@ program chion_grid
         call nml_read(path_par,"ctrl","swd_source",    swd_source)
         call nml_read(path_par,"ctrl","trans_a",       trans_a)
         call nml_read(path_par,"ctrl","trans_b",       trans_b)
+        call nml_read(path_par,"ctrl","trans_c",       trans_c)
         call nml_read(path_par,"ctrl","H_ice_default", H_ice_default)
     else
         call nml_read(path_par,"ctrl","file_forcing",      file_forcing)
@@ -422,9 +424,22 @@ program chion_grid
                     ! the per-column surface_height set above.
                     chn%forc%shortwave_down = (trans_a + trans_b*chn%forc%surface_height) &
                                               * S_toa_c(:,doy)
+                case("transmissivity_seasonal")
+                    ! Cloud-aware transmissivity calibrated on the melt season:
+                    !   tau = trans_a + trans_b*z_srf + trans_c*tcc,  clamped to
+                    ! [0,1], times S_toa. tcc is the daily-interpolated cloud
+                    ! cover (fday is reused as the tcc-of-day scratch here). The
+                    ! diagnostic (diagnostics/transmissivity.jl) shows a single
+                    ! annual (a,b,c) is misleading -- season confounds it -- so
+                    ! these default to the JJA fit; see docs/steady_state_snowpack.md.
+                    call interp_monthly_to_day(md, tcc_c, doy, fday)
+                    chn%forc%shortwave_down = max(0.0_wp, min(1.0_wp, &
+                        trans_a + trans_b*chn%forc%surface_height + trans_c*fday)) &
+                        * S_toa_c(:,doy)
                 case DEFAULT
-                    write(io_unit_err,*) "chion_grid:: Error: swd_source must be 'file' or "// &
-                                         "'transmissivity', got '"//trim(swd_source)//"'."
+                    write(io_unit_err,*) "chion_grid:: Error: swd_source must be 'file', "// &
+                        "'transmissivity' or 'transmissivity_seasonal', got '"// &
+                        trim(swd_source)//"'."
                     stop "Program stopped."
             end select
 
