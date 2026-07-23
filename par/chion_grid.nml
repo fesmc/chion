@@ -21,6 +21,8 @@
 ! ============================================================
 
 &ctrl
+    forcing_source      = "file"            ! "file" | "domain"
+
     file_forcing        = "forcing.nc"      ! Input forcing file
     file_out            = "chion_grid.nc"   ! Output, written to the run directory
 
