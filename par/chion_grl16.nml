@@ -61,10 +61,18 @@
     density_init        = 300.0             ! [kg m-3] Initial layer density
     temperature_init    = 273.0             ! [K] Initial layer temperature
 
-    diurnal_shortwave_substeps          = .FALSE.   ! Resolve the diurnal shortwave cycle
+    ! Diurnal shortwave substepping resolves the solar-noon flux peak; melt is
+    ! nonlinear in the instantaneous flux, so daily-mean forcing under-melts.
+    ! The min_air_temperature gate confines the boost to near-melting cells --
+    ! at the -8C default it fires across the whole percolation zone and
+    ! over-ablates it; at -1C it lands close to MAR (domain R^2 0.74 -> 0.84,
+    ! SMB bias +68 -> +18 mm/yr). The temperature cycle is left OFF: +/-5 K is
+    ! too aggressive and flips the sheet to strong over-ablation. See
+    ! docs/steady_state_snowpack.md.
+    diurnal_shortwave_substeps          = .TRUE.    ! Resolve the diurnal shortwave cycle
     diurnal_shortwave_threshold         = 0.0       ! [W m-2] Peak-minus-mean to activate
     diurnal_shortwave_max_substeps      = 3         ! [1] Substeps per day when active
-    diurnal_shortwave_min_air_temperature = 265.15  ! [K] Below this, do not substep
+    diurnal_shortwave_min_air_temperature = 272.15  ! [K] Below this, do not substep
     diurnal_temperature_cycle           = .FALSE.   ! Add a diurnal air-temperature cycle
     diurnal_temperature_amplitude       = 5.0       ! [K] Half-amplitude of that cycle
 /

@@ -58,9 +58,33 @@ already net-ablating in MAR (−16) but net-accumulating in chion (+210), and th
 margins ablate only ~60 % as hard as MAR (−461 vs −740). The whole +68 domain
 bias is this coherent, elevation-dependent **under-ablation toward the warm
 margins** — the signature of monthly-mean forcing with no sub-monthly
-temperature extremes (and likely albedo). It is systematic, not noise. Levers,
-untried here: the BESSI diurnal temperature cycle (`diurnal_temperature_cycle`),
-albedo tuning, or a margin temperature-variability term.
+temperature extremes.
+
+## Diurnal shortwave substepping (the default)
+
+Melt is nonlinear in the instantaneous shortwave flux, so daily-mean forcing
+systematically under-melts. Resolving the solar-noon peak with
+`diurnal_shortwave_substeps` recovers it — but the lever has to be aimed. A
+50-year sweep (all else equal):
+
+| config | runoff | SMB | bias | R² | net-abl. |
+|---|---|---|---|---|---|
+| MAR target | 191 | 190 | — | — | 14.4 % |
+| no diurnal | 128 | 258 | +68 | 0.74 | 12.4 % |
+| substep, gate −8 °C (default) | 294 | 92 | −98 | 0.70 | 32.7 % |
+| substep, gate −8 °C + T-cycle ±5 K | 436 | −50 | −240 | 0.35 | 39.4 % |
+| **substep, gate −1 °C** | **178** | **209** | **+18** | **0.84** | **15.5 %** |
+
+Two findings. (1) The **temperature cycle** (`diurnal_temperature_cycle`, ±5 K)
+is too aggressive — it flips the sheet into strong over-ablation; left OFF.
+(2) The **activation gate** `diurnal_shortwave_min_air_temperature` is the knob:
+at its −8 °C default the substepping fires across the whole percolation zone and
+over-ablates it (lower zone −294 where MAR is −16); raised to near-melting
+(−1 °C, 272.15 K) the boost is confined to the warm margins and every elevation
+band improves at once — domain bias +68→+18, R² 0.74→**0.84**, net-ablating area
+12.4→15.5 % (MAR 14.4 %), lower zone +210→+29. This is one physically-motivated
+threshold moved to a sensible value, not a fit, so it is the GRL-16KM default in
+`par/chion_grl16.nml`. Residual: margins still ~15 % short of MAR (−640 vs −740).
 
 ## Transmissivity finding
 
