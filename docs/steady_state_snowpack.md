@@ -29,36 +29,38 @@ regenerated if absent). A 50-year GRL-16KM BESSI run is ~46 s, 7204 columns.
 
 ## Result (GRL-16KM, BESSI, 50 yr, ERA5 shortwave)
 
-The spin-up converges: the domain-mean ice-facing SMB (`smb_ice`, "net mass
-flux to the ice sheet") settles at ~200 mm/yr by year ~40 as the firn column
-fills — the expected approach to mass-throughput balance.
+**Which chion field is the MAR-comparable SMB.** MAR `smb` is the surface mass
+balance, precip − runoff − sublimation. The matching chion quantity is the same
+combination — equivalently d(column storage)/dt + `smb_ice` — NOT `smb_ice`
+alone. `smb_ice` (the ice-facing flux) equals the surface SMB only once the firn
+column is in equilibrium; on a 50-year cold start it still lags by the storage
+growth (~200 vs ~258 mm/yr at year 50), so comparing it to MAR flatters the
+result. Nor is the storage tendency alone right: from an empty start every
+column is building firn, so it is positive almost everywhere and hides the
+ablation entirely.
 
-**Which chion field is the MAR-comparable SMB.** MAR `smb` is the ice-facing
-surface mass balance. The matching chion field is `smb_ice`, NOT the column
-storage tendency d(snow+mass_base)/dt: on a cold start from an empty snowpack
-every column is still building firn toward equilibrium, so the storage tendency
-is positive almost everywhere and hides the ablation. `smb_ice` is what BESSI
-drives negative through its bare-ice ablation branch once a column melts out.
+Against MAR v3.11, final-year surface SMB (precip − runoff − subl):
 
-Against MAR v3.11, final-year `smb_ice`:
+| zone | n | chion | MAR | bias | RMSE | R² | corr |
+|---|---|---|---|---|---|---|---|
+| all ice | 7204 | 258 | 190 | +68 | 269 | 0.74 | 0.87 |
+| margin z<800 m | 571 | −461 | −740 | +279 | 633 | 0.39 | 0.72 |
+| lower z 800–1500 m | 1232 | +210 | −16 | +226 | 449 | 0.43 | 0.78 |
+| mid z 1500–2200 m | 1977 | +430 | +377 | +54 | 146 | 0.88 | 0.95 |
+| interior z>2200 m | 3424 | +295 | +312 | −17 | 19 | 0.99 | 1.00 |
 
-| zone | chion | MAR |
-|---|---|---|
-| accumulation, z 2000–3500 m | +252 | +324 mm/yr |
-| mid, z 1000–2000 m | +325 | +255 mm/yr |
-| ablation margin, z 0–1000 m | −359 | −600 mm/yr |
-| domain mean | +200 | +190 mm/yr |
-| net-ablating area fraction | 12.4 % | 14.4 % |
-| min (margin) | −2833 | −3881 mm/yr |
+net-ablating area 12.4 % (MAR 14.4 %); domain runoff 128 vs 191 mm/yr.
 
-Spatial pattern correlation 0.86; margin runoff 945 vs 1178 mm/yr. chion tracks
-MAR across the whole elevation range and reproduces the ablation zone (down to
-−2833 mm/yr over 12.4 % of the ice area). The residual is a modest
-**under-ablation at the very warmest margin cells** (−359 vs −600), the expected
-melt deficit of monthly-mean climatological forcing with no sub-monthly
-temperature variability. Levers, untried here: the BESSI diurnal temperature
-cycle (`diurnal_temperature_cycle`), albedo tuning, or a margin temperature
-variability term.
+The global R² (0.74) hides a sharp elevation split. **The interior accumulation
+zone is essentially exact** (R² 0.99, RMSE 19), and the mid zone is good
+(R² 0.88). **Below ~1500 m the skill collapses** (R² 0.4): the lower zone is
+already net-ablating in MAR (−16) but net-accumulating in chion (+210), and the
+margins ablate only ~60 % as hard as MAR (−461 vs −740). The whole +68 domain
+bias is this coherent, elevation-dependent **under-ablation toward the warm
+margins** — the signature of monthly-mean forcing with no sub-monthly
+temperature extremes (and likely albedo). It is systematic, not noise. Levers,
+untried here: the BESSI diurnal temperature cycle (`diurnal_temperature_cycle`),
+albedo tuning, or a margin temperature-variability term.
 
 ## Transmissivity finding
 
