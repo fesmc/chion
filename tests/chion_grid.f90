@@ -127,7 +127,8 @@ program chion_grid
     type(monthly_to_daily_class) :: md
     real(wp), allocatable :: t2m_c(:,:), sf_c(:,:), rf_c(:,:), swd_c(:,:), tcc_c(:,:)
     real(wp), allocatable :: S_toa_c(:,:)
-    real(wp), allocatable :: fday(:), smb_step(:), smb_year(:)
+    real(wp), allocatable :: fday(:), smb_step(:), export_year(:), mass_prev(:)
+    real(wp), allocatable :: mass_now(:)
 
     ! =====================================================================
     ! Setup: parameters
@@ -316,7 +317,7 @@ program chion_grid
         ! Scatter monthly gridded fields onto the column list, then build the
         ! mean-preserving control values ONCE (every field, so PDD sums and
         ! precip totals are both honoured). S_toa is already daily.
-        call monthly_to_daily_init(md, nmon, nday_year)
+        call monthly_to_daily_init(md, nmon, nday_year/nmon)
 
         allocate(t2m_c(ncol,nmon), sf_c(ncol,nmon), rf_c(ncol,nmon))
         allocate(swd_c(ncol,nmon), tcc_c(ncol,nmon))
@@ -331,14 +332,22 @@ program chion_grid
             S_toa_c(i,:) = dom%S_toa(col_is(i),col_js(i),:)
         end do
 
-        call monthly_to_daily_controls(md, t2m_c, t2m_c)
-        call monthly_to_daily_controls(md, sf_c,  sf_c)
-        call monthly_to_daily_controls(md, rf_c,  rf_c)
-        call monthly_to_daily_controls(md, swd_c, swd_c)
-        call monthly_to_daily_controls(md, tcc_c, tcc_c)
+        ! Replace monthly means with mean-preserving control values. A scratch
+        ! copy avoids aliasing the intent(IN)/intent(OUT) pair.
+        block
+            real(wp), allocatable :: mtmp(:,:)
+            allocate(mtmp(ncol,nmon))
+            mtmp = t2m_c ; call monthly_to_daily_controls(md, mtmp, t2m_c)
+            mtmp = sf_c  ; call monthly_to_daily_controls(md, mtmp, sf_c)
+            mtmp = rf_c  ; call monthly_to_daily_controls(md, mtmp, rf_c)
+            mtmp = swd_c ; call monthly_to_daily_controls(md, mtmp, swd_c)
+            mtmp = tcc_c ; call monthly_to_daily_controls(md, mtmp, tcc_c)
+            deallocate(mtmp)
+        end block
 
-        allocate(fday(ncol), smb_step(ncol), smb_year(ncol))
-        smb_year = 0.0_wp
+        allocate(fday(ncol), smb_step(ncol), export_year(ncol), mass_prev(ncol))
+        export_year = 0.0_wp
+        mass_prev   = chion_column_mass(chn)     ! cold start: 0
 
         ! ITM ice thickness (BESSI and PDD ignore it). Annual PDDs is set once,
         ! from the repeating climatology, below.
@@ -452,17 +461,26 @@ program chion_grid
         ! --- Step -------------------------------------------------------
         call chion_update(chn,dt_use)
 
-        ! --- Annual SMB accounting (domain mode): live convergence view --
+        ! --- Annual surface-SMB accounting (domain mode) ----------------
+        ! chion_get_smb is the ICE-FACING flux (firn exported to the ice
+        ! sheet), which is ~0 while a cold-start column is still filling. The
+        ! MAR-comparable SURFACE mass balance is the column-storage tendency
+        ! plus that export:  SMB_surf = d(column_mass)/dt + smb_ice.
+        ! Integrated over a year this is a mass in kg m-2 == mm w.e. yr-1.
         if (is_domain) then
             call chion_get_smb(chn,smb_step)
-            smb_year = smb_year + smb_step*dt_use          ! [kg m-2 s-1]*[d]
+            export_year = export_year + smb_step*chn%c%seconds_per_day*dt_use
             doy = mod(it-1, nday_year) + 1
             if (doy .eq. nday_year) then
-                iyear = it/nday_year
-                write(*,"(a,i4,a,f10.3,a,f12.2)") " year ", iyear, &
-                    "  mean SMB [mm/yr] = ", 86400.0_wp*mean_col(smb_year), &
-                    "   mean column mass [kg/m2] = ", mean_col(chion_column_mass(chn))
-                smb_year = 0.0_wp
+                iyear    = it/nday_year
+                mass_now = chion_column_mass(chn)
+                write(*,"(a,i4,a,f9.2,a,f9.2,a,f10.2)") " year ", iyear, &
+                    "  surface SMB [mm/yr] = ", &
+                    mean_col((mass_now - mass_prev) + export_year), &
+                    "   ice export [mm/yr] = ", mean_col(export_year), &
+                    "   column mass [kg/m2] = ", mean_col(mass_now)
+                mass_prev   = mass_now
+                export_year = 0.0_wp
             end if
         end if
 
