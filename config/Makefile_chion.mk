@@ -129,6 +129,21 @@ $(objdir)/chion.o: $(srcdir)/chion.f90 \
 						  	$(objdir)/snow_diagnostics.o $(objdir)/chion_forcing_monthly.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+## driver-layer modules ########################
+#
+# NOT part of libchion.a. These sit ABOVE the library, in the host/driver
+# layer, and are compiled straight into a driver (see the `grid` target).
+# Keeping them out of the library preserves chion's contract that the host
+# supplies forcing and insolation -- the library has no insolation module and
+# no knowledge of where raw datasets live.
+#
+# insolation is vendored under libs/insol (top-of-atmosphere daily insolation,
+# Laskar LA2004 tables in libs/insol/input). It uses fesm-utils' interp1D for
+# the spline, so it needs INC_FESMUTILS like everything else.
+
+$(objdir)/insolation.o: $(libsdir)/insol/insolation.f90
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 ###############################################
 ##
 ## Object lists
@@ -158,3 +173,8 @@ chion_core =    $(objdir)/chion_model.o \
                 $(objdir)/chion_api.o \
                 $(objdir)/chion_io.o \
                 $(objdir)/chion.o
+
+# Driver-layer objects, linked into drivers that need domain loading and
+# insolation (currently chion_grid.x). Grows with the domain modules (WP: see
+# chion_domain, added alongside the domain loaders).
+driver_objs =   $(objdir)/insolation.o

@@ -44,6 +44,7 @@ endif
 # switching openmp does need a clean. Only fesm-utils' include dir is swapped.
 srcdir  = src
 physdir = src/physics
+libsdir = libs
 objdir  = libchion/include$(psuffix)
 bindir  = libchion/bin$(psuffix)
 testdir = tests
@@ -205,9 +206,9 @@ column : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    chion_column.x is ready."
 
-grid : chion-static
+grid : chion-static $(driver_objs)
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/chion_grid.x $(testdir)/chion_grid.f90 \
-			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+			$(driver_objs) -L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    chion_grid.x is ready."
 
 itm : chion-static
