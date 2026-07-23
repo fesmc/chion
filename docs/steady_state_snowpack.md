@@ -1,9 +1,10 @@
 # Steady-state snowpack on an ice-sheet domain
 
 A standalone way to spin a chion snowpack up to a repeating seasonal state on a
-real domain, driven straight from the raw `~/models/ice_data` datasets with no
-preprocessing step. Greenland `GRL-16KM` is wired; other domains are one loader
-subroutine away.
+real domain. Greenland (`GRL-16KM/8KM`, MAR v3.11 + ERA5, no preprocessing step)
+and Antarctica (`ANT-32KM/16KM/8KM`, RACMO2.4/ANT-12 CORDEX, one CDO
+preprocessing step) are both wired; other domains are one loader subroutine
+away.
 
 ## Pieces
 
@@ -11,7 +12,7 @@ subroutine away.
 |---|---|---|
 | `chion_forcing_monthly` | `src/` (library) | mean-preserving monthly→daily interpolation (360-day, 12×30); the daily series averages back to the input monthly means, so precip totals are conserved |
 | `insolation` | `libs/insol/` (driver layer) | top-of-atmosphere daily insolation (Laskar LA2004); kept out of `libchion.a`, preserving "the host supplies insolation" |
-| `chion_domain` | `libs/domains/` (driver layer) | assembles standardized SI monthly forcing from raw data: MAR v3.11 (t2m, sf, rf, smb/melt/runoff) native on grid, ERA5 shortwave + cloud **conservatively regridded** (coords `map_init(con)`, cache under `maps/`), TOA insolation from latitude |
+| `chion_domain` | `libs/domains/` (driver layer) | assembles standardized SI monthly forcing per domain: Greenland = MAR v3.11 (t2m, sf, rf, smb/melt/runoff) native on grid + ERA5 shortwave/cloud **conservatively regridded** (coords `map_init(con)`, cache under `maps/`); Antarctica = RACMO2.4/ANT-12 pre-regridded to the ANT grid (CDO, see below) + BedMachine geometry. TOA insolation from latitude |
 | `chion_grid.x` | `tests/chion_grid.f90` | one driver, `forcing_source = file | domain`; the domain path cycles the annual climatology for `n_years`, with `swd_source = file | transmissivity | transmissivity_seasonal` |
 | `diagnostics/*.jl` | `diagnostics/` | Julia + CairoMakie analysis (own project env): `compare_smb.jl` (chion vs MAR SMB figure), `transmissivity.jl` (ITM τ vs τ_obs = swd/S_toa) |
 
@@ -28,6 +29,31 @@ weight map is generated on the first run and cached under `maps/` (gitignored,
 regenerated if absent). A 50-year GRL-16KM BESSI run (7204 columns) is ~47 s on
 one core; the build is OpenMP by default, so `OMP_NUM_THREADS=8` cuts it to
 ~17 s (see Performance).
+
+### Antarctica (RACMO2.4 / ANT-12)
+
+Antarctica needs a one-time preprocessing step because the source is a 30-year
+CORDEX monthly *time series* on a *rotated-pole* grid, not a ready-made
+climatology. Two scripts build it:
+
+```
+scripts/download_racmo_ant12.sh        # CORDEX tas,pr,rsds,clt 1981-2010 -> ~/data/racmo (~1 GB)
+scripts/build_ant12_climatology.sh     # 12-month climatology, SI units, regridded to ANT-32/16/8KM
+```
+
+`build_ant12_climatology.sh` averages to 12 months, converts units, and
+conservatively regrids (`cdo remapcon`) onto each ANT grid. The regrid is done
+here rather than in-model because coords cannot remap from a rotated-pole
+source ([fesmc/fesm-utils#8](https://github.com/fesmc/fesm-utils/issues/8)).
+`load_antarctica` then reads the per-grid climatology plus BedMachine geometry;
+set `path_racmo` (and `path_ice_data` for BedMachine) in the par file:
+
+```
+<chion>/libchion/bin/chion_grid.x <chion>/par/chion_ant32.nml
+```
+
+The CORDEX set is atmospheric only: no reference SMB (chion computes it), and
+total precip is split into snow/rain at the freezing point.
 
 ## Result (GRL-16KM, BESSI, 50 yr, ERA5 shortwave)
 
@@ -120,6 +146,27 @@ runtime threads via `OMP_NUM_THREADS`). On a 4-performance-core machine:
 
 GRL-8KM at 8 threads: 74 s (from 202 s, 2.7×) — same scaling. Returns diminish
 past the 4 performance cores (the machine's other 6 are efficiency cores).
+
+### Antarctica run times
+
+The whole-Antarctica domain (grounded ice + shelves) carries far more ice
+columns than Greenland at the same resolution, so absolute wall times are
+larger even though per-column cost is unchanged. Measured on the same machine,
+50-yr BESSI runs (wall time = run loop only; the CDO regrid is preprocessing,
+not counted):
+
+| grid | ice columns | serial | 8 threads | per col-step (8 thr) |
+|---|---|---|---|---|
+| ANT-32KM | 13 212 | 67 s | 30 s | 1.27e-7 s |
+| ANT-16KM | 52 859 | — | 96 s | 1.01e-7 s |
+| ANT-8KM | 211 070 | — | 393 s | 1.03e-7 s |
+
+Per-column-step matches Greenland (ANT-32KM serial 2.84e-7 s vs GRL ~3.8e-7),
+so throughput is not the issue — **ANT-8KM is slow because it has 211 k columns,
+7× GRL-8KM's 29 k** (Antarctica's ice area is ~7× Greenland's). The 393 s is
+domain size, not a per-cell regression; the same per-column engine drives both.
+(Serial figures are shown only where measured; the others were run at the
+default 8 threads.)
 
 Physics is resolution-robust: GRL-8KM gives bias +15, RMSE 212, R² 0.84 —
 statistically identical to GRL-16KM (+18, 0.84). The SMB pattern is set by
