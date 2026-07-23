@@ -29,26 +29,36 @@ regenerated if absent). A 50-year GRL-16KM BESSI run is ~46 s, 7204 columns.
 
 ## Result (GRL-16KM, BESSI, 50 yr, ERA5 shortwave)
 
-The spin-up converges: domain-mean surface SMB settles at ~252 mm/yr by year
-~25, while the ice-facing export ramps from negative toward the surface SMB as
-the firn column fills — the expected approach to mass-throughput balance.
+The spin-up converges: the domain-mean ice-facing SMB (`smb_ice`, "net mass
+flux to the ice sheet") settles at ~200 mm/yr by year ~40 as the firn column
+fills — the expected approach to mass-throughput balance.
 
-Against MAR v3.11 (the source model), final-year surface SMB:
+**Which chion field is the MAR-comparable SMB.** MAR `smb` is the ice-facing
+surface mass balance. The matching chion field is `smb_ice`, NOT the column
+storage tendency d(snow+mass_base)/dt: on a cold start from an empty snowpack
+every column is still building firn toward equilibrium, so the storage tendency
+is positive almost everywhere and hides the ablation. `smb_ice` is what BESSI
+drives negative through its bare-ice ablation branch once a column melts out.
+
+Against MAR v3.11, final-year `smb_ice`:
 
 | zone | chion | MAR |
 |---|---|---|
-| accumulation, z 2000–3500 m | +307 | +324 mm/yr |
-| mid, z 1000–2000 m | +411 | +255 mm/yr |
-| ablation margin, z 0–1000 m | +112 | **−600** mm/yr |
-| net-ablating area fraction | **0 %** | 14.4 % |
+| accumulation, z 2000–3500 m | +252 | +324 mm/yr |
+| mid, z 1000–2000 m | +325 | +255 mm/yr |
+| ablation margin, z 0–1000 m | −359 | −600 mm/yr |
+| domain mean | +200 | +190 mm/yr |
+| net-ablating area fraction | 12.4 % | 14.4 % |
+| min (margin) | −2833 | −3881 mm/yr |
 
-Spatial pattern correlation 0.71. **The accumulation zone is captured well; the
-whole discrepancy is under-ablation at the warm margins** — chion produces no
-net-ablating cells, where MAR loses up to −3880 mm/yr. This is the classic
-melt deficit of a snowpack forced with monthly-mean climatology and no
-sub-monthly temperature variability. Levers, untried here: the BESSI diurnal
-temperature cycle (`diurnal_temperature_cycle`), albedo tuning, or a temperature
-variability term at the margins.
+Spatial pattern correlation 0.86; margin runoff 945 vs 1178 mm/yr. chion tracks
+MAR across the whole elevation range and reproduces the ablation zone (down to
+−2833 mm/yr over 12.4 % of the ice area). The residual is a modest
+**under-ablation at the very warmest margin cells** (−359 vs −600), the expected
+melt deficit of monthly-mean climatological forcing with no sub-monthly
+temperature variability. Levers, untried here: the BESSI diurnal temperature
+cycle (`diurnal_temperature_cycle`), albedo tuning, or a margin temperature
+variability term.
 
 ## Transmissivity finding
 
