@@ -64,20 +64,25 @@ program test_domain
     write(*,"(a,f10.2)") " S_toa   ann max  [W/m2]  : ", maxval(dom%S_toa)
     write(*,*)
 
-    ! Write a compact check file: static + annual means.
+    ! Write a check file: static, annual means, AND monthly swd/tcc/S_toa so the
+    ! transmissivity diagnostic (diagnostics/transmissivity.jl) can fit a
+    ! seasonal tau = swd/S_toa. S_toa is daily; here it is averaged to months.
     call nc_create(file_out)
-    call nc_write_dim(file_out, "xc", x=dom%xc, units="km")
-    call nc_write_dim(file_out, "yc", x=dom%yc, units="km")
+    call nc_write_dim(file_out, "xc",    x=dom%xc, units="km")
+    call nc_write_dim(file_out, "yc",    x=dom%yc, units="km")
+    call nc_write_dim(file_out, "month", x=1, dx=1, nx=dom%nmon, units="month")
     call nc_write(file_out, "lon2D", dom%lon2D, dim1="xc", dim2="yc")
     call nc_write(file_out, "lat2D", dom%lat2D, dim1="xc", dim2="yc")
     call nc_write(file_out, "mask",  dom%mask,  dim1="xc", dim2="yc")
     call nc_write(file_out, "z_srf", dom%z_srf, dim1="xc", dim2="yc")
     call nc_write(file_out, "t2m",   annmean(dom%t2m),   dim1="xc", dim2="yc")
-    call nc_write(file_out, "swd",   annmean(dom%swd),   dim1="xc", dim2="yc")
-    call nc_write(file_out, "tcc",   annmean(dom%tcc),   dim1="xc", dim2="yc")
-    call nc_write(file_out, "S_toa", sum(dom%S_toa,dim=3)/real(dom%nday_year), &
-                  dim1="xc", dim2="yc")
     call nc_write(file_out, "smb",   annmean(dom%smb_ref), dim1="xc", dim2="yc")
+
+    ! Monthly, for the transmissivity fit.
+    call nc_write(file_out, "swd",   dom%swd, dim1="xc", dim2="yc", dim3="month")
+    call nc_write(file_out, "tcc",   dom%tcc, dim1="xc", dim2="yc", dim3="month")
+    call nc_write(file_out, "S_toa", monthly_S_toa(dom), dim1="xc", dim2="yc", dim3="month")
+
     write(*,"(a)") " wrote "//file_out
     write(*,"(a)") "=========================================================="
 
@@ -88,6 +93,19 @@ contains
         real(wp) :: m(size(v,1),size(v,2))
         m = sum(v, dim=3)/real(size(v,3))
     end function annmean
+
+    function monthly_S_toa(dom) result(sm)
+        ! Average the daily S_toa (nx,ny,nday_year) into months (nx,ny,nmon),
+        ! nday_mon days each, to pair with the monthly swd.
+        type(chion_domain_class), intent(IN) :: dom
+        real(wp) :: sm(dom%nx, dom%ny, dom%nmon)
+        integer  :: m, d0, ndm
+        ndm = dom%nday_year/dom%nmon
+        do m = 1, dom%nmon
+            d0 = (m-1)*ndm
+            sm(:,:,m) = sum(dom%S_toa(:,:,d0+1:d0+ndm), dim=3)/real(ndm,wp)
+        end do
+    end function monthly_S_toa
 
     subroutine range_line(name, v, ice)
         character(len=*), intent(IN) :: name
