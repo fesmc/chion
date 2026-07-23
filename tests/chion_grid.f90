@@ -64,10 +64,11 @@ program chion_grid
     !       dt             = -1.0          ! [d] <=0 -> infer from the time axis
     !
     !     ! --- forcing_source = "domain" ---
-    !       domain         = "greenland"
+    !       domain         = "greenland"   ! "greenland" | "antarctica"
     !       grid_name      = "GRL-16KM"
     !       path_ice_data  = "/path/to/ice_data"
     !       path_insol     = "libs/insol/input"
+    !       path_racmo     = "/path/to/racmo"  ! antarctica only (RACMO climatology root)
     !       n_years        = 50            ! annual cycles to repeat
     !       swd_source     = "file"        ! "file" | "transmissivity" | "transmissivity_seasonal"
     !       trans_a        = 0.46          ! tau = trans_a + trans_b*z_srf (+ trans_c*tcc)
@@ -99,7 +100,7 @@ program chion_grid
 
     ! --- &ctrl : domain source --------------------------------------------
     character(len=56)  :: domain, grid_name, swd_source
-    character(len=512) :: path_ice_data, path_insol
+    character(len=512) :: path_ice_data, path_insol, path_racmo
     integer  :: n_years
     real(wp) :: trans_a, trans_b, trans_c, H_ice_default
 
@@ -162,6 +163,11 @@ program chion_grid
         call nml_read(path_par,"ctrl","path_ice_data", path_ice_data)
         call nml_read(path_par,"ctrl","path_insol",    path_insol)
         call nml_read(path_par,"ctrl","n_years",       n_years)
+        ! path_racmo: the RACMO climatology root, required only for Antarctica.
+        ! Read conditionally so Greenland/other par files need not carry it.
+        path_racmo = ""
+        if (trim(domain) .eq. "antarctica") &
+            call nml_read(path_par,"ctrl","path_racmo", path_racmo)
         call nml_read(path_par,"ctrl","swd_source",    swd_source)
         call nml_read(path_par,"ctrl","trans_a",       trans_a)
         call nml_read(path_par,"ctrl","trans_b",       trans_b)
@@ -192,7 +198,8 @@ program chion_grid
 
         call chion_domain_load(dom, trim(domain), trim(grid_name), &
                                trim(path_ice_data), trim(path_insol), &
-                               nmon=nmon, nday_year=nday_year)
+                               nmon=nmon, nday_year=nday_year, &
+                               path_racmo=trim(path_racmo))
 
         nx = dom%nx
         ny = dom%ny

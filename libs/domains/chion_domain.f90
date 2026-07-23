@@ -91,10 +91,14 @@ module chion_domain
 contains
 
     subroutine chion_domain_load(dom, domain, grid_name, path_ice_data, &
-                                 path_insol, nmon, nday_year)
+                                 path_insol, nmon, nday_year, path_racmo)
         ! Assemble the standardized forcing for `domain` on `grid_name`, reading
         ! raw data from `path_ice_data` (the ~/models/ice_data root). Orbital
         ! tables for the insolation come from `path_insol` (libs/insol/input).
+        !
+        ! path_racmo is the root of the pre-built RACMO climatology (Antarctica
+        ! only, e.g. ~/data/racmo). Required when domain=="antarctica", ignored
+        ! otherwise -- the Greenland datasets all live under path_ice_data.
 
         implicit none
 
@@ -105,6 +109,7 @@ contains
         character(len=*), intent(IN) :: path_insol
         integer,          intent(IN) :: nmon
         integer,          intent(IN) :: nday_year
+        character(len=*), intent(IN), optional :: path_racmo
 
         dom%domain    = trim(domain)
         dom%grid_name = trim(grid_name)
@@ -116,10 +121,18 @@ contains
             case("greenland")
                 call load_greenland(dom, grid_name, path_ice_data)
 
+            case("antarctica")
+                if (.not. present(path_racmo)) then
+                    write(error_unit,*) "chion_domain_load:: error: domain 'antarctica' "// &
+                                        "requires path_racmo (the RACMO climatology root)."
+                    stop 1
+                end if
+                call load_antarctica(dom, grid_name, path_ice_data, path_racmo)
+
             case DEFAULT
                 write(error_unit,*) "chion_domain_load:: error: unknown domain '"// &
                                     trim(domain)//"'."
-                write(error_unit,*) "  supported: greenland"
+                write(error_unit,*) "  supported: greenland, antarctica"
                 stop 1
 
         end select
@@ -209,6 +222,113 @@ contains
     end subroutine load_greenland
 
     ! ==================================================================
+    ! Antarctica: RACMO2.4/ANT-12 monthly climatology on the target ANT grid,
+    ! with geometry from BedMachine.
+    ! ==================================================================
+
+    subroutine load_antarctica(dom, grid_name, path_ice_data, path_racmo)
+        ! Forcing is the RACMO2.4 climatology already conservatively regridded
+        ! onto the target ANT grid by scripts/build_ant12_climatology.sh (cdo
+        ! remapcon from the native CORDEX ANT-12 rotated-pole grid). The regrid
+        ! is done in preprocessing rather than here because coords cannot yet
+        ! remap from a rotated-pole source -- its conservative map returns zero
+        ! overlaps (fesmc/fesm-utils#8).
+        ! Geometry (mask, surface elevation, lon/lat) comes from BedMachine, on
+        ! the same grid. The CORDEX set carries no snow/rain split and no
+        ! reference SMB, so precip is split by a freezing threshold and the
+        ! *_ref validation fields are left at zero.
+
+        implicit none
+
+        type(chion_domain_class), intent(INOUT) :: dom
+        character(len=*), intent(IN) :: grid_name
+        character(len=*), intent(IN) :: path_ice_data
+        character(len=*), intent(IN) :: path_racmo
+
+        ! Local variables
+        character(len=512) :: file_clim, file_topo
+        integer :: nmon, nx, ny
+        real(wp), allocatable :: mask_cat(:,:)
+        type(grid_class) :: grid_tgt
+
+        ! --- Climatology, already on the target grid ---------------------
+        file_clim = trim(path_racmo)//"/clim/"//trim(grid_name)// &
+                    "_RACMO24P_monclim_1981-2010.nc"
+        call check_file(file_clim)
+
+        nmon = nc_size(file_clim, "time")
+        if (nmon .ne. dom%nmon) then
+            write(error_unit,*) "load_antarctica:: error: climatology has ", nmon, &
+                                " months, expected ", dom%nmon
+            stop 1
+        end if
+
+        ! --- Geometry from BedMachine, defines the target grid -----------
+        file_topo = trim(path_ice_data)//"/Antarctica/"//trim(grid_name)//"/"// &
+                    trim(grid_name)//"_TOPO-BedMachine.nc"
+        call check_file(file_topo)
+
+        nx = nc_size(file_topo, "xc")
+        ny = nc_size(file_topo, "yc")
+
+        if (nc_size(file_clim,"xc") .ne. nx .or. nc_size(file_clim,"yc") .ne. ny) then
+            write(error_unit,*) "load_antarctica:: error: climatology grid (", &
+                nc_size(file_clim,"xc"), "x", nc_size(file_clim,"yc"), &
+                ") does not match BedMachine grid (", nx, "x", ny, ") for "// &
+                trim(grid_name)//". Re-run scripts/build_ant12_climatology.sh."
+            stop 1
+        end if
+
+        dom%nx = nx
+        dom%ny = ny
+
+        call domain_alloc(dom)
+
+        call nc_read(file_topo, "xc",    dom%xc)
+        call nc_read(file_topo, "yc",    dom%yc)
+        call nc_read(file_topo, "z_srf", dom%z_srf)
+
+        ! lon2D/lat2D from the grid definition, not the TOPO file: the ANT-8KM
+        ! BedMachine file ships without them. lat2D feeds the TOA insolation.
+        call chion_domain_grid_def(grid_tgt, grid_name)
+        dom%lon2D = real(grid_tgt%lon, wp)
+        dom%lat2D = real(grid_tgt%lat, wp)
+
+        ! BedMachine mask is categorical (0 ocean, 1 ice-free land, 2 grounded
+        ! ice, 3 floating ice, 4 lake vostok). Reduce it to the Greenland-style
+        ! percentage convention so the driver's mask_threshold works uniformly:
+        ! every ice category (grounded + floating shelves + lake vostok) -> 100.
+        allocate(mask_cat(nx,ny))
+        call nc_read(file_topo, "mask", mask_cat)
+        dom%mask = 0.0_wp
+        where (mask_cat .gt. 1.5_wp) dom%mask = 100.0_wp
+        deallocate(mask_cat)
+
+        ! --- Standardized forcing (already on the target grid) -----------
+        ! Total precip is read into rf first, then split into sf/rf below.
+        call nc_read(file_clim, "t2m", dom%t2m)
+        call nc_read(file_clim, "pr",  dom%rf)
+        call nc_read(file_clim, "swd", dom%swd)
+        call nc_read(file_clim, "tcc", dom%tcc)
+
+        ! --- Snow/rain split by a freezing threshold ---------------------
+        ! CORDEX gives only total precip. Antarctica is almost entirely below
+        ! freezing, so precip defaults to snowfall; the few months/cells above
+        ! 0 C become rainfall. dom%rf currently holds the total precip.
+        dom%sf = 0.0_wp
+        where (dom%t2m .le. T_FREEZE)
+            dom%sf = dom%rf
+            dom%rf = 0.0_wp
+        end where
+
+        ! smb_ref/melt_ref/runoff_ref: no reference SMB in this CORDEX set,
+        ! left at the zero from domain_alloc.
+
+        return
+
+    end subroutine load_antarctica
+
+    ! ==================================================================
     ! Shared: ERA5 conservative regridding
     ! ==================================================================
 
@@ -231,11 +351,9 @@ contains
         ! Local variables
         character(len=512) :: file_era5
         type(grid_class)   :: grid_src, grid_tgt
-        type(map_class)    :: map
-        integer :: nlon, nlat, nmon, m
+        integer :: nlon, nlat, nmon
         real(dp), allocatable :: lon(:), lat(:)
-        real(dp), allocatable :: src(:,:,:), src_m(:,:)
-        real(dp), allocatable :: tgt_m(:,:)
+        real(dp), allocatable :: src(:,:,:)
 
         file_era5 = trim(path_ice_data)//"/ERA5/clim/era5_monthly-single-levels_"// &
                     trim(era5_name)//"_1961-1990.nc"
@@ -260,11 +378,38 @@ contains
 
         call chion_domain_grid_def(grid_tgt, grid_name)
 
-        ! Conservative weights, cached under maps/ (regenerated if absent).
+        call regrid_monthly_con(grid_src, grid_tgt, trim(var_name), src, var_out)
+
+        deallocate(lon, lat, src)
+
+        return
+
+    end subroutine regrid_era5_monthly
+
+    subroutine regrid_monthly_con(grid_src, grid_tgt, var_name, src, var_out)
+        ! Conservatively remap every month of a (src_nx,src_ny,nmon) field from
+        ! grid_src onto grid_tgt, writing (tgt_nx,tgt_ny,nmon). The weight map is
+        ! cached under maps/ (regenerated if absent) keyed by the grid names, so
+        ! each (source,target) pair is built once and reused across variables.
+
+        implicit none
+
+        type(grid_class), intent(INOUT) :: grid_src, grid_tgt
+        character(len=*), intent(IN)    :: var_name
+        real(dp),         intent(IN)    :: src(:,:,:)      ! (src_nx,src_ny,nmon)
+        real(wp),         intent(OUT)   :: var_out(:,:,:)  ! (tgt_nx,tgt_ny,nmon)
+
+        type(map_class) :: map
+        integer :: nmon, m
+        real(dp), allocatable :: src_m(:,:), tgt_m(:,:)
+
+        nmon = size(src,3)
+
         call map_init(map, grid_src, grid_tgt, method="con", gen="coords", &
                       fldr="maps", load=.TRUE.)
 
-        allocate(src_m(nlon,nlat), tgt_m(dom%nx,dom%ny))
+        allocate(src_m(size(src,1),size(src,2)))
+        allocate(tgt_m(size(var_out,1),size(var_out,2)))
         do m = 1, nmon
             src_m = src(:,:,m)
             call map_field(map, trim(var_name), src_m, tgt_m, stat="mean", &
@@ -272,11 +417,11 @@ contains
             var_out(:,:,m) = real(tgt_m, wp)
         end do
 
-        deallocate(lon, lat, src, src_m, tgt_m)
+        deallocate(src_m, tgt_m)
 
         return
 
-    end subroutine regrid_era5_monthly
+    end subroutine regrid_monthly_con
 
     ! ==================================================================
     ! Shared: top-of-atmosphere daily insolation
@@ -347,6 +492,32 @@ contains
                                x0=-720.0_dp, dx=8.0_dp, nx=211, &
                                y0=-3450.0_dp, dy=8.0_dp, ny=361, &
                                lambda=-45.0_dp, phi=70.0_dp)
+
+            ! Antarctic grids: south polar stereographic, central meridian 0,
+            ! standard parallel 71 S (the standard ANT-XXKM / BedMachine grids).
+            ! Used by load_antarctica only to derive lon2D/lat2D (the RACMO
+            ! forcing is pre-regridded), so the ANT-8KM BedMachine file -- which
+            ! ships without lon2D/lat2D -- still gets consistent coordinates.
+            case("ANT-32KM")
+                call grid_init(grid, name="ANT-32KM", mtype="polar_stereographic", &
+                               units="kilometers", lon180=.TRUE., &
+                               x0=-3040.0_dp, dx=32.0_dp, nx=191, &
+                               y0=-3040.0_dp, dy=32.0_dp, ny=191, &
+                               lambda=0.0_dp, phi=-71.0_dp)
+
+            case("ANT-16KM")
+                call grid_init(grid, name="ANT-16KM", mtype="polar_stereographic", &
+                               units="kilometers", lon180=.TRUE., &
+                               x0=-3040.0_dp, dx=16.0_dp, nx=381, &
+                               y0=-3040.0_dp, dy=16.0_dp, ny=381, &
+                               lambda=0.0_dp, phi=-71.0_dp)
+
+            case("ANT-8KM")
+                call grid_init(grid, name="ANT-8KM", mtype="polar_stereographic", &
+                               units="kilometers", lon180=.TRUE., &
+                               x0=-3040.0_dp, dx=8.0_dp, nx=761, &
+                               y0=-3040.0_dp, dy=8.0_dp, ny=761, &
+                               lambda=0.0_dp, phi=-71.0_dp)
 
             case DEFAULT
                 write(error_unit,*) "chion_domain_grid_def:: error: unknown grid '"// &
