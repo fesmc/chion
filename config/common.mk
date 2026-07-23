@@ -10,16 +10,15 @@
 # no PETSc -- the only implicit solve in the model is a tridiagonal conduction
 # system, handled in-tree by the Thomas algorithm.
 
-# Dependency paths (serial build by default).
+# Dependency paths. OpenMP is the DEFAULT build (openmp ?= 1); chion
+# parallelizes over snowpack columns, which are fully independent, so results
+# are identical to serial. Runtime thread count is OMP_NUM_THREADS. Build serial
+# with `make openmp=0`.
 FESMUTILSROOT = fesm-utils
-INC_FESMUTILS = -I${FESMUTILSROOT}/include-serial
-LIB_FESMUTILS = -L${FESMUTILSROOT}/include-serial -lfesmutils
-
-# OpenMP build (make openmp=1): swap the serial fesm-utils build for the
-# OpenMP variant and append the compiler's OpenMP flag (FFLAGS_OPENMP, set in
-# the compiler fragment). chion parallelizes over snowpack columns, which are
-# fully independent, so this is the only parallelism in the package.
-ifeq ($(openmp), 1)
+ifeq ($(openmp), 0)
+    INC_FESMUTILS = -I${FESMUTILSROOT}/include-serial
+    LIB_FESMUTILS = -L${FESMUTILSROOT}/include-serial -lfesmutils
+else
     INC_FESMUTILS = -I${FESMUTILSROOT}/include-omp
     LIB_FESMUTILS = -L${FESMUTILSROOT}/include-omp -lfesmutils
 

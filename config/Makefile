@@ -3,7 +3,7 @@
 
 # Command-line options at make call
 debug        ?= 0
-openmp       ?= 0
+openmp       ?= 1
 precision    ?= sp
 legacy_chion ?= 0
 
@@ -240,7 +240,7 @@ usage:
 	@echo " make tests        : compiles all acceptance tests."
 	@echo " make clean        : cleans object files"
 	@echo ""
-	@echo " Options: debug=1 (bounds/traps), debug=2 (profiling), openmp=1"
+	@echo " Options: debug=1 (bounds/traps), debug=2 (profiling), openmp=0 (serial; omp is default)"
 	@echo ""
 
 clean:
