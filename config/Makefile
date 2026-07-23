@@ -200,6 +200,11 @@ monthly : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_monthly.x is ready."
 
+domain : chion-static $(driver_objs)
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_domain.x $(testdir)/test_domain.f90 \
+			$(driver_objs) -L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_domain.x is ready."
+
 # Driver programs (note: not test_*.x -- these are the runme executables)
 column : chion-static
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/chion_column.x $(testdir)/chion_column.f90 \

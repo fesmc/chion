@@ -31,6 +31,10 @@ output/
 logs/
 tmp/
 
+# Regridding weight caches (coords map_init). Regenerated on the fly; can be
+# large, so never tracked.
+maps/
+
 # runme per-user config
 .runme/config.toml
 

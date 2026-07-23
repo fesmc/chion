@@ -144,6 +144,12 @@ $(objdir)/chion.o: $(srcdir)/chion.f90 \
 $(objdir)/insolation.o: $(libsdir)/insol/insolation.f90
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+# chion_domain assembles standardized forcing from raw ice_data. It sits on
+# libchion.a (chion_defs), fesm-utils' coords/ncio, and the vendored insolation.
+$(objdir)/chion_domain.o: $(libsdir)/domains/chion_domain.f90 \
+						  	$(objdir)/chion_defs.o $(objdir)/insolation.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 ###############################################
 ##
 ## Object lists
@@ -177,4 +183,5 @@ chion_core =    $(objdir)/chion_model.o \
 # Driver-layer objects, linked into drivers that need domain loading and
 # insolation (currently chion_grid.x). Grows with the domain modules (WP: see
 # chion_domain, added alongside the domain loaders).
-driver_objs =   $(objdir)/insolation.o
+driver_objs =   $(objdir)/insolation.o \
+                $(objdir)/chion_domain.o
