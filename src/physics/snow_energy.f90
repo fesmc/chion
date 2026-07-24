@@ -54,8 +54,10 @@ module snow_energy
     ! the sensible and turbulent-latent coefficients of step 2 and nothing
     ! else: the conduction assembly, the melting-point re-solve and the whole
     ! firn column below row 1 are untouched (docs/semix_port_scope.md).
-    use snow_seb_semix, only : semix_exchange_class, semix_snow_depth, &
-                               semix_turbulent_exchange
+    use snow_seb_semix, only : semix_exchange_class, semix_flux_lin_class, &
+                               semix_snow_depth, semix_turbulent_exchange, &
+                               semix_surface_emissivity, semix_longwave_down, &
+                               semix_longwave_linearized
 
     ! Vapor-pressure / turbulent-latent helpers shared with the unlinearized
     ! twin used for bare ice and post-solve vapor mass (WP5, other half).
@@ -230,6 +232,7 @@ contains
 
         type(latent_vapor_flux_lin_class) :: lh_coef
         type(semix_exchange_class)        :: sx
+        type(semix_flux_lin_class)        :: lw_coef
 
         ! === Step 0: early exit ==============================================
         ! energy_flux.jl:343-355. NOTE the threshold is mass(1) <= 0, NOT
@@ -288,13 +291,32 @@ contains
         ! Longwave. The emitted term eps_snow*sigma*T^4 is linearized about Tn
         ! as T^4 ~ 4*Tn^3*T - 3*Tn^4, so +3*sigma*eps_snow*Tn^4 goes to the
         ! constant part and 4*sigma*eps_snow*Tn^3 to the linear part.
-        if (forc%has_q_lw_down) then
+        !
+        ! Under semix the same linearization applies but the DOWNWELLING flux
+        ! is absorbed with the surface emissivity too (ebal num_lw/denom_lw),
+        ! where BESSI absorbs it in full. Always the snow emissivity here:
+        ! snow_energy_flux has already returned on a bare column.
+        !
+        ! The two branches are written out separately rather than factored
+        ! through a shared lw_down: the BESSI else-branch groups its two terms
+        ! inside one multiply by sigma, and refactoring that grouping would
+        ! change the bessi answer in single precision.
+        if (uses_semix_seb) then
+            lw_coef = semix_longwave_linearized(c, &
+                          semix_surface_emissivity(c,.TRUE.), &
+                          semix_longwave_down(c,forc%q_lw_down,forc%has_q_lw_down, &
+                                              forc%air_temperature), &
+                          Tn)
+            lw_const = lw_coef%constant
+            lw_lin   = lw_coef%linear
+        else if (forc%has_q_lw_down) then
             lw_const = forc%q_lw_down + c%sigma_sb*c%eps_snow*3.0_wp*Tn_fourth
         else
             lw_const = c%sigma_sb*(c%eps_air*forc%air_temperature**4 &
                                    + c%eps_snow*3.0_wp*Tn_fourth)
         end if
-        lw_lin = c%sigma_sb*c%eps_snow*4.0_wp*Tn_cube
+
+        if (.not. uses_semix_seb) lw_lin = c%sigma_sb*c%eps_snow*4.0_wp*Tn_cube
 
         ! Sensible heat. A prescribed flux still wins over either scheme.
         if (forc%has_q_sh) then

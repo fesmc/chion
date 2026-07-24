@@ -36,6 +36,7 @@ program test_seb
 
     type(chion_const_class)    :: c
     type(semix_exchange_class) :: x, x_warm
+    type(semix_flux_lin_class) :: lwc
 
     real(wp), parameter :: P0 = DEF_SEA_LEVEL_AIR_PRESSURE
     real(wp), parameter :: T_AIR  = 263.15_wp     ! [K] -10 C
@@ -248,6 +249,51 @@ program test_seb
     x = semix_turbulent_exchange(c,H_DEEP,T_AIR,T_WARM,WIND,P0,0.4_wp,.TRUE.)
     call check("dry air over a warm surface sublimates (cools it)", &
                semix_latent_heat_flux(x) .lt. 0.0_wp, nfail)
+
+    ! === Longwave (rung 3) ===============================================
+    ! ebal num_lw/denom_lw. The one substantive difference from BESSI is that
+    ! the DOWNWELLING flux is absorbed with the surface emissivity.
+    write(*,*)
+    write(*,"(a)") "--- longwave ---"
+
+    call check_close("emissivity over snow = eps_snow", &
+                     semix_surface_emissivity(c,.TRUE.), c%eps_snow, 1.0e-6_wp, nfail)
+    call check_close("emissivity over bare ice = eps_ice", &
+                     semix_surface_emissivity(c,.FALSE.), c%eps_ice, 1.0e-6_wp, nfail)
+
+    call check_close("prescribed LWdn is passed through", &
+                     semix_longwave_down(c,250.0_wp,.TRUE.,T_AIR), 250.0_wp, &
+                     1.0e-6_wp, nfail)
+    call check_close("absent LWdn falls back to eps_air*sigma*Tair^4", &
+                     semix_longwave_down(c,0.0_wp,.FALSE.,T_AIR), &
+                     c%sigma_sb*c%eps_air*T_AIR**4, 1.0e-6_wp, nfail)
+
+    ! Exact net longwave, hand-computed: 0.98*250 - 0.98*5.670373e-8*258.15^4.
+    ! Net longwave is a difference of two ~245 W m-2 terms leaving -1.8, so
+    ! single precision holds about four digits here -- the same cancellation
+    ! the num/denom identities below run into.
+    call check_close("Q_lw = emiss*LWdn - emiss*sigma*Ts^4", &
+                     semix_longwave_flux(c,c%eps_snow,250.0_wp,T_COLD), &
+                     0.98_wp*250.0_wp - 0.98_wp*c%sigma_sb*T_COLD**4, &
+                     1.0e-4_wp, nfail)
+
+    ! BESSI absorbs LWdn in full, so semix always absorbs less while eps < 1.
+    call check("semix absorbs less longwave than bessi at eps < 1", &
+               semix_longwave_flux(c,c%eps_snow,250.0_wp,T_COLD) .lt. &
+               250.0_wp - c%eps_snow*c%sigma_sb*T_COLD**4, nfail)
+    call check_close("at eps = 1 the two coincide", &
+                     semix_longwave_flux(c,1.0_wp,250.0_wp,T_COLD), &
+                     250.0_wp - c%sigma_sb*T_COLD**4, 1.0e-4_wp, nfail)
+
+    ! The linearization must reproduce the exact flux at its own reference
+    ! point -- the same identity the turbulent terms satisfy below.
+    lwc = semix_longwave_linearized(c,c%eps_snow,250.0_wp,T_COLD)
+    call check_close("num_lw - denom_lw*Ts = exact longwave", &
+                     lwc%constant - lwc%linear*T_COLD, &
+                     semix_longwave_flux(c,c%eps_snow,250.0_wp,T_COLD), &
+                     1.0e-3_wp, nfail)
+    call check("denom_lw > 0 (a warmer surface emits more)", &
+               lwc%linear .gt. 0.0_wp, nfail)
 
     ! === The coupling identity ===========================================
     ! smb_ebal.f90:122-123 splits the latent flux into

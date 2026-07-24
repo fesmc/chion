@@ -801,6 +801,7 @@ contains
 
         call nml_read(filename,group,"eps_air", c%eps_air)
         call nml_read(filename,group,"eps_snow",c%eps_snow)
+        call nml_read(filename,group,"eps_ice", c%eps_ice)
         call nml_read(filename,group,"sigma_sb",c%sigma_sb)
 
         call nml_read(filename,group,"T0",             c%T0)

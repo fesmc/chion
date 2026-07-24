@@ -262,9 +262,12 @@ module chion_defs
         real(wp) :: k_sigma_orog       ! [1]  orographic albedo reduction scale (Dang)
         real(wp) :: sigma_orog_crit    ! [m]  orographic roughness scale (Dang)
 
-        ! Radiation
+        ! Radiation. eps_ice is consulted ONLY by seb_scheme = semix, which
+        ! carries SEMIX's snow/ice emissivity pair; the bessi scheme applies
+        ! eps_snow to bare ice as well, as Chion.jl does.
         real(wp) :: eps_air            ! [1] emissivity of air
         real(wp) :: eps_snow           ! [1] emissivity of snow
+        real(wp) :: eps_ice            ! [1] emissivity of bare ice (semix SEB)
         real(wp) :: sigma_sb           ! [W m-2 K-4] Stefan-Boltzmann constant
 
         ! Reference values
@@ -547,6 +550,7 @@ contains
 
         c%eps_air  = 0.80_wp
         c%eps_snow = 0.98_wp
+        c%eps_ice  = 0.98_wp
         c%sigma_sb = 5.670373e-8_wp
 
         c%T0              = 273.15_wp
@@ -596,6 +600,7 @@ contains
         write(*,"(a25,i14)")     "albedo_scheme = ", c%albedo_scheme
         write(*,"(a25,g14.6,a)") "eps_air  = ", c%eps_air,  "  [1]"
         write(*,"(a25,g14.6,a)") "eps_snow = ", c%eps_snow, "  [1]"
+        write(*,"(a25,g14.6,a)") "eps_ice  = ", c%eps_ice,  "  [1]"
         write(*,"(a25,g14.6,a)") "sigma_sb = ", c%sigma_sb, "  [W m-2 K-4]"
         write(*,"(a25,g14.6,a)") "T0       = ", c%T0,       "  [K]"
         write(*,"(a25,g14.6,a)") "seconds_per_day = ", c%seconds_per_day, "  [s]"

@@ -20,8 +20,10 @@ program test_energy
     use chion_defs,   only : wp, wp_acc, chion_const_class, chion_step_forcing_class, &
                              chion_const_init, CHION_SEB_BESSI, CHION_SEB_SEMIX
     use snow_energy
-    use snow_seb_semix, only : semix_exchange_class, semix_snow_depth, &
-                               semix_turbulent_exchange
+    use snow_seb_semix, only : semix_exchange_class, semix_flux_lin_class, &
+                               semix_snow_depth, semix_turbulent_exchange, &
+                               semix_surface_emissivity, semix_longwave_down, &
+                               semix_longwave_linearized
 
     implicit none
 
@@ -909,6 +911,7 @@ contains
         type(chion_step_forcing_class) :: forc
         type(snow_energy_result_class) :: res_b, res_s
         type(semix_exchange_class)     :: sx
+        type(semix_flux_lin_class)     :: lwc
 
         integer,  parameter :: n = 5
         real(wp) :: mass(Ntot), density(Ntot), temperature(Ntot)
@@ -958,16 +961,25 @@ contains
                                       forc%wind_speed,forc%air_pressure, &
                                       forc%relative_humidity,.TRUE.)
 
-        ! Rebuild q_const/q_lin from the pieces: longwave and shortwave are
-        ! the untouched BESSI expressions, the two turbulent terms are SEMIX's.
-        lw_const = c%sigma_sb*(c%eps_air*forc%air_temperature**4 &
-                               + c%eps_snow*3.0_wp*Tn**4)
-        lw_lin   = c%sigma_sb*c%eps_snow*4.0_wp*Tn**3
+        ! Rebuild q_const/q_lin from the pieces. Shortwave is the untouched
+        ! BESSI expression; longwave and both turbulent terms are SEMIX's.
+        lwc = semix_longwave_linearized(c,semix_surface_emissivity(c,.TRUE.), &
+                                        semix_longwave_down(c,forc%q_lw_down, &
+                                                            forc%has_q_lw_down, &
+                                                            forc%air_temperature),Tn)
+        lw_const = lwc%constant
+        lw_lin   = lwc%linear
         sw_abs   = (1.0_wp - 0.75_wp)*forc%shortwave_down
 
         expect_const = forc%air_temperature*sx%f_sh + lw_const + sw_abs &
                        - sx%f_lh*(sx%qsat - sx%dqsatdT*Tn - sx%q_air)
         expect_lin   = sx%f_sh + lw_lin + sx%f_lh*sx%dqsatdT
+
+        ! The longwave the semix branch builds must absorb LESS than BESSI's,
+        ! which takes the downwelling flux at face value.
+        call check("semix LW constant < bessi LW constant", &
+                   lw_const .lt. c%sigma_sb*(c%eps_air*forc%air_temperature**4 &
+                                             + c%eps_snow*3.0_wp*Tn**4), nfail)
 
         ! check_val takes an ABSOLUTE tolerance. q_const is ~1000 W m-2 and
         ! num_lh is itself a difference of ~600 W m-2 terms, so 0.1 W m-2 is
@@ -990,12 +1002,18 @@ contains
                    res_s%surface_flux_linear .ne. res_b%surface_flux_linear, nfail)
 
         ! --- nothing below row 1 moves ----------------------------------
-        ! With both turbulent fluxes prescribed, neither scheme's coefficients
-        ! are consulted, so the whole solve must agree to the last bit.
+        ! With both turbulent fluxes prescribed AND the emissivities equal,
+        ! neither scheme's coefficients are consulted and the longwave terms
+        ! coincide, so the whole solve must agree to the last bit.
+        !
+        ! eps_snow = 1 is what makes the longwave agree: it is the only value
+        ! at which absorbing the downwelling flux with emissivity (semix) and
+        ! absorbing it in full (bessi) are the same operation.
         forc%has_q_sh = .TRUE.
         forc%q_sh     = -12.0_wp
         forc%has_q_lh = .TRUE.
         forc%q_lh     = -3.0_wp
+        c%eps_snow    = 1.0_wp
 
         c%seb_scheme = CHION_SEB_SEMIX
         t_s(1:n)     = temperature(1:n)

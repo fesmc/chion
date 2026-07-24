@@ -28,7 +28,7 @@ program test_surface
 
     type(chion_const_class)        :: c
     type(chion_step_forcing_class) :: forc
-    type(nonshortwave_flux_class)  :: nsw
+    type(nonshortwave_flux_class)  :: nsw, nsw_ice
     type(bare_ice_flux_class)      :: bif
     type(bare_ice_ablation_class)  :: abl
     type(latent_vapor_flux_lin_class) :: lin
@@ -135,7 +135,7 @@ program test_surface
     forc%rainfall_rate   = 0.0_wp
 
     ! Baseline: nothing prescribed, no humidity.
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE,.TRUE.)
 
     call check_close("LW parameterized = sigma*(eps_a*Ta^4 - eps_s*Ts^4)", &
                      nsw%longwave, &
@@ -150,7 +150,7 @@ program test_surface
     ! has_q_lw_down: the downward term is replaced, the upward term is kept.
     forc%has_q_lw_down = .TRUE.
     forc%q_lw_down     = 250.0_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE,.TRUE.)
     call check_close("has_q_lw_down -> q_lw_down - sigma*eps_s*Ts^4", &
                      nsw%longwave, 250.0_wp - c%sigma_sb*c%eps_snow*265.0_wp**4, &
                      1.0e-5_wp, nfail)
@@ -158,14 +158,14 @@ program test_surface
     ! has_q_sh: taken verbatim, no dependence on Ta or Ts at all.
     forc%has_q_sh = .TRUE.
     forc%q_sh     = -17.5_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE,.TRUE.)
     call check_close("has_q_sh -> prescribed value verbatim", &
                      nsw%sensible, -17.5_wp, 1.0e-6_wp, nfail)
 
     ! has_relative_humidity alone activates the internal vapor flux.
     forc%has_relative_humidity = .TRUE.
     forc%relative_humidity     = 0.75_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE,.TRUE.)
     call check_close("has_relative_humidity -> BESSI vapor flux", &
                      nsw%latent, &
                      latent_vapor_flux(265.0_wp,c,268.0_wp,0.75_wp,forc%air_pressure), &
@@ -174,7 +174,7 @@ program test_surface
     ! has_q_lh takes precedence over has_relative_humidity.
     forc%has_q_lh = .TRUE.
     forc%q_lh     = -8.25_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE,.TRUE.)
     call check_close("has_q_lh beats has_relative_humidity", &
                      nsw%latent, -8.25_wp, 1.0e-6_wp, nfail)
     call check_close("resolved_turbulent_latent_heat_flux agrees", &
@@ -183,7 +183,7 @@ program test_surface
 
     ! Rain heat flux is always parameterized; there is no has_* flag for it.
     forc%rainfall_rate = 1.0e-4_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE,.TRUE.)
     call check_close("Q_rain = P_rain*cw*(Ta - T0)", &
                      nsw%rain, 1.0e-4_wp*c%cw*(268.0_wp - c%T0), 1.0e-5_wp, nfail)
 
@@ -207,7 +207,7 @@ program test_surface
 
     sx  = semix_turbulent_exchange(c,H_DEEP,268.0_wp,265.0_wp,5.0_wp, &
                                    forc%air_pressure,0.75_wp,.TRUE.)
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
 
     call check_close("semix SH = f_sh*(Ta - Ts)", nsw%sensible, &
                      semix_sensible_heat_flux(sx,268.0_wp,265.0_wp), 1.0e-5_wp, nfail)
@@ -217,17 +217,40 @@ program test_surface
                      resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_DEEP), &
                      nsw%latent, 1.0e-6_wp, nfail)
 
-    ! The switch is confined to the turbulent terms.
-    call check_close("semix leaves longwave alone", nsw%longwave, &
-                     c%sigma_sb*(c%eps_air*268.0_wp**4 - c%eps_snow*265.0_wp**4), &
+    ! Longwave: semix absorbs the downwelling flux with the surface
+    ! emissivity, BESSI absorbs it in full. Same emitted term either way.
+    call check_close("semix LW = emiss*(LWdn - sigma*Ts^4)", nsw%longwave, &
+                     c%eps_snow*(c%sigma_sb*c%eps_air*268.0_wp**4) &
+                     - c%eps_snow*c%sigma_sb*265.0_wp**4, 1.0e-5_wp, nfail)
+    call check("semix absorbs LESS longwave than bessi", &
+               nsw%longwave .lt. c%sigma_sb*(c%eps_air*268.0_wp**4 &
+                                             - c%eps_snow*265.0_wp**4), nfail)
+
+    ! Snow vs ice emissivity reaches the longwave term (ebal's mask_snow).
+    c%eps_ice = 0.90_wp
+    nsw_ice = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.FALSE.)
+    call check_close("has_snow = F selects eps_ice", nsw_ice%longwave, &
+                     c%eps_ice*(c%sigma_sb*c%eps_air*268.0_wp**4) &
+                     - c%eps_ice*c%sigma_sb*265.0_wp**4, 1.0e-5_wp, nfail)
+    c%eps_ice = 0.98_wp
+
+    ! A prescribed downwelling flux is absorbed with emissivity too.
+    forc%has_q_lw_down = .TRUE.
+    forc%q_lw_down     = 250.0_wp
+    nsw_ice = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
+    call check_close("semix absorbs a prescribed LWdn with emissivity", &
+                     nsw_ice%longwave, &
+                     c%eps_snow*250.0_wp - c%eps_snow*c%sigma_sb*265.0_wp**4, &
                      1.0e-5_wp, nfail)
+    forc%has_q_lw_down = .FALSE.
+
     call check_close("semix leaves the rain flux alone", nsw%rain, 0.0_wp, &
                      1.0e-6_wp, nfail)
 
     ! Snow depth actually reaches the roughness blend: deeper snow is rougher
     ! (z0m_snow > z0m_ice), so it exchanges more strongly.
     f_sh_semix = nsw%sensible
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE,.TRUE.)
     call check("h_snow reaches the roughness blend", &
                nsw%sensible .lt. f_sh_semix, nfail)
 
@@ -236,7 +259,7 @@ program test_surface
     forc%q_sh     = -17.5_wp
     forc%has_q_lh = .TRUE.
     forc%q_lh     = -8.25_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
     call check_close("has_q_sh still beats the semix scheme", nsw%sensible, &
                      -17.5_wp, 1.0e-6_wp, nfail)
     call check_close("has_q_lh still beats the semix scheme", nsw%latent, &
@@ -291,7 +314,7 @@ program test_surface
 
     ! Bare ice is ASSUMED at the melting point: the non-shortwave components
     ! must equal those evaluated at T = T0, not at any other temperature.
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,H_NONE)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,H_NONE,.FALSE.)
     call check_close("bare-ice LW is evaluated at T0", bif%longwave, nsw%longwave, &
                      1.0e-5_wp, nfail)
     call check_close("bare-ice SH is evaluated at T0", bif%sensible, nsw%sensible, &

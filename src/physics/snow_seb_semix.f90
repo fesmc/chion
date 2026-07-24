@@ -67,6 +67,15 @@ module snow_seb_semix
     ! latent_exchange_coefficient).
     real(wp), parameter, public :: SEMIX_EPS_VAPOR = 0.622_wp
 
+    type semix_flux_lin_class
+        ! One flux linearized about a reference temperature, in chion's
+        ! convention  Q(T) = constant - linear*T,  so that the pair maps
+        ! straight onto q_const / q_lin. This is exactly ebal's num/denom for
+        ! that flux (smb_ebal.f90:122-129).
+        real(wp) :: constant           ! [W m-2]      ebal num_*
+        real(wp) :: linear             ! [W m-2 K-1]  ebal denom_*
+    end type semix_flux_lin_class
+
     type semix_exchange_class
         ! Turbulent exchange coefficients at one surface temperature. f_sh and
         ! f_lh are ebal's (smb_ebal.f90:101-110); qsat/dqsatdT are the
@@ -81,6 +90,7 @@ module snow_seb_semix
         real(wp) :: q_air        ! [kg kg-1]      air specific humidity
     end type semix_exchange_class
 
+    public :: semix_flux_lin_class
     public :: semix_exchange_class
     public :: semix_snow_depth
     public :: semix_resistance
@@ -91,6 +101,10 @@ module snow_seb_semix
     public :: semix_turbulent_exchange
     public :: semix_sensible_heat_flux
     public :: semix_latent_heat_flux
+    public :: semix_surface_emissivity
+    public :: semix_longwave_down
+    public :: semix_longwave_linearized
+    public :: semix_longwave_flux
 
 contains
 
@@ -393,6 +407,111 @@ contains
         return
 
     end function semix_turbulent_exchange
+
+    ! =====================================================================
+    ! Longwave
+    !
+    ! ebal num_lw/denom_lw (smb_ebal.f90:128-129). ONE thing distinguishes
+    ! these from the BESSI expressions they replace: the DOWNWELLING flux is
+    ! absorbed with the surface emissivity, emiss*lwdown, rather than in full.
+    ! BESSI takes lwdown at face value and applies eps_snow only to the
+    ! emitted term, which is an absorptivity of 1 against an emissivity of
+    ! 0.98 -- not Kirchhoff-consistent, but it is what Chion.jl does and the
+    ! bessi scheme keeps it.
+    !
+    ! At eps = 0.98 and a typical 250 W m-2 of downwelling longwave the
+    ! difference is about 5 W m-2 LESS energy into the surface, in one
+    ! direction, all year.
+    !
+    ! SEMIX also carries separate snow and ice emissivities (both 0.99 in
+    ! CLIMBER-X). chion reuses its existing eps_snow and adds eps_ice
+    ! alongside it, both defaulting to chion's 0.98; setting the pair to 0.99
+    ! reproduces SEMIX exactly.
+    ! =====================================================================
+
+    pure function semix_surface_emissivity(c,has_snow) result(emiss)
+        ! ebal's mask_snow branch (smb_ebal.f90:88-95).
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+        logical,                 intent(IN) :: has_snow
+        real(wp) :: emiss                                     ! [1]
+
+        if (has_snow) then
+            emiss = c%eps_snow
+        else
+            emiss = c%eps_ice
+        end if
+
+        return
+
+    end function semix_surface_emissivity
+
+    pure function semix_longwave_down(c,forc_q_lw_down,has_q_lw_down,t2m) result(lw_down)
+        ! Resolve the downwelling longwave the same way both schemes do:
+        ! prescribed if the host supplies it, otherwise chion's grey-air
+        ! parameterization eps_air*sigma*T_air^4 (energy_flux.jl:374).
+        !
+        ! SEMIX always receives lwdown from its atmosphere and has no fallback;
+        ! the fallback is chion's, kept so the SEMIX scheme still runs in
+        ! minimal-input mode.
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+        real(wp),                intent(IN) :: forc_q_lw_down   ! [W m-2]
+        logical,                 intent(IN) :: has_q_lw_down
+        real(wp),                intent(IN) :: t2m              ! [K]
+        real(wp) :: lw_down                                     ! [W m-2]
+
+        if (has_q_lw_down) then
+            lw_down = forc_q_lw_down
+        else
+            lw_down = c%sigma_sb*c%eps_air*t2m**4
+        end if
+
+        return
+
+    end function semix_longwave_down
+
+    pure function semix_longwave_linearized(c,emiss,lw_down,t_ref) result(coef)
+        ! num_lw / denom_lw, linearized about t_ref, in chion's convention
+        !     Q_lw(T) = constant - linear*T
+        ! so the two map straight onto q_const / q_lin.
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+        real(wp),                intent(IN) :: emiss     ! [1]
+        real(wp),                intent(IN) :: lw_down   ! [W m-2]
+        real(wp),                intent(IN) :: t_ref     ! [K] linearization point
+        type(semix_flux_lin_class) :: coef
+
+        coef%constant = emiss*lw_down + 3.0_wp*emiss*c%sigma_sb*t_ref**4
+        coef%linear   = 4.0_wp*emiss*c%sigma_sb*t_ref**3
+
+        return
+
+    end function semix_longwave_linearized
+
+    pure function semix_longwave_flux(c,emiss,lw_down,t_surface) result(q_lw)
+        ! EXACT net longwave at a known surface temperature, positive into the
+        ! surface. Reproduces semix_longwave_linearized at t_ref = t_surface.
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+        real(wp),                intent(IN) :: emiss        ! [1]
+        real(wp),                intent(IN) :: lw_down      ! [W m-2]
+        real(wp),                intent(IN) :: t_surface    ! [K]
+        real(wp) :: q_lw                                    ! [W m-2]
+
+        q_lw = emiss*lw_down - emiss*c%sigma_sb*t_surface**4
+
+        return
+
+    end function semix_longwave_flux
 
     ! =====================================================================
     ! Fluxes, in chion's sign convention

@@ -22,7 +22,7 @@ bulk melt-parameterization family (no energy balance), unchanged.
 | axis | flag | values | status |
 |---|---|---|---|
 | column structure | `Ntot` *(exists)* | `1` (single layer) … `N` (firn column) | ✅ works today |
-| surface energy balance | `seb_scheme` *(new)* | `bessi` \| `semix` | rungs 2–3 |
+| surface energy balance | `seb_scheme` *(new)* | `bessi` \| `semix` | ✅ rungs 2–3 done |
 | albedo | `albedo_scheme` *(extend enum)* | `constant` \| `dynamic` \| `prescribed` \| `semix` | rung 1 (dust) |
 | net shortwave | `has_q_sw_net` *(exists)* + internal spectral | prescribed **or** chion-owns | both supported |
 | background ice albedo | `has_prescribed_ice_albedo` *(new, optional)* | chion's own **or** passed | rung 1 |
@@ -31,8 +31,8 @@ Every SEMIX-ward permutation is then a flag combination:
 
 | column × SEB | `bessi` SEB | `semix` SEB |
 |---|---|---|
-| **N-layer** (`Ntot=N`) | today ✅ | rungs 2–3 |
-| **1-layer** (`Ntot=1`) | today ✅ (2.1× faster, R² 0.86) | rungs 2–3, free at `Ntot=1` |
+| **N-layer** (`Ntot=N`) | today ✅ | ✅ |
+| **1-layer** (`Ntot=1`) | today ✅ (2.1× faster, R² 0.86) | ✅ |
 
 ### The 1-layer column is already here (`Ntot=1`)
 
@@ -250,6 +250,71 @@ either albedo scheme.
 feasible; GRL-16KM skill vs the `bessi` SEB.
 
 **Effort: M.**
+
+### Rung 3 result (done)
+
+Rung 3 turned out to be **one substantive change**, not four. Taking the
+`ebal` flux set term by term:
+
+| `ebal` term | status under coupling α |
+|---|---|
+| `num_sw` | already identical — chion's `sw_abs` is the same quantity |
+| `num_sh`/`denom_sh` | landed in rung 2 |
+| `num_lh`/`denom_lh` | landed in rung 2 |
+| `num_g`/`denom_g` | **no analog** — chion's row-1 conduction coupling is the ground flux |
+| `num_lw`/`denom_lw` | **the actual rung-3 work** |
+| `update_tskin` | **nothing to port** — see below |
+
+**Longwave.** SEMIX absorbs the downwelling flux with the surface emissivity,
+`emiss·lwdown`; BESSI takes it at face value and applies `eps_snow` only to the
+emitted term — an absorptivity of 1 against an emissivity of 0.98, which is not
+Kirchhoff-consistent. That asymmetry is the whole of rung 3, and it is worth
+about **5 W m⁻² less energy into the surface**, in one direction, all year.
+
+SEMIX also carries separate snow and ice emissivities. chion reuses `eps_snow`
+and adds `eps_ice`, both defaulting to chion's 0.98; CLIMBER-X uses 0.99 for
+both. The *value* barely matters — raising it increases absorption and emission
+together — but the asymmetry does:
+
+| config (`Ntot=1`, all ice) | bias | RMSE | R² | melt | margin bias |
+|---|---|---|---|---|---|
+| `bessi` | −2.3 | 197 | 0.86 | 204 | +57 |
+| `semix`, eps = 0.98 | +20.0 | 211 | 0.84 | 187 | +189 |
+| `semix`, eps = 0.99 | +21.5 | 212 | 0.84 | 186 | +196 |
+
+**`update_tskin` has no chion analog, and that is a structural consequence of
+coupling α, not an omission.** SEMIX solves its massless skin node *before* the
+subsurface step, so once `smb_temp` has updated `t_prof` the skin temperature is
+stale and must be re-diagnosed against the new ground flux with `flx_melt`
+removed. chion has no separate skin node: `t_srf` is `temperature(1)`, which
+comes out of the *same* implicit solve as the conduction, simultaneously — there
+is nothing to go stale. The melting-point re-solve
+(`snow_energy.f90:400-454`) already plays the role of `update_tskin`'s
+`- flx_melt` term, dropping the surface-flux feedback from row 1 and pinning it
+at T0. Confirmed, not ported.
+
+### Cumulative rungs 2+3
+
+GRL-16KM, 50 yr, surface SMB vs MAR:
+
+| config | bias | RMSE | R² | melt |
+|---|---|---|---|---|
+| `bessi`, `Ntot=1` | −2.3 | 197 | 0.86 | 204 |
+| `semix`, `Ntot=1` | +20.0 | 211 | 0.84 | 187 |
+| `bessi`, `Ntot=15` | +18.3 | 214 | 0.84 | 203 |
+| `semix`, `Ntot=15` | +42.9 | 243 | 0.79 | 186 |
+
+Both rungs push the same way — less energy into the surface, less melt, more
+positive SMB bias — and both concentrate at the margin (`z<800`, `Ntot=1`: bias
++57 → +189, R² 0.62 → 0.51). The interior is untouched at every rung.
+
+This is a *faithful-port* checkpoint and should not be read as SEMIX performing
+worse than BESSI. The two schemes are not being compared on equal terms:
+`D_sh = 10` and `eps_snow = 0.98` are tuned BESSI values, the roughness and
+surface-layer parameters are CLIMBER-X's untuned defaults, the latent flux is
+zero without `rh_default`, and SEMIX in CLIMBER-X runs with its own spectral
+albedo rather than chion's `dynamic` one. A like-for-like comparison needs
+`albedo_scheme=semix` and a real humidity field.
 
 ## Rung 4 — SEMIX diurnal / statistical melt *(optional)*
 

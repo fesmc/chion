@@ -51,7 +51,9 @@ module snow_surface_fluxes
     ! the energy solve uses r_a (docs/semix_port_scope.md).
     use snow_seb_semix, only : semix_exchange_class, semix_snow_depth, &
                                semix_turbulent_exchange, &
-                               semix_sensible_heat_flux, semix_latent_heat_flux
+                               semix_sensible_heat_flux, semix_latent_heat_flux, &
+                               semix_surface_emissivity, semix_longwave_down, &
+                               semix_longwave_flux
 
     ! snow_layers supplies the layer removal/merge used by
     ! apply_snow_surface_vapor_mass_flux when sublimation empties the surface
@@ -138,7 +140,7 @@ contains
     ! =====================================================================
 
     pure function resolved_nonshortwave_surface_flux_components(c,forc,surface_temperature, &
-                                                               h_snow) result(flx)
+                                                               h_snow,has_snow) result(flx)
         ! Chion.jl/src/processes/surface_fluxes.jl:20-45.
         !
         ! Every has_* flag selects a PRESCRIBED value over the internal
@@ -147,10 +149,13 @@ contains
         !   has_relative_humidity    -> BESSI vapor flux
         !   otherwise                -> zero
         !
-        ! Under seb_scheme = semix the sensible and latent terms come from the
-        ! aerodynamic scheme instead, which needs the snow depth for its
-        ! roughness blend -- hence the extra argument. It is zero for bare ice.
-        ! The BESSI scheme ignores it entirely.
+        ! Under seb_scheme = semix the longwave, sensible and latent terms all
+        ! come from the SEMIX scheme instead. That needs two things BESSI does
+        ! not: the snow depth, for the roughness blend, and whether the surface
+        ! is snow or bare ice, for the emissivity (ebal's mask_snow). Both are
+        ! arguments rather than inferred from each other -- a snow column can be
+        ! arbitrarily thin without ceasing to be snow. The BESSI scheme ignores
+        ! both.
         !
         ! Julia carries a dt_seconds argument here purely to spell zero() in
         ! the right type; it is never used numerically. Dropped (cleanup:
@@ -162,6 +167,7 @@ contains
         type(chion_step_forcing_class), intent(IN) :: forc
         real(wp),                       intent(IN) :: surface_temperature  ! [K]
         real(wp),                       intent(IN) :: h_snow               ! [m]
+        logical,                        intent(IN) :: has_snow
         type(nonshortwave_flux_class) :: flx
 
         ! Local variables
@@ -177,7 +183,17 @@ contains
                                           forc%has_relative_humidity)
         end if
 
-        if (forc%has_q_lw_down) then
+        ! Longwave. semix absorbs the downwelling flux with the surface
+        ! emissivity (snow or ice) where BESSI takes it at face value. The
+        ! BESSI branches keep their original grouping so their answer is
+        ! unchanged to the last bit.
+        if (uses_semix_seb) then
+            flx%longwave = semix_longwave_flux(c, &
+                               semix_surface_emissivity(c,has_snow), &
+                               semix_longwave_down(c,forc%q_lw_down,forc%has_q_lw_down, &
+                                                   forc%air_temperature), &
+                               surface_temperature)
+        else if (forc%has_q_lw_down) then
             flx%longwave = forc%q_lw_down &
                            - c%sigma_sb*c%eps_snow*surface_temperature**4
         else
@@ -242,9 +258,10 @@ contains
                                      *(1.0_wp - min(max(surface_albedo,0.0_wp),1.0_wp))
         end if
 
-        ! h_snow = 0: this branch runs only when the column has no surface
-        ! snow, so the SEMIX roughness blend collapses to the bare-ice value.
-        nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,0.0_wp)
+        ! h_snow = 0 and has_snow = .FALSE.: this branch runs only when the
+        ! column has no surface snow, so the SEMIX roughness blend collapses to
+        ! the bare-ice value and the emissivity is eps_ice.
+        nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,0.0_wp,.FALSE.)
 
         flx%longwave = nsw%longwave
         flx%sensible = nsw%sensible
