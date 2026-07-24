@@ -40,16 +40,24 @@ $(objdir)/snow_layers.o: $(physdir)/snow_layers.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+# snow_vapor is the lowest layer of the surface physics: the vapour-pressure
+# parameterizations, shared by snow_surface_fluxes and snow_energy. Extracted
+# so that a module needing them can also sit BELOW snow_surface_fluxes
+# without a cycle.
+$(objdir)/snow_vapor.o: $(physdir)/snow_vapor.f90 \
+						  	$(objdir)/chion_defs.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 # snow_surface_fluxes uses snow_layers for the depleted-surface removal and
 # surface-merge loops inside apply_snow_surface_vapor_mass_flux.
 $(objdir)/snow_surface_fluxes.o: $(physdir)/snow_surface_fluxes.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_layers.o
+						  	$(objdir)/snow_layers.o $(objdir)/snow_vapor.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/snow_energy.o: $(physdir)/snow_energy.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_surface_fluxes.o
+						  	$(objdir)/snow_vapor.o $(objdir)/snow_surface_fluxes.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/snow_percolation.o: $(physdir)/snow_percolation.f90 \
@@ -166,6 +174,7 @@ chion_base =    $(objdir)/chion_defs.o \
 
 chion_physics = $(objdir)/snow_column_utils.o \
 				$(objdir)/snow_layers.o \
+				$(objdir)/snow_vapor.o \
 				$(objdir)/snow_surface_fluxes.o \
 				$(objdir)/snow_energy.o \
 				$(objdir)/snow_percolation.o \

@@ -20,6 +20,7 @@ program test_surface
                                     chion_step_forcing_class, chion_const_init, &
                                     CHION_ALBEDO_PRESCRIBED, DEF_SEA_LEVEL_AIR_PRESSURE
     use snow_surface_fluxes
+    use snow_vapor
 
     implicit none
 

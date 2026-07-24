@@ -51,8 +51,8 @@ module snow_energy
 
     ! Vapor-pressure / turbulent-latent helpers shared with the unlinearized
     ! twin used for bare ice and post-solve vapor mass (WP5, other half).
-    use snow_surface_fluxes, only : safe_positive, latent_vapor_flux_linearized, &
-                                    latent_vapor_flux_lin_class
+    use snow_vapor, only : safe_positive, latent_vapor_flux_linearized, &
+                           latent_vapor_flux_lin_class
 
     implicit none
 
