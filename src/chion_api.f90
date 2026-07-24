@@ -69,6 +69,7 @@ module chion_api
                            chion_grid_set_active, &
                            chion_albedo_scheme_flag, &
                            chion_semix_snow_albedo_flag, &
+                           chion_seb_scheme_flag, chion_semix_qsat_flag, &
                            chion_fresh_snow_density_scheme_flag, &
                            chion_densify_scheme_flag, &
                            chion_check_enum, chion_check_file
@@ -107,6 +108,8 @@ module chion_api
     ! functions accept them (docs/porting_notes.md D4).
     character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|bessi|legacy"
     character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "ww|dang|warren|warren_wiscombe"
+    character(len=*), parameter :: CHION_SEB_CHOICES     = "bessi|semix"
+    character(len=*), parameter :: CHION_SEMIX_QSAT_CHOICES = "semix|bessi|climberx|chion"
     character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized|bessi|htessel"
     character(len=*), parameter :: CHION_DENSIFY_CHOICES = "bessi|htessel"
     character(len=*), parameter :: CHION_PDD_CHOICES     = "simple|pism"
@@ -733,6 +736,8 @@ contains
         ! Local variables
         character(len=56) :: albedo_scheme
         character(len=56) :: semix_snow_albedo
+        character(len=56) :: seb_scheme
+        character(len=56) :: semix_qsat
         character(len=56) :: fresh_snow_density_scheme
         character(len=56) :: low_density_densification
 
@@ -756,6 +761,18 @@ contains
         call nml_read(filename,group,"latent_heat_flux_ratio",c%latent_heat_flux_ratio)
 
         call nml_read(filename,group,"D_sh",   c%D_sh)
+
+        call nml_read(filename,group,"seb_scheme",seb_scheme)
+        call nml_read(filename,group,"z0m_snow",  c%z0m_snow)
+        call nml_read(filename,group,"z0m_ice",   c%z0m_ice)
+        call nml_read(filename,group,"zm_to_zh",  c%zm_to_zh)
+        call nml_read(filename,group,"z_sfl",     c%z_sfl)
+        call nml_read(filename,group,"karman",    c%karman)
+        call nml_read(filename,group,"grav",      c%grav)
+        call nml_read(filename,group,"R_dry",     c%R_dry)
+        call nml_read(filename,group,"l_neutral", c%l_neutral)
+        call nml_read(filename,group,"l_dew",     c%l_dew)
+        call nml_read(filename,group,"semix_qsat",semix_qsat)
 
         call nml_read(filename,group,"alpha_dry",     c%alpha_dry)
         call nml_read(filename,group,"alpha_wet",     c%alpha_wet)
@@ -795,11 +812,15 @@ contains
         ! full allowed set rather than only the offending value.
         call chion_check_enum(group,"albedo_scheme",            albedo_scheme,            CHION_ALBEDO_CHOICES)
         call chion_check_enum(group,"semix_snow_albedo",        semix_snow_albedo,        CHION_SEMIX_SNOW_ALB_CHOICES)
+        call chion_check_enum(group,"seb_scheme",               seb_scheme,               CHION_SEB_CHOICES)
+        call chion_check_enum(group,"semix_qsat",               semix_qsat,               CHION_SEMIX_QSAT_CHOICES)
         call chion_check_enum(group,"fresh_snow_density_scheme",fresh_snow_density_scheme,CHION_RHOS_CHOICES)
         call chion_check_enum(group,"low_density_densification",low_density_densification,CHION_DENSIFY_CHOICES)
 
         c%albedo_scheme             = chion_albedo_scheme_flag(albedo_scheme)
         c%semix_snow_albedo         = chion_semix_snow_albedo_flag(semix_snow_albedo)
+        c%seb_scheme                = chion_seb_scheme_flag(seb_scheme)
+        c%semix_qsat                = chion_semix_qsat_flag(semix_qsat)
         c%fresh_snow_density_scheme = chion_fresh_snow_density_scheme_flag(fresh_snow_density_scheme)
         c%low_density_densification = chion_densify_scheme_flag(low_density_densification)
 

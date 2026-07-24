@@ -165,6 +165,11 @@ surface : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_surface.x is ready."
 
+seb : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_seb.x $(testdir)/test_seb.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_seb.x is ready."
+
 pdd : chion-static
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_pdd.x $(testdir)/test_pdd.f90 \
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
@@ -222,7 +227,7 @@ itm : chion-static
 		@echo "    test_itm.x is ready."
 
 # All acceptance tests
-tests : defs utils layers energy water surface wp7 bessi pdd diagnostics itm api io monthly
+tests : defs utils layers energy water surface seb wp7 bessi pdd diagnostics itm api io monthly
 
 # Driver executables
 drivers : column grid

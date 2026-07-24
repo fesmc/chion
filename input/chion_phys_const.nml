@@ -49,6 +49,20 @@
     ! ## Turbulent exchange ##
     D_sh                      = 10.0        ! [W m-2 K-1] Sensible heat exchange coefficient
 
+    ! ## Surface energy balance (CLIMBER-X SEMIX aerodynamic scheme) ##
+    ! seb_scheme = "bessi" uses D_sh above and ignores everything below it.
+    seb_scheme                = "bessi"     ! "bessi" | "semix"
+    z0m_snow                  = 0.0024      ! [m]  Momentum roughness length, snow
+    z0m_ice                   = 0.002       ! [m]  Momentum roughness length, ice
+    zm_to_zh                  = 0.13533528  ! [1]  Heat/momentum roughness ratio, exp(-2)
+    z_sfl                     = 100.0       ! [m]  Surface layer height
+    karman                    = 0.4         ! [1]  von Karman constant
+    grav                      = 9.81        ! [m s-2] Gravitational acceleration
+    R_dry                     = 287.058     ! [J kg-1 K-1] Gas constant of dry air
+    l_neutral                 = .FALSE.     ! [1]  Force neutral stratification?
+    l_dew                     = .TRUE.      ! [1]  Allow dew/frost deposition?
+    semix_qsat                = "semix"     ! "semix" | "bessi" (aliases: "climberx", "chion")
+
     ! ## Albedo ##
     alpha_dry                 = 0.81        ! [1] Dry snow albedo (upper bound)
     alpha_wet                 = 0.70        ! [1] Wet snow albedo (lower bound)

@@ -41,9 +41,8 @@ $(objdir)/snow_layers.o: $(physdir)/snow_layers.f90 \
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 # snow_vapor is the lowest layer of the surface physics: the vapour-pressure
-# parameterizations, shared by snow_surface_fluxes and snow_energy. Extracted
-# so that a module needing them can also sit BELOW snow_surface_fluxes
-# without a cycle.
+# parameterizations, shared by snow_surface_fluxes, snow_energy and
+# snow_seb_semix.
 $(objdir)/snow_vapor.o: $(physdir)/snow_vapor.f90 \
 						  	$(objdir)/chion_defs.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
@@ -55,9 +54,16 @@ $(objdir)/snow_surface_fluxes.o: $(physdir)/snow_surface_fluxes.f90 \
 						  	$(objdir)/snow_layers.o $(objdir)/snow_vapor.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+# snow_seb_semix reuses snow_vapor's ice vapour-pressure helpers for the
+# semix_qsat = "bessi" variant.
+$(objdir)/snow_seb_semix.o: $(physdir)/snow_seb_semix.f90 \
+						  	$(objdir)/chion_defs.o $(objdir)/snow_vapor.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 $(objdir)/snow_energy.o: $(physdir)/snow_energy.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_vapor.o $(objdir)/snow_surface_fluxes.o
+						  	$(objdir)/snow_vapor.o $(objdir)/snow_surface_fluxes.o \
+						  	$(objdir)/snow_seb_semix.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/snow_percolation.o: $(physdir)/snow_percolation.f90 \
@@ -175,6 +181,7 @@ chion_base =    $(objdir)/chion_defs.o \
 chion_physics = $(objdir)/snow_column_utils.o \
 				$(objdir)/snow_layers.o \
 				$(objdir)/snow_vapor.o \
+				$(objdir)/snow_seb_semix.o \
 				$(objdir)/snow_surface_fluxes.o \
 				$(objdir)/snow_energy.o \
 				$(objdir)/snow_percolation.o \

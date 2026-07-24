@@ -4,11 +4,10 @@ module snow_vapor
     !
     ! Port of Chion.jl/src/processes/energy_flux.jl:40-95. These live in their
     ! own module because they are the lowest layer of the surface physics:
-    ! snow_surface_fluxes (exact fluxes at a known temperature) and snow_energy
-    ! (the linearized surface row) both sit on top of them. Keeping them here
-    ! rather than in snow_surface_fluxes lets a further surface scheme use them
-    ! while compiling BELOW snow_surface_fluxes, which is what an alternative
-    ! surface energy balance needs in order to be dispatched from inside it.
+    ! snow_surface_fluxes (exact fluxes at a known temperature), snow_energy
+    ! (the linearized surface row) and snow_seb_semix (the SEMIX aerodynamic
+    ! scheme) all sit on top of them, and snow_seb_semix must compile BELOW
+    ! snow_surface_fluxes so the latter can dispatch on seb_scheme.
     !
     ! All coefficients here are magic numbers carried over verbatim from
     ! Chion.jl; none of them live in the constants struct. See docs/PLAN.md

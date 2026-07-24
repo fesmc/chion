@@ -40,8 +40,8 @@ module snow_surface_fluxes
     use snow_column_utils, only : surface_has_snow
 
     ! Vapour-pressure parameterizations and the BESSI latent flux built from
-    ! them. Extracted to snow_vapor so that an alternative surface scheme can
-    ! share them without a circular dependency on this module.
+    ! them. Extracted to snow_vapor so that snow_seb_semix can share them
+    ! without a circular dependency on this module.
     use snow_vapor, only : latent_vapor_flux
 
     ! snow_layers supplies the layer removal/merge used by

@@ -106,6 +106,19 @@ module chion_defs
     integer, parameter, public :: SEMIX_SNOW_ALBEDO_WW   = 1
     integer, parameter, public :: SEMIX_SNOW_ALBEDO_DANG = 2
 
+    ! Surface energy balance family. "bessi" is the bulk-coefficient scheme
+    ! chion was ported with; "semix" is CLIMBER-X SEMIX's aerodynamic scheme.
+    ! Orthogonal to albedo_scheme and to Ntot -- see docs/semix_port_scope.md.
+    integer, parameter, public :: CHION_SEB_BESSI = 1
+    integer, parameter, public :: CHION_SEB_SEMIX = 2
+
+    ! Which saturation-specific-humidity parameterization the SEMIX surface
+    ! scheme uses for the turbulent latent flux. SEMIX is CLIMBER-X's own
+    ! q_sat_i/dqsat_dT_i; BESSI routes chion's ice saturation vapour pressure
+    ! through the same 0.622/p conversion.
+    integer, parameter, public :: SEMIX_QSAT_SEMIX = 1
+    integer, parameter, public :: SEMIX_QSAT_BESSI = 2
+
     integer, parameter, public :: CHION_DENSIFY_BESSI   = 1
     integer, parameter, public :: CHION_DENSIFY_HTESSEL = 2
 
@@ -201,6 +214,25 @@ module chion_defs
 
         ! Turbulent exchange
         real(wp) :: D_sh               ! [W m-2 K-1] sensible heat exchange coefficient
+
+        ! Surface energy balance scheme, and the aerodynamic exchange it needs
+        ! (CHION_SEB_SEMIX only). Roughness lengths and the surface-layer height
+        ! are CLIMBER-X smb_par / constants values; karman, grav and R_dry are
+        ! the universal constants SEMIX pulls from its constants module. The
+        ! heat capacity of air is chion's existing cp_air (1003 vs SEMIX's
+        ! 1000 J kg-1 K-1, 0.3% on f_sh) rather than a second constant for the
+        ! same quantity.
+        integer  :: seb_scheme         ! CHION_SEB_*
+        real(wp) :: z0m_snow           ! [m] momentum roughness length, snow
+        real(wp) :: z0m_ice            ! [m] momentum roughness length, ice
+        real(wp) :: zm_to_zh           ! [1] heat/momentum roughness ratio
+        real(wp) :: z_sfl              ! [m] surface layer height
+        real(wp) :: karman             ! [1] von Karman constant
+        real(wp) :: grav               ! [m s-2] gravitational acceleration
+        real(wp) :: R_dry              ! [J kg-1 K-1] gas constant of dry air
+        logical  :: l_neutral          ! [1] force neutral stratification
+        logical  :: l_dew              ! [1] allow dew/frost deposition
+        integer  :: semix_qsat         ! SEMIX_QSAT_*
 
         ! Albedo
         real(wp) :: alpha_dry          ! [1] dry snow albedo (upper bound)
@@ -433,6 +465,8 @@ module chion_defs
 
     public :: chion_albedo_scheme_flag
     public :: chion_semix_snow_albedo_flag
+    public :: chion_seb_scheme_flag
+    public :: chion_semix_qsat_flag
     public :: chion_fresh_snow_density_scheme_flag
     public :: chion_densify_scheme_flag
 
@@ -470,6 +504,20 @@ contains
         c%latent_heat_flux_ratio = 1.0_wp
 
         c%D_sh    = 10.0_wp
+
+        ! SEMIX aerodynamic exchange defaults (CLIMBER-X smb_par.nml /
+        ! smb_params.f90 / constants.f90).
+        c%seb_scheme  = CHION_SEB_BESSI
+        c%z0m_snow    = 0.0024_wp
+        c%z0m_ice     = 0.002_wp
+        c%zm_to_zh    = exp(-2.0_wp)
+        c%z_sfl       = 100.0_wp
+        c%karman      = 0.4_wp
+        c%grav        = 9.81_wp
+        c%R_dry       = 287.058_wp
+        c%l_neutral   = .FALSE.
+        c%l_dew       = .TRUE.
+        c%semix_qsat  = SEMIX_QSAT_SEMIX
 
         c%alpha_dry      = 0.81_wp
         c%alpha_wet      = 0.70_wp
@@ -533,6 +581,14 @@ contains
         write(*,"(a25,g14.6,a)") "cp_air  = ", c%cp_air,  "  [J kg-1 K-1]"
         write(*,"(a25,g14.6,a)") "latent_heat_flux_ratio = ", c%latent_heat_flux_ratio, "  [1]"
         write(*,"(a25,g14.6,a)") "D_sh    = ", c%D_sh,    "  [W m-2 K-1]"
+        write(*,"(a25,i14)")     "seb_scheme = ", c%seb_scheme
+        write(*,"(a25,g14.6,a)") "z0m_snow = ", c%z0m_snow, "  [m]"
+        write(*,"(a25,g14.6,a)") "z0m_ice  = ", c%z0m_ice,  "  [m]"
+        write(*,"(a25,g14.6,a)") "zm_to_zh = ", c%zm_to_zh, "  [1]"
+        write(*,"(a25,g14.6,a)") "z_sfl    = ", c%z_sfl,    "  [m]"
+        write(*,"(a25,l14)")     "l_neutral = ", c%l_neutral
+        write(*,"(a25,l14)")     "l_dew     = ", c%l_dew
+        write(*,"(a25,i14)")     "semix_qsat = ", c%semix_qsat
         write(*,"(a25,g14.6,a)") "alpha_dry = ", c%alpha_dry, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_wet = ", c%alpha_wet, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_ice = ", c%alpha_ice, "  [1]"
@@ -860,6 +916,55 @@ contains
         return
 
     end function chion_semix_snow_albedo_flag
+
+    function chion_seb_scheme_flag(name) result(flag)
+        ! Map a namelist string onto a surface-energy-balance scheme flag.
+
+        implicit none
+
+        character(len=*), intent(IN) :: name
+        integer :: flag
+
+        select case(trim(adjustl(name)))
+            case("bessi")
+                flag = CHION_SEB_BESSI
+            case("semix")
+                flag = CHION_SEB_SEMIX
+            case DEFAULT
+                write(io_unit_err,*) "chion_seb_scheme_flag:: Error: seb scheme not recognized."
+                write(io_unit_err,*) "seb_scheme should be one of: ['bessi','semix']"
+                write(io_unit_err,*) "seb_scheme = ", trim(name)
+                stop "Program stopped."
+        end select
+
+        return
+
+    end function chion_seb_scheme_flag
+
+    function chion_semix_qsat_flag(name) result(flag)
+        ! Map a namelist string onto a saturation-humidity parameterization.
+
+        implicit none
+
+        character(len=*), intent(IN) :: name
+        integer :: flag
+
+        select case(trim(adjustl(name)))
+            case("semix","climberx")
+                flag = SEMIX_QSAT_SEMIX
+            case("bessi","chion")
+                flag = SEMIX_QSAT_BESSI
+            case DEFAULT
+                write(io_unit_err,*) "chion_semix_qsat_flag:: Error: scheme not recognized."
+                write(io_unit_err,*) "semix_qsat should be one of: ['semix','bessi'] &
+                                     &(aliases: 'climberx' -> 'semix', 'chion' -> 'bessi')"
+                write(io_unit_err,*) "semix_qsat = ", trim(name)
+                stop "Program stopped."
+        end select
+
+        return
+
+    end function chion_semix_qsat_flag
 
     function chion_albedo_scheme_flag(name) result(flag)
         ! Map a namelist string onto an albedo scheme flag.
