@@ -20,12 +20,14 @@ module snow_albedo_semix
     ! instead be applied to the spectral fluxes directly; at daily steps the
     ! broadband collapse is a faithful approximation. See docs/semix_port_scope.md.
     !
-    ! SCOPE (this commit): clean snow only -- fresh grain, no dust. Grain aging
-    ! and the dust-in-snow darkening are added in the following commits; the
-    ! band formula below already carries the aging (f_age) and dust terms so
-    ! those commits only supply the grain-size and dust-concentration state.
+    ! Two band parameterizations are available, selected by
+    ! c%semix_snow_albedo: Warren & Wiscombe 1980 (the CLIMBER-2 form) and
+    ! Dang et al. 2015, which is what CLIMBER-X itself defaults to. Both take
+    ! the diagnosed grain size and the dust concentration; grain aging and
+    ! dust-in-snow darkening are shared by the two.
 
-    use chion_defs, only : wp, chion_const_class, chion_step_forcing_class
+    use chion_defs, only : wp, chion_const_class, chion_step_forcing_class, &
+                           SEMIX_SNOW_ALBEDO_DANG
 
     implicit none
 
@@ -38,6 +40,8 @@ module snow_albedo_semix
     public :: semix_snow_grain_size
     public :: semix_dust_concentration
     public :: semix_snow_albedo_bands
+    public :: semix_bands_ww
+    public :: semix_bands_dang
     public :: semix_broadband_albedo
     public :: semix_daily_coszm
 
@@ -59,10 +63,13 @@ contains
         real(wp),                       intent(IN)  :: dust_con     ! [kg kg-1]
         real(wp),                       intent(OUT) :: albedo       ! [1] broadband
 
-        real(wp) :: coszm, cloud, snow_grain
+        real(wp) :: coszm, cloud, snow_grain, z_sur_std
         real(wp) :: av_dir, an_dir, av_dif, an_dif
 
         snow_grain = semix_snow_grain_size(t_skin, forc%snowfall_rate, c)
+
+        z_sur_std = 0.0_wp
+        if (forc%has_z_sur_std) z_sur_std = forc%z_sur_std
 
         if (forc%has_coszm) then
             coszm = forc%coszm
@@ -73,7 +80,7 @@ contains
         cloud = 0.0_wp
         if (forc%has_cloud) cloud = forc%cloud
 
-        call semix_snow_albedo_bands(snow_grain, dust_con, coszm, c, &
+        call semix_snow_albedo_bands(snow_grain, dust_con, coszm, z_sur_std, c, &
                                      av_dir, an_dir, av_dif, an_dif)
 
         albedo = semix_broadband_albedo(av_dir, an_dir, av_dif, an_dif, cloud, c%frac_vu)
@@ -161,8 +168,109 @@ contains
 
     end function semix_snow_grain_size
 
-    subroutine semix_snow_albedo_bands(snow_grain, dust_con, coszm, c, &
+    subroutine semix_snow_albedo_bands(snow_grain, dust_con, coszm, z_sur_std, c, &
                                        alb_vis_dir, alb_nir_dir, alb_vis_dif, alb_nir_dif)
+        ! Four-band snow albedo, dispatching on the configured parameterization:
+        ! Warren & Wiscombe 1980 (CLIMBER-2 form) or Dang et al. 2015. CLIMBER-X
+        ! defaults to Dang (isnow_albedo = 2).
+
+        implicit none
+
+        real(wp),                intent(IN)  :: snow_grain, dust_con, coszm, z_sur_std
+        type(chion_const_class), intent(IN)  :: c
+        real(wp),                intent(OUT) :: alb_vis_dir, alb_nir_dir
+        real(wp),                intent(OUT) :: alb_vis_dif, alb_nir_dif
+
+        if (c%semix_snow_albedo .eq. SEMIX_SNOW_ALBEDO_DANG) then
+            call semix_bands_dang(snow_grain, dust_con, coszm, z_sur_std, c, &
+                                        alb_vis_dir, alb_nir_dir, alb_vis_dif, alb_nir_dif)
+        else
+            call semix_bands_ww(snow_grain, dust_con, coszm, c, &
+                                      alb_vis_dir, alb_nir_dir, alb_vis_dif, alb_nir_dif)
+        end if
+
+        return
+
+    end subroutine semix_snow_albedo_bands
+
+    subroutine semix_bands_dang(snow_grain, dust_con, coszm, z_sur_std, c, &
+                                      alb_vis_dir, alb_nir_dir, alb_vis_dif, alb_nir_dif)
+        ! Four-band snow albedo, Dang et al. 2015 (smb_surface_par.f90:288-389).
+        ! Albedo is a quadratic in log10(grain radius / 100 um); dust enters as a
+        ! black-carbon-equivalent concentration (their eq. 9) and darkens only the
+        ! visible bands. The direct bands use a zenith-corrected effective grain
+        ! size. A tanh orographic term reduces all four bands over rough terrain
+        ! (off by default: k_sigma_orog = 0).
+
+        implicit none
+
+        real(wp),                intent(IN)  :: snow_grain, dust_con, coszm, z_sur_std
+        type(chion_const_class), intent(IN)  :: c
+        real(wp),                intent(OUT) :: alb_vis_dir, alb_nir_dir
+        real(wp),                intent(OUT) :: alb_vis_dif, alb_nir_dif
+
+        real(wp), parameter :: r0       = 100.0_wp    ! [um]
+        real(wp), parameter :: c0       = 1.0e-6_wp   ! [kg kg-1]
+        real(wp), parameter :: dust_min = 1.0e-8_wp   ! [kg kg-1]
+
+        real(wp) :: r, rn, cc, x, f, h, p, dalb_orog
+        real(wp) :: dalpha_vis_dif, dalpha_vis_dir
+
+        x = 0.0_wp
+        if (dust_con .gt. dust_min) x = log10(dust_con*1.0e6_wp)
+
+        dalb_orog = c%k_sigma_orog*tanh(z_sur_std/c%sigma_orog_crit)
+
+        ! --- diffuse visible: aging, then black-carbon-equivalent darkening
+        r  = snow_grain
+        rn = log10(r/r0)
+        alb_vis_dif = 0.9856_wp + c%dalb_snow_vis - 0.0202_wp*rn - 0.0125_wp*rn**2
+        if (dust_con .gt. dust_min) then
+            f  = 152.0_wp + 15.92_wp*x - 0.39_wp*x**2
+            cc = dust_con/f
+            h  = cc/c0*(r/r0)**0.73_wp
+            p  = log10(h)
+            dalpha_vis_dif = 10.0_wp**(-0.050_wp*p**2 + 0.514_wp*p - 0.890_wp)
+        else
+            dalpha_vis_dif = 0.0_wp
+        end if
+        alb_vis_dif = min(1.0_wp, alb_vis_dif - dalpha_vis_dif)
+
+        ! --- diffuse near-IR: aging only, dust effect negligible
+        alb_nir_dif = min(1.0_wp, 0.7493_wp + c%dalb_snow_nir - 0.1820_wp*rn - 0.0388_wp*rn**2)
+
+        ! --- direct visible: zenith-corrected effective grain
+        r  = snow_grain*(1.0_wp + 0.781_wp*(coszm - 0.65_wp)**2)
+        rn = log10(r/r0)
+        alb_vis_dir = 0.9849_wp + c%dalb_snow_vis - 0.0215_wp*rn - 0.0132_wp*rn**2
+        if (dust_con .gt. dust_min) then
+            f  = 155.0_wp + 17.15_wp*x + 0.27_wp*x**2
+            cc = dust_con/f
+            h  = cc/c0*(r/r0)**0.73_wp
+            p  = log10(h)
+            dalpha_vis_dir = 10.0_wp**(-0.049_wp*p**2 + 0.525_wp*p - 0.893_wp)
+        else
+            dalpha_vis_dir = 0.0_wp
+        end if
+        alb_vis_dir = min(1.0_wp, alb_vis_dir - dalpha_vis_dir)
+
+        ! --- direct near-IR: its own zenith correction, aging only
+        r  = snow_grain*(1.0_wp + 0.791_wp*(coszm - 0.65_wp)**2)
+        rn = log10(r/r0)
+        alb_nir_dir = min(1.0_wp, 0.6596_wp + c%dalb_snow_nir - 0.1927_wp*rn - 0.0229_wp*rn**2)
+
+        ! --- orographic roughness reduction, all bands
+        alb_vis_dif = alb_vis_dif - dalb_orog
+        alb_vis_dir = alb_vis_dir - dalb_orog
+        alb_nir_dif = alb_nir_dif - dalb_orog
+        alb_nir_dir = alb_nir_dir - dalb_orog
+
+        return
+
+    end subroutine semix_bands_dang
+
+    subroutine semix_bands_ww(snow_grain, dust_con, coszm, c, &
+                                    alb_vis_dir, alb_nir_dir, alb_vis_dif, alb_nir_dif)
         ! Four-band snow albedo, Warren & Wiscombe 1980 form
         ! (smb_surface_par.f90:225-281). Diffuse bands age from the fresh values
         ! toward darker ones; direct bands add a solar-zenith brightening. The
@@ -223,7 +331,7 @@ contains
 
         return
 
-    end subroutine semix_snow_albedo_bands
+    end subroutine semix_bands_ww
 
     pure function semix_broadband_albedo(alb_vis_dir, alb_nir_dir, alb_vis_dif, alb_nir_dif, &
                                          cloud, frac_vu) result(alb)

@@ -101,6 +101,11 @@ module chion_defs
     integer, parameter, public :: CHION_ALBEDO_PRESCRIBED = 3
     integer, parameter, public :: CHION_ALBEDO_SEMIX      = 4
 
+    ! Which spectral snow-albedo parameterization the SEMIX scheme uses.
+    ! CLIMBER-X defaults to Dang (its isnow_albedo = 2).
+    integer, parameter, public :: SEMIX_SNOW_ALBEDO_WW   = 1
+    integer, parameter, public :: SEMIX_SNOW_ALBEDO_DANG = 2
+
     integer, parameter, public :: CHION_DENSIFY_BESSI   = 1
     integer, parameter, public :: CHION_DENSIFY_HTESSEL = 2
 
@@ -219,6 +224,11 @@ module chion_defs
         real(wp) :: snow_1             ! [1]  snowfall-rate aging exponent
         real(wp) :: w_snow_dust        ! [kg m-2] SWE melt that doubles dust concentration
         real(wp) :: dust_con_scale     ! [1]  dust concentration scaling
+        integer  :: semix_snow_albedo  ! SEMIX_SNOW_ALBEDO_*
+        real(wp) :: dalb_snow_vis      ! [1]  visible snow albedo offset (Dang)
+        real(wp) :: dalb_snow_nir      ! [1]  near-IR snow albedo offset (Dang)
+        real(wp) :: k_sigma_orog       ! [1]  orographic albedo reduction scale (Dang)
+        real(wp) :: sigma_orog_crit    ! [m]  orographic roughness scale (Dang)
 
         ! Radiation
         real(wp) :: eps_air            ! [1] emissivity of air
@@ -276,6 +286,8 @@ module chion_defs
         logical  :: has_cloud
         real(wp) :: dust_dep            ! [kg m-2 s-1] dust deposition rate
         logical  :: has_dust_dep
+        real(wp) :: z_sur_std           ! [m] subgrid surface-height std deviation
+        logical  :: has_z_sur_std
 
         real(wp) :: latitude_deg        ! [deg N]
         real(wp) :: day_of_year         ! [d] fractional, 1-based
@@ -321,6 +333,8 @@ module chion_defs
         logical,  allocatable :: has_cloud(:)
         real(wp), allocatable :: dust_dep(:)             ! [kg m-2 s-1] dust deposition
         logical,  allocatable :: has_dust_dep(:)
+        real(wp), allocatable :: z_sur_std(:)            ! [m] subgrid height std dev
+        logical,  allocatable :: has_z_sur_std(:)
 
         real(wp), allocatable :: latitude_deg(:)         ! [deg N]
 
@@ -414,6 +428,7 @@ module chion_defs
     public :: chion_grid_set_active
 
     public :: chion_albedo_scheme_flag
+    public :: chion_semix_snow_albedo_flag
     public :: chion_fresh_snow_density_scheme_flag
     public :: chion_densify_scheme_flag
 
@@ -472,6 +487,11 @@ contains
         c%snow_1           = 0.5_wp
         c%w_snow_dust      = 10.0_wp
         c%dust_con_scale   = 1.0_wp
+        c%semix_snow_albedo = SEMIX_SNOW_ALBEDO_DANG
+        c%dalb_snow_vis     = 0.0_wp
+        c%dalb_snow_nir     = 0.0_wp
+        c%k_sigma_orog      = 0.0_wp
+        c%sigma_orog_crit   = 1000.0_wp
 
         c%eps_air  = 0.80_wp
         c%eps_snow = 0.98_wp
@@ -568,6 +588,8 @@ contains
         allocate(forc%has_cloud(ncol))
         allocate(forc%dust_dep(ncol))
         allocate(forc%has_dust_dep(ncol))
+        allocate(forc%z_sur_std(ncol))
+        allocate(forc%has_z_sur_std(ncol))
 
         allocate(forc%latitude_deg(ncol))
 
@@ -604,6 +626,8 @@ contains
         forc%has_cloud = .FALSE.
         forc%dust_dep     = 0.0_wp
         forc%has_dust_dep = .FALSE.
+        forc%z_sur_std     = 0.0_wp
+        forc%has_z_sur_std = .FALSE.
 
         forc%latitude_deg = 0.0_wp
 
@@ -651,6 +675,8 @@ contains
         if (allocated(forc%has_cloud))             deallocate(forc%has_cloud)
         if (allocated(forc%dust_dep))              deallocate(forc%dust_dep)
         if (allocated(forc%has_dust_dep))          deallocate(forc%has_dust_dep)
+        if (allocated(forc%z_sur_std))             deallocate(forc%z_sur_std)
+        if (allocated(forc%has_z_sur_std))         deallocate(forc%has_z_sur_std)
         if (allocated(forc%latitude_deg))          deallocate(forc%latitude_deg)
         if (allocated(forc%H_ice))                 deallocate(forc%H_ice)
         if (allocated(forc%PDDs))                  deallocate(forc%PDDs)
@@ -799,6 +825,31 @@ contains
         return
 
     end subroutine chion_grid_set_active
+
+    function chion_semix_snow_albedo_flag(name) result(flag)
+        ! Map a namelist string onto a SEMIX spectral snow-albedo flag.
+
+        implicit none
+
+        character(len=*), intent(IN) :: name
+        integer :: flag
+
+        select case(trim(adjustl(name)))
+            case("ww","warren","warren_wiscombe")
+                flag = SEMIX_SNOW_ALBEDO_WW
+            case("dang")
+                flag = SEMIX_SNOW_ALBEDO_DANG
+            case DEFAULT
+                write(io_unit_err,*) "chion_semix_snow_albedo_flag:: Error: scheme not recognized."
+                write(io_unit_err,*) "semix_snow_albedo should be one of: ['ww','dang'] &
+                                     &(aliases: 'warren','warren_wiscombe' -> 'ww')"
+                write(io_unit_err,*) "semix_snow_albedo = ", trim(name)
+                stop "Program stopped."
+        end select
+
+        return
+
+    end function chion_semix_snow_albedo_flag
 
     function chion_albedo_scheme_flag(name) result(flag)
         ! Map a namelist string onto an albedo scheme flag.

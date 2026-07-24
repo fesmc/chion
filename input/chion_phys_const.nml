@@ -70,6 +70,11 @@
     snow_1                    = 0.5         ! [1]  Snowfall-rate aging exponent
     w_snow_dust               = 10.0        ! [kg m-2] SWE melt that doubles dust concentration
     dust_con_scale            = 1.0         ! [1]  Dust concentration scaling
+    semix_snow_albedo         = "dang"      ! "ww" | "dang" (CLIMBER-X default: Dang 2015)
+    dalb_snow_vis             = 0.0         ! [1]  Visible snow albedo offset (Dang)
+    dalb_snow_nir             = 0.0         ! [1]  Near-IR snow albedo offset (Dang)
+    k_sigma_orog              = 0.0         ! [1]  Orographic albedo reduction scale (Dang)
+    sigma_orog_crit           = 1000.0      ! [m]  Orographic roughness scale (Dang)
 
     ! ## Radiation ##
     eps_air                   = 0.80        ! [1] Emissivity of air

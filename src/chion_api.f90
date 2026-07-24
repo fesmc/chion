@@ -68,6 +68,7 @@ module chion_api
                            chion_grid_init, chion_grid_dealloc, &
                            chion_grid_set_active, &
                            chion_albedo_scheme_flag, &
+                           chion_semix_snow_albedo_flag, &
                            chion_fresh_snow_density_scheme_flag, &
                            chion_densify_scheme_flag, &
                            chion_check_enum, chion_check_file
@@ -105,6 +106,7 @@ module chion_api
     ! can never disagree. Aliases are included because chion_defs' *_flag
     ! functions accept them (docs/porting_notes.md D4).
     character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|bessi|legacy"
+    character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "ww|dang|warren|warren_wiscombe"
     character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized|bessi|htessel"
     character(len=*), parameter :: CHION_DENSIFY_CHOICES = "bessi|htessel"
     character(len=*), parameter :: CHION_PDD_CHOICES     = "simple|pism"
@@ -730,6 +732,7 @@ contains
 
         ! Local variables
         character(len=56) :: albedo_scheme
+        character(len=56) :: semix_snow_albedo
         character(len=56) :: fresh_snow_density_scheme
         character(len=56) :: low_density_densification
 
@@ -773,6 +776,11 @@ contains
         call nml_read(filename,group,"snow_1",          c%snow_1)
         call nml_read(filename,group,"w_snow_dust",     c%w_snow_dust)
         call nml_read(filename,group,"dust_con_scale",  c%dust_con_scale)
+        call nml_read(filename,group,"semix_snow_albedo",semix_snow_albedo)
+        call nml_read(filename,group,"dalb_snow_vis",   c%dalb_snow_vis)
+        call nml_read(filename,group,"dalb_snow_nir",   c%dalb_snow_nir)
+        call nml_read(filename,group,"k_sigma_orog",    c%k_sigma_orog)
+        call nml_read(filename,group,"sigma_orog_crit", c%sigma_orog_crit)
 
         call nml_read(filename,group,"eps_air", c%eps_air)
         call nml_read(filename,group,"eps_snow",c%eps_snow)
@@ -786,10 +794,12 @@ contains
         ! Validate before converting, so the error names the group and the
         ! full allowed set rather than only the offending value.
         call chion_check_enum(group,"albedo_scheme",            albedo_scheme,            CHION_ALBEDO_CHOICES)
+        call chion_check_enum(group,"semix_snow_albedo",        semix_snow_albedo,        CHION_SEMIX_SNOW_ALB_CHOICES)
         call chion_check_enum(group,"fresh_snow_density_scheme",fresh_snow_density_scheme,CHION_RHOS_CHOICES)
         call chion_check_enum(group,"low_density_densification",low_density_densification,CHION_DENSIFY_CHOICES)
 
         c%albedo_scheme             = chion_albedo_scheme_flag(albedo_scheme)
+        c%semix_snow_albedo         = chion_semix_snow_albedo_flag(semix_snow_albedo)
         c%fresh_snow_density_scheme = chion_fresh_snow_density_scheme_flag(fresh_snow_density_scheme)
         c%low_density_densification = chion_densify_scheme_flag(low_density_densification)
 
