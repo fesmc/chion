@@ -23,9 +23,9 @@ bulk melt-parameterization family (no energy balance), unchanged.
 |---|---|---|---|
 | column structure | `Ntot` *(exists)* | `1` (single layer) … `N` (firn column) | ✅ works today |
 | surface energy balance | `seb_scheme` *(new)* | `bessi` \| `semix` | ✅ rungs 2–3 done |
-| albedo | `albedo_scheme` *(extend enum)* | `constant` \| `dynamic` \| `prescribed` \| `semix` | rung 1 (dust) |
-| net shortwave | `has_q_sw_net` *(exists)* + internal spectral | prescribed **or** chion-owns | both supported |
-| background ice albedo | `has_prescribed_ice_albedo` *(new, optional)* | chion's own **or** passed | rung 1 |
+| albedo | `albedo_scheme` *(extend enum)* | `constant` \| `dynamic` \| `prescribed` \| `semix` | ✅ rung 1 done |
+| net shortwave | `has_q_sw_net` *(exists)* + internal spectral | prescribed **or** chion-owns | ⚠️ broadband collapse, not spectral |
+| background ice albedo | `alb_ice_host` *(new, optional)* | chion's own **or** passed | ✅ rung 1 done |
 
 Every SEMIX-ward permutation is then a flag combination:
 
@@ -113,14 +113,22 @@ the SEB rungs — it can land first and be used with the existing `bessi` SEB.
 `snow_albedo.f90`. Note the existing branch tests `== CHION_ALBEDO_CONSTANT` and
 falls through to dynamic (trap 9) — the new value needs an explicit branch.
 
-**New prognostic per-column state** (add to `bessi_state_class`,
-`snow_bessi.f90:116-148`; today only `t_srf`/`albedo` are instantaneous scalars):
-- `snow_grain(:)` — grain size / aging proxy (needs `t_skin`, snowfall rate)
-- `dust_con(:)` — dust concentration in snow (needs `dust_dep`, snowfall, and
-  `w_snow_max` seasonal-max SWE for the melt-amplification term)
+**New per-column state.** ~~`snow_grain(:)`, `dust_con(:)`~~ — *this was wrong,
+corrected on inspection of the source*: neither is prognostic in SEMIX. Both
+`snow_grain_size` (`smb_surface_par.f90:143-172`) and `dust_in_snow` (`:179-218`)
+declare their output `intent(inout)` only because it is stored in a state array;
+the bodies **assign** it fresh from the current `t_skin`/`snow`/`w_snow` with no
+dependence on the previous value. chion therefore diagnoses both per step, as
+locals, and that is faithful — no aging history is lost because SEMIX keeps none.
+
+Genuinely prognostic, and implemented:
 - `w_snow_max(:)` — seasonal max column SWE (drives dust melt amplification)
-- `dt_snowfree(:)` — snow-free timer
-- albedo state broadened scalar → **4 bands** {vis,nir}×{dir,dif}
+
+Not implemented (see [What is left](#what-is-left)):
+- `dt_snowfree(:)` / `f_snow` / `alb_bg` — SEMIX's continuous snow-cover-fraction
+  blend between snow and background albedo
+- albedo state broadened scalar → 4 bands: the bands are computed but collapsed
+  to broadband immediately rather than carried as state
 
 **New forcing inputs** (each `has_*`-gated): `dust_dep`, `coszm`, `cloud`
 (dir/dif weighting), `z_sur_std` (subgrid orography σ). Optional
@@ -316,15 +324,33 @@ zero without `rh_default`, and SEMIX in CLIMBER-X runs with its own spectral
 albedo rather than chion's `dynamic` one. A like-for-like comparison needs
 `albedo_scheme=semix` and a real humidity field.
 
-## Rung 4 — SEMIX diurnal / statistical melt *(optional)*
+## Rung 4 — SEMIX diurnal / statistical melt — **not planned**
 
 SEMIX resolves sub-daily melt statistically from `tstd` (daily T std dev) and
-`swnet_min` via the Krapp et al. 2016 cycle (`smb_ebal.f90:153-243`). chion
-already has diurnal *shortwave substepping* (a different, arguably better
-mechanism). Add the tstd scheme as an alternative only if SEMIX-equivalent melt
-statistics are wanted. Inputs: `tstd`, `swnet_min`.
+`swnet_min` via the Krapp et al. 2016 (SEMIC) cycle (`smb_ebal.f90:153-243`).
 
-**Effort: M.** Low priority.
+**Decided against porting** (2026-07-24). Three reasons, in order of weight:
+
+1. **chion already has the mechanism, done better.** Diurnal *shortwave
+   substepping* re-runs the full energy solve up to 3× per day with the SW cycle
+   resolved explicitly. SEMIX's scheme is a closed-form statistical estimate of
+   the same thing, needed there precisely because it has no substepping.
+2. **It is off in CLIMBER-X itself.** `l_diurnal_cycle = F` and
+   `tstd_scale = 0` in `nml/smb_par.nml` — the weather-variability term is
+   disabled even when the cycle is enabled. It was tried upstream and is not
+   used.
+3. **It is the one part of SEMIX that coupling α cannot map cleanly.** Every
+   other flux is per-flux linear, so `num`/`denom` → `q_const`/`q_lin` is exact.
+   The diurnal melt is a *nonlinear residual* evaluated at three skin
+   temperatures (`T0`, `t_skin_pos`, `t_skin_max`) and built on `num_g`/`denom_g`,
+   the ground flux — which under α has no scalar analog, because chion's row-1
+   conduction *is* the ground flux. Porting it would mean either reintroducing a
+   skin node (rejected as coupling β) or inventing a non-faithful approximation.
+
+Should it ever be wanted, the approach would be a post-solve statistical
+correction to `melt_energy_available` using chion's existing
+`diurnal_shortwave_peak_flux` for the peak-SW term, mutually exclusive with
+`diurnal_shortwave_substeps`, plus a `tstd` forcing input.
 
 ---
 
@@ -400,6 +426,45 @@ ambiguity as large as the scheme differences it was being used to measure.**
 At `Ntot=15` the full configuration gives bias +19.5 / R² 0.72 (`rh=0.7`,
 uncorrected, so pessimistic on the same grounds). The layer-count axis continues
 to behave as the rung-2/3 tables show — `Ntot=1` remains the better match.
+
+## What is left
+
+Rungs 1–3 are done and rung 4 is not planned, so the `seb_scheme`/`albedo_scheme`
+axes are complete as designed. What remains is listed here so the gaps are not
+mistaken for oversights.
+
+**1. A real humidity field — the largest item.** The single biggest error source
+in every configuration measured, larger than either scheme choice: a uniform
+`rh_default` costs R² 0.86 → 0.83 under *both* SEB schemes. It also leaves the
+SEMIX-vs-BESSI comparison provisional, because the two read the same number
+against different saturation references (water vs ice) and the resulting
+ambiguity spans as much as the scheme difference. Needs a humidity variable in
+`libs/domains/chion_domain.f90`, not another scalar knob.
+
+**2. Spectral net shortwave.** The plan called for chion to own the
+albedo→net-SW loop with spectral SW↓ inputs. What is implemented instead
+computes the four bands and collapses them to broadband immediately, using
+assumed spectral weights (`frac_vu`, cloud dir/dif split). That is a fair
+approximation offline at daily steps, and it is *not* sufficient for the
+CLIMBER-X swap, where the host already carries `swd_sur_{vis,nir}_{dir,dif}`.
+
+**3. SEMIX's snow-cover-fraction blend (`f_snow`).** SEMIX blends snow albedo
+into a background (ice/soil) albedo continuously,
+`f_snow = tanh(h_snow/(c_fsnow·z0m))·f_snow_orog`
+(`smb_surface_par.f90:110-129`), and tracks `dt_snowfree` and `alb_bg`. chion
+switches discretely between the snow column and bare ice at `TOL_EMPTY_LAYER`.
+Structural difference, not a bug — chion's layer model makes the hard switch
+natural — but it will show up at the margin, which is exactly where the SEMIX
+configurations diverge most from MAR. Worth revisiting if margin skill matters.
+
+**4. `Ch_neutral` caching (performance).** `semix_resistance` recomputes two
+`log()` per call, and the neutral exchange coefficient depends only on snow
+depth, not temperature — so 4 of every 4 logs per snow column-substep are
+recomputed identically when 2 would do. Deferred by decision: the full
+configuration is 1.8× the baseline, and 50 yr at 16 km still runs in under a
+minute. Revisit if long paleo runs make it bite.
+
+**5. CLIMBER-X integration.** Explicitly out of scope; see below.
 
 ## Deferred: CLIMBER-X integration
 
