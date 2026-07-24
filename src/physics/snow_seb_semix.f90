@@ -386,18 +386,28 @@ contains
 
         x%f_sh = rhoa*c%cp_air/x%r_a
 
-        x%qsat    = semix_q_sat(t_skin,air_pressure,c)
-        x%dqsatdT = semix_dqsat_dT(t_skin,air_pressure,c)
-
-        if (has_humidity) then
-            x%q_air = semix_air_humidity(t2m,relative_humidity,air_pressure,c)
-        else
-            x%q_air = 0.0_wp
+        ! The saturation humidity and its derivative feed the LATENT flux and
+        ! nothing else. With no humidity forcing that flux is identically zero
+        ! and every consumer multiplies these by f_lh, so evaluating them would
+        ! be two wasted exp() -- per call, per flux site, per substep, per
+        ! column. Returning early instead is measurable on a whole-domain run.
+        !
+        ! They are zeroed rather than left undefined: qsat and dqsatdT are only
+        ! meaningful when f_lh is non-zero, and a caller that ignores that gets
+        ! a harmless zero instead of a stale value.
+        if (.not. has_humidity) then
+            x%qsat    = 0.0_wp
+            x%dqsatdT = 0.0_wp
+            x%q_air   = 0.0_wp
+            x%f_lh    = 0.0_wp
+            return
         end if
 
-        if (.not. has_humidity) then
-            x%f_lh = 0.0_wp
-        else if (.not. c%l_dew .and. x%q_air .gt. x%qsat) then
+        x%qsat    = semix_q_sat(t_skin,air_pressure,c)
+        x%dqsatdT = semix_dqsat_dT(t_skin,air_pressure,c)
+        x%q_air   = semix_air_humidity(t2m,relative_humidity,air_pressure,c)
+
+        if (.not. c%l_dew .and. x%q_air .gt. x%qsat) then
             ! Inhibit dew/frost deposition
             x%f_lh = 0.0_wp
         else
