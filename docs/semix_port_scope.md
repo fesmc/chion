@@ -328,6 +328,79 @@ statistics are wanted. Inputs: `tstd`, `swnet_min`.
 
 ---
 
+## Composed: the full SEMIX configuration
+
+The rung-by-rung numbers above each vary one axis. This is the 2×2×2 with both
+schemes and humidity together, GRL-16KM, `Ntot=1`, 50 yr, surface SMB vs MAR.
+`rh` means `rh_default = 0.7`; `dry` means no humidity forcing.
+
+| albedo | SEB | rh | bias | RMSE | R² | melt | subl | wall [s] |
+|---|---|---|---|---|---|---|---|---|
+| dynamic | bessi | dry | −2.3 | 197 | **0.86** | 204 | 0.0 | 26.5 |
+| dynamic | bessi | rh | +0.5 | 219 | 0.83 | 167 | 47.0 | 35.5 |
+| dynamic | semix | dry | +20.0 | 211 | 0.84 | 187 | 0.0 | 38.1 |
+| dynamic | semix | rh | +7.5 | 236 | 0.80 | 160 | 48.2 | 42.2 |
+| semix | bessi | dry | −9.4 | 199 | **0.86** | 212 | 0.0 | 33.5 |
+| semix | bessi | rh | −4.6 | 224 | 0.82 | 167 | 53.6 | 41.9 |
+| semix | semix | dry | +17.1 | 213 | 0.84 | 191 | 0.0 | 44.7 |
+| semix | semix | rh | +0.9 | 241 | 0.79 | 161 | 56.6 | 48.4 |
+
+(The `semix`/`bessi`/`dry` row reproduces the standalone rung-1 reference,
+−9.4 / R² 0.86, exactly.)
+
+### The effects are not additive, and the reason is a measurement artifact
+
+Summing the single-axis deltas predicts a full-configuration bias of +15.7;
+the actual value is +0.9. The interaction is almost all in the humidity column,
+where the sign of the humidity effect flips with the SEB scheme (+2.8 and +4.8
+under `bessi`, −12.5 and −16.2 under `semix`).
+
+That flip is **not physics**. The two schemes read `rh_default` against
+different saturation references — BESSI over water, SEMIX over ice — so at the
+same nominal 0.7 SEMIX is given systematically drier air:
+
+| T | es_water/es_ice | rh over ice matching rh_water = 0.7 |
+|---|---|---|
+| 273.15 K | 1.000 | 0.700 |
+| 268.15 K | 1.059 | 0.741 |
+| 263.15 K | 1.121 | 0.785 |
+| 253.15 K | 1.259 | 0.881 |
+
+Re-running the full configuration at `rh_default = 0.785` (the ~263 K
+equivalent) removes the gap almost entirely:
+
+| config | all ice | margin<800 | 800–1500 | 1500–2200 | interior>2200 |
+|---|---|---|---|---|---|
+| `dynamic`/`bessi`, rh=0.7 | +1 (0.83) | +189 (0.54) | +72 (0.68) | −10 (0.93) | −50 (0.96) |
+| `semix`/`semix`, rh=0.7 | +1 (0.79) | +249 (0.45) | +104 (0.61) | −18 (0.92) | −67 (0.92) |
+| `semix`/`semix`, rh=0.785 | −2 (0.83) | +179 (0.54) | +75 (0.67) | −9 (0.93) | −57 (0.94) |
+
+**With comparable humidity forcing the full SEMIX configuration is
+indistinguishable from BESSI** — R² 0.83 both, RMSE 221 vs 219, and matching
+zone for zone. No single scalar can correct this properly (the ratio is 1.0 at
+T0 and 1.26 at −20 °C), so 0.785 is a bound rather than a fix; the honest
+reading is that the rh=0.7/0.785 spread, R² 0.79–0.83, **brackets a forcing
+ambiguity as large as the scheme differences it was being used to measure.**
+
+### What the matrix actually says
+
+- **Dry, the SEMIX SEB costs a little skill**: R² 0.86 → 0.84, entirely at the
+  margin. That result is clean — no humidity is involved.
+- **The SEMIX albedo alone costs nothing and helps the margin**: R² 0.86
+  either way, margin bias +57 → +28, the only component that improves it.
+- **Uniform humidity is the dominant error source, in both schemes**: R² 0.86 →
+  0.83 under `bessi`, and it is what drags the composed configuration down.
+  A real humidity field matters more than either scheme choice.
+- **Near-zero bias is not skill.** The full configuration at rh=0.7 has a global
+  bias of +0.9 — better than the baseline's −2.3 — while being the *worst* R² of
+  the set, with margin +249 against interior −67. The mean cancels; the pattern
+  does not.
+- **Cost**: the full configuration is 1.8× the baseline (48.4 s vs 26.5 s).
+
+At `Ntot=15` the full configuration gives bias +19.5 / R² 0.72 (`rh=0.7`,
+uncorrected, so pessimistic on the same grounds). The layer-count axis continues
+to behave as the rung-2/3 tables show — `Ntot=1` remains the better match.
+
 ## Deferred: CLIMBER-X integration
 
 Out of near-term scope (offline physics first). When chion is fully capable, the
