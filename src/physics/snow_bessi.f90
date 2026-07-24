@@ -70,7 +70,8 @@ module snow_bessi
 
     use snow_accumulation,  only : apply_accumulation
     use snow_albedo,        only : albedo_update
-    use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration
+    use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration, &
+                                   semix_daily_coszm
     use snow_densify,       only : densify_column, apply_htessel_liquid_water_compaction
     use snow_energy,        only : snow_energy_flux, snow_energy_result_class
     use snow_surface_fluxes,only : bare_ice_ablation_class, bare_ice_ablation_mass, &
@@ -534,8 +535,14 @@ contains
         ! replaces Chion.jl's persistent workspace.liquid_water_before_energy.
         real(wp) :: mass_w_before_energy(bsi%par%Ntot)
 
-        ! SEMIX albedo scratch (column SWE and dust concentration).
-        real(wp) :: w_snow, dust_con
+        ! SEMIX albedo scratch: column SWE, dust concentration, and the
+        ! forcing scalars the albedo module takes (resolved here, since the
+        ! module stays decoupled from the forcing type).
+        real(wp) :: w_snow, dust_con, coszm, cloud, z_sur_std
+
+        ! Bare-ice albedo actually used: chion's own constant unless the host
+        ! supplies one per column (e.g. CLIMBER-X's slow firn-aging ice albedo).
+        real(wp) :: alb_ice_use
 
         if (icol .lt. 1 .or. icol .gt. bsi%now%ncol) then
             write(io_unit_err,*) "bessi_column_step_core:: Error: column index out of range."
@@ -580,6 +587,10 @@ contains
             if (forc%has_prescribed_albedo) use_prescribed_albedo = .TRUE.
         end if
 
+        alb_ice_use = c%alpha_ice
+        if (forc%has_alb_ice_host) &
+            alb_ice_use = min(max(forc%alb_ice_host,0.0_wp),1.0_wp)
+
         uses_htessel = (c%low_density_densification .eq. CHION_DENSIFY_HTESSEL)
 
         ! === Step 2: accumulation ============================================
@@ -618,7 +629,7 @@ contains
 
         if (.not. has_surface_snow) then
 
-            if (.not. use_prescribed_albedo) albedo = c%alpha_ice
+            if (.not. use_prescribed_albedo) albedo = alb_ice_use
 
             bare_ice_fluxes = bare_ice_ablation_mass(c,forc,dt_seconds)
 
@@ -656,7 +667,20 @@ contains
                 dust_con = semix_dust_concentration(forc%dust_dep,forc%snowfall_rate, &
                                                     w_snow,w_snow_max,c)
 
-            call semix_surface_albedo(forc,c,temperature(1),dust_con,albedo)
+            if (forc%has_coszm) then
+                coszm = forc%coszm
+            else
+                coszm = semix_daily_coszm(forc%latitude_deg,forc%solar_longitude_deg)
+            end if
+
+            cloud = 0.0_wp
+            if (forc%has_cloud) cloud = forc%cloud
+
+            z_sur_std = 0.0_wp
+            if (forc%has_z_sur_std) z_sur_std = forc%z_sur_std
+
+            call semix_surface_albedo(c,temperature(1),forc%snowfall_rate, &
+                                      coszm,cloud,z_sur_std,dust_con,albedo)
 
             w_snow_old = w_snow
         else
@@ -795,7 +819,7 @@ contains
         if (use_prescribed_albedo) then
             albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
         else if (.not. surface_has_snow(mass,n)) then
-            albedo = c%alpha_ice
+            albedo = alb_ice_use
         end if
 
         end associate

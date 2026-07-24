@@ -26,8 +26,7 @@ module snow_albedo_semix
     ! the diagnosed grain size and the dust concentration; grain aging and
     ! dust-in-snow darkening are shared by the two.
 
-    use chion_defs, only : wp, chion_const_class, chion_step_forcing_class, &
-                           SEMIX_SNOW_ALBEDO_DANG
+    use chion_defs, only : wp, chion_const_class, SEMIX_SNOW_ALBEDO_DANG
 
     implicit none
 
@@ -47,38 +46,33 @@ module snow_albedo_semix
 
 contains
 
-    subroutine semix_surface_albedo(forc, c, t_skin, dust_con, albedo)
+    subroutine semix_surface_albedo(c, t_skin, snowfall_rate, coszm, cloud, z_sur_std, &
+                                    dust_con, albedo)
         ! Broadband SEMIX snow albedo for one column. Grain size is diagnosed
-        ! from the skin temperature and the current snowfall rate; coszm is
-        ! taken from the forcing when supplied, else from the lat/solar-longitude
-        ! daily mean; cloud defaults to clear-sky (all-direct) when absent. Dust
-        ! concentration is passed in: this commit calls it with zero dust (the
-        ! dust-in-snow darkening is added in the following commit).
+        ! from the skin temperature and the current snowfall rate; the caller
+        ! resolves coszm (measured or the lat/solar-longitude fallback below),
+        ! the cloud fraction and the subgrid orography, and supplies the dust
+        ! concentration.
+        !
+        ! Deliberately takes plain scalars rather than chion's forcing type, as
+        ! snow_albedo.f90 does: this module is pure physics and stays decoupled
+        ! from the forcing contract.
 
         implicit none
 
-        type(chion_step_forcing_class), intent(IN)  :: forc
-        type(chion_const_class),        intent(IN)  :: c
-        real(wp),                       intent(IN)  :: t_skin       ! [K] surface temperature
-        real(wp),                       intent(IN)  :: dust_con     ! [kg kg-1]
-        real(wp),                       intent(OUT) :: albedo       ! [1] broadband
+        type(chion_const_class), intent(IN)  :: c
+        real(wp),                intent(IN)  :: t_skin         ! [K] surface temperature
+        real(wp),                intent(IN)  :: snowfall_rate  ! [kg m-2 s-1]
+        real(wp),                intent(IN)  :: coszm          ! [1] daily-mean cos(zenith)
+        real(wp),                intent(IN)  :: cloud          ! [1] cloud fraction
+        real(wp),                intent(IN)  :: z_sur_std      ! [m] subgrid height std dev
+        real(wp),                intent(IN)  :: dust_con       ! [kg kg-1]
+        real(wp),                intent(OUT) :: albedo         ! [1] broadband
 
-        real(wp) :: coszm, cloud, snow_grain, z_sur_std
+        real(wp) :: snow_grain
         real(wp) :: av_dir, an_dir, av_dif, an_dif
 
-        snow_grain = semix_snow_grain_size(t_skin, forc%snowfall_rate, c)
-
-        z_sur_std = 0.0_wp
-        if (forc%has_z_sur_std) z_sur_std = forc%z_sur_std
-
-        if (forc%has_coszm) then
-            coszm = forc%coszm
-        else
-            coszm = semix_daily_coszm(forc%latitude_deg, forc%solar_longitude_deg)
-        end if
-
-        cloud = 0.0_wp
-        if (forc%has_cloud) cloud = forc%cloud
+        snow_grain = semix_snow_grain_size(t_skin, snowfall_rate, c)
 
         call semix_snow_albedo_bands(snow_grain, dust_con, coszm, z_sur_std, c, &
                                      av_dir, an_dir, av_dif, an_dif)

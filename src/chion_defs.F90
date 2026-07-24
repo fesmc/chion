@@ -261,33 +261,35 @@ module chion_defs
         real(wp) :: shortwave_down      ! [W m-2]
         real(wp) :: wind_speed          ! [m s-1]
 
-        real(wp) :: q_sw_net            ! [W m-2] net shortwave, if prescribed
-        real(wp) :: q_lw_down           ! [W m-2] downward longwave, if prescribed
-        real(wp) :: q_sh                ! [W m-2] sensible heat flux, if prescribed
-        real(wp) :: q_lh                ! [W m-2] latent heat flux, if prescribed
+        real(wp) :: q_sw_net = 0.0_wp            ! [W m-2] net shortwave, if prescribed
+        real(wp) :: q_lw_down = 0.0_wp           ! [W m-2] downward longwave, if prescribed
+        real(wp) :: q_sh = 0.0_wp                ! [W m-2] sensible heat flux, if prescribed
+        real(wp) :: q_lh = 0.0_wp                ! [W m-2] latent heat flux, if prescribed
 
-        logical  :: has_q_sw_net
-        logical  :: has_q_lw_down
-        logical  :: has_q_sh
-        logical  :: has_q_lh
+        logical  :: has_q_sw_net = .FALSE.
+        logical  :: has_q_lw_down = .FALSE.
+        logical  :: has_q_sh = .FALSE.
+        logical  :: has_q_lh = .FALSE.
 
-        real(wp) :: relative_humidity   ! [1] or [%]; >1 is interpreted as percent
-        logical  :: has_relative_humidity
+        real(wp) :: relative_humidity = 0.0_wp   ! [1] or [%]; >1 is interpreted as percent
+        logical  :: has_relative_humidity = .FALSE.
 
         real(wp) :: air_pressure        ! [Pa]
-        real(wp) :: prescribed_albedo   ! [1]
-        logical  :: has_prescribed_albedo
+        real(wp) :: prescribed_albedo = 0.0_wp   ! [1]
+        logical  :: has_prescribed_albedo = .FALSE.
 
         ! SEMIX albedo inputs. coszm falls back to a lat/solar-longitude daily
         ! mean when absent; cloud defaults to clear-sky (all-direct) when absent.
-        real(wp) :: coszm               ! [1] daily-mean cos(solar zenith)
-        logical  :: has_coszm
-        real(wp) :: cloud               ! [1] cloud fraction, [0,1]
-        logical  :: has_cloud
-        real(wp) :: dust_dep            ! [kg m-2 s-1] dust deposition rate
-        logical  :: has_dust_dep
-        real(wp) :: z_sur_std           ! [m] subgrid surface-height std deviation
-        logical  :: has_z_sur_std
+        real(wp) :: coszm = 0.0_wp               ! [1] daily-mean cos(solar zenith)
+        logical  :: has_coszm = .FALSE.
+        real(wp) :: cloud = 0.0_wp               ! [1] cloud fraction, [0,1]
+        logical  :: has_cloud = .FALSE.
+        real(wp) :: dust_dep = 0.0_wp            ! [kg m-2 s-1] dust deposition rate
+        logical  :: has_dust_dep = .FALSE.
+        real(wp) :: z_sur_std = 0.0_wp           ! [m] subgrid surface-height std deviation
+        logical  :: has_z_sur_std = .FALSE.
+        real(wp) :: alb_ice_host = 0.0_wp        ! [1] bare-ice albedo supplied by the host
+        logical  :: has_alb_ice_host = .FALSE.
 
         real(wp) :: latitude_deg        ! [deg N]
         real(wp) :: day_of_year         ! [d] fractional, 1-based
@@ -335,6 +337,8 @@ module chion_defs
         logical,  allocatable :: has_dust_dep(:)
         real(wp), allocatable :: z_sur_std(:)            ! [m] subgrid height std dev
         logical,  allocatable :: has_z_sur_std(:)
+        real(wp), allocatable :: alb_ice_host(:)         ! [1] host bare-ice albedo
+        logical,  allocatable :: has_alb_ice_host(:)
 
         real(wp), allocatable :: latitude_deg(:)         ! [deg N]
 
@@ -590,6 +594,8 @@ contains
         allocate(forc%has_dust_dep(ncol))
         allocate(forc%z_sur_std(ncol))
         allocate(forc%has_z_sur_std(ncol))
+        allocate(forc%alb_ice_host(ncol))
+        allocate(forc%has_alb_ice_host(ncol))
 
         allocate(forc%latitude_deg(ncol))
 
@@ -628,6 +634,8 @@ contains
         forc%has_dust_dep = .FALSE.
         forc%z_sur_std     = 0.0_wp
         forc%has_z_sur_std = .FALSE.
+        forc%alb_ice_host     = 0.0_wp
+        forc%has_alb_ice_host = .FALSE.
 
         forc%latitude_deg = 0.0_wp
 
@@ -677,6 +685,8 @@ contains
         if (allocated(forc%has_dust_dep))          deallocate(forc%has_dust_dep)
         if (allocated(forc%z_sur_std))             deallocate(forc%z_sur_std)
         if (allocated(forc%has_z_sur_std))         deallocate(forc%has_z_sur_std)
+        if (allocated(forc%alb_ice_host))          deallocate(forc%alb_ice_host)
+        if (allocated(forc%has_alb_ice_host))      deallocate(forc%has_alb_ice_host)
         if (allocated(forc%latitude_deg))          deallocate(forc%latitude_deg)
         if (allocated(forc%H_ice))                 deallocate(forc%H_ice)
         if (allocated(forc%PDDs))                  deallocate(forc%PDDs)

@@ -145,6 +145,8 @@ contains
         fc%has_dust_dep = forc%has_dust_dep(icol)
         fc%z_sur_std     = forc%z_sur_std(icol)
         fc%has_z_sur_std = forc%has_z_sur_std(icol)
+        fc%alb_ice_host     = forc%alb_ice_host(icol)
+        fc%has_alb_ice_host = forc%has_alb_ice_host(icol)
 
         fc%latitude_deg        = forc%latitude_deg(icol)
         fc%day_of_year         = forc%day_of_year
