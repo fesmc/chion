@@ -47,7 +47,15 @@ module snow_energy
     ! TRAP 6 (docs/PLAN.md section 5): the melting-point re-solve is NOT a
     ! Dirichlet row -- see the comment at step 5 below.
 
-    use chion_defs, only : wp, wp_acc, chion_const_class, chion_step_forcing_class
+    use chion_defs, only : wp, wp_acc, CHION_SEB_SEMIX, &
+                           chion_const_class, chion_step_forcing_class
+
+    ! SEMIX aerodynamic surface scheme, selected by c%seb_scheme. It replaces
+    ! the sensible and turbulent-latent coefficients of step 2 and nothing
+    ! else: the conduction assembly, the melting-point re-solve and the whole
+    ! firn column below row 1 are untouched (docs/semix_port_scope.md).
+    use snow_seb_semix, only : semix_exchange_class, semix_snow_depth, &
+                               semix_turbulent_exchange
 
     ! Vapor-pressure / turbulent-latent helpers shared with the unlinearized
     ! twin used for bare ice and post-solve vapor mass (WP5, other half).
@@ -218,7 +226,10 @@ contains
         real(wp) :: beta_scale, beta_km1, beta_k
         real(wp) :: t_new
 
+        logical  :: uses_semix_seb
+
         type(latent_vapor_flux_lin_class) :: lh_coef
+        type(semix_exchange_class)        :: sx
 
         ! === Step 0: early exit ==============================================
         ! energy_flux.jl:343-355. NOTE the threshold is mass(1) <= 0, NOT
@@ -249,6 +260,18 @@ contains
         Tn_cube   = Tn_sq*Tn
         Tn_fourth = Tn_sq*Tn_sq
 
+        ! SEMIX exchange coefficients, built ONCE at the linearization point
+        ! T^n, which is the temperature the whole of step 2 linearizes about.
+        uses_semix_seb = (c%seb_scheme .eq. CHION_SEB_SEMIX)
+
+        if (uses_semix_seb) then
+            sx = semix_turbulent_exchange(c,semix_snow_depth(mass,density,n), &
+                                          forc%air_temperature,Tn, &
+                                          forc%wind_speed,forc%air_pressure, &
+                                          forc%relative_humidity, &
+                                          forc%has_relative_humidity)
+        end if
+
         ! === Step 2: linearized surface energy balance =======================
         ! energy_flux.jl:370-392. Each term is either taken from the forcing
         ! (has_* true) or parameterized internally.
@@ -273,10 +296,15 @@ contains
         end if
         lw_lin = c%sigma_sb*c%eps_snow*4.0_wp*Tn_cube
 
-        ! Sensible heat
+        ! Sensible heat. A prescribed flux still wins over either scheme.
         if (forc%has_q_sh) then
             sh_const = forc%q_sh
             sh_lin   = 0.0_wp
+        else if (uses_semix_seb) then
+            ! ebal num_sh/denom_sh (smb_ebal.f90:125-126). Same shape as the
+            ! BESSI branch below, with the aerodynamic f_sh in place of D_sh.
+            sh_const = forc%air_temperature*sx%f_sh
+            sh_lin   = sx%f_sh
         else
             sh_const = forc%air_temperature*c%D_sh
             sh_lin   = c%D_sh
@@ -286,6 +314,17 @@ contains
         if (forc%has_q_lh) then
             lh_turb_const = forc%q_lh
             lh_turb_lin   = 0.0_wp
+        else if (uses_semix_seb) then
+            ! ebal num_lh/denom_lh (smb_ebal.f90:122-123), which ARE chion's
+            ! q_const/q_lin contributions -- coupling decision alpha. Note the
+            ! sign flip: SEMIX counts the latent flux positive away from the
+            ! surface, chion positive into it.
+            !
+            ! No third branch is needed for missing humidity forcing:
+            ! semix_turbulent_exchange already zeroes f_lh in that case, which
+            ! collapses both terms to zero exactly as the BESSI selection does.
+            lh_turb_const = -sx%f_lh*(sx%qsat - sx%dqsatdT*Tn - sx%q_air)
+            lh_turb_lin   =  sx%f_lh*sx%dqsatdT
         else if (forc%has_relative_humidity) then
             lh_coef       = latent_vapor_flux_linearized(Tn,c,forc%air_temperature, &
                                                          forc%relative_humidity, &

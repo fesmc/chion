@@ -35,7 +35,7 @@ module snow_surface_fluxes
     ! docs/PLAN.md section 3.1.
 
     use chion_defs, only : wp, wp_acc, TOL_EMPTY_LAYER, io_unit_err, &
-                           CHION_ALBEDO_PRESCRIBED, &
+                           CHION_ALBEDO_PRESCRIBED, CHION_SEB_SEMIX, &
                            chion_const_class, chion_step_forcing_class
     use snow_column_utils, only : surface_has_snow
 
@@ -43,6 +43,15 @@ module snow_surface_fluxes
     ! them. Extracted to snow_vapor so that snow_seb_semix can share them
     ! without a circular dependency on this module.
     use snow_vapor, only : latent_vapor_flux
+
+    ! SEMIX aerodynamic surface scheme, selected by c%seb_scheme. It supplies
+    ! the exact-at-known-T turbulent fluxes here, as it supplies the linearized
+    ! ones in snow_energy: all three flux sites move together, so the bare-ice
+    ! branch and the vapour-mass budget never fall back to BESSI's D_sh while
+    ! the energy solve uses r_a (docs/semix_port_scope.md).
+    use snow_seb_semix, only : semix_exchange_class, semix_snow_depth, &
+                               semix_turbulent_exchange, &
+                               semix_sensible_heat_flux, semix_latent_heat_flux
 
     ! snow_layers supplies the layer removal/merge used by
     ! apply_snow_surface_vapor_mass_flux when sublimation empties the surface
@@ -128,8 +137,8 @@ contains
     ! Resolved (exact-at-known-T) surface fluxes
     ! =====================================================================
 
-    pure function resolved_nonshortwave_surface_flux_components(c,forc,surface_temperature) &
-                                                                        result(flx)
+    pure function resolved_nonshortwave_surface_flux_components(c,forc,surface_temperature, &
+                                                               h_snow) result(flx)
         ! Chion.jl/src/processes/surface_fluxes.jl:20-45.
         !
         ! Every has_* flag selects a PRESCRIBED value over the internal
@@ -137,6 +146,11 @@ contains
         !   has_q_lh                 -> prescribed q_lh
         !   has_relative_humidity    -> BESSI vapor flux
         !   otherwise                -> zero
+        !
+        ! Under seb_scheme = semix the sensible and latent terms come from the
+        ! aerodynamic scheme instead, which needs the snow depth for its
+        ! roughness blend -- hence the extra argument. It is zero for bare ice.
+        ! The BESSI scheme ignores it entirely.
         !
         ! Julia carries a dt_seconds argument here purely to spell zero() in
         ! the right type; it is never used numerically. Dropped (cleanup:
@@ -147,7 +161,21 @@ contains
         type(chion_const_class),        intent(IN) :: c
         type(chion_step_forcing_class), intent(IN) :: forc
         real(wp),                       intent(IN) :: surface_temperature  ! [K]
+        real(wp),                       intent(IN) :: h_snow               ! [m]
         type(nonshortwave_flux_class) :: flx
+
+        ! Local variables
+        logical                    :: uses_semix_seb
+        type(semix_exchange_class) :: sx
+
+        uses_semix_seb = (c%seb_scheme .eq. CHION_SEB_SEMIX)
+
+        if (uses_semix_seb) then
+            sx = semix_turbulent_exchange(c,h_snow,forc%air_temperature, &
+                                          surface_temperature,forc%wind_speed, &
+                                          forc%air_pressure,forc%relative_humidity, &
+                                          forc%has_relative_humidity)
+        end if
 
         if (forc%has_q_lw_down) then
             flx%longwave = forc%q_lw_down &
@@ -159,12 +187,19 @@ contains
 
         if (forc%has_q_sh) then
             flx%sensible = forc%q_sh
+        else if (uses_semix_seb) then
+            flx%sensible = semix_sensible_heat_flux(sx,forc%air_temperature, &
+                                                    surface_temperature)
         else
             flx%sensible = c%D_sh*(forc%air_temperature - surface_temperature)
         end if
 
         if (forc%has_q_lh) then
             flx%latent = forc%q_lh
+        else if (uses_semix_seb) then
+            ! f_lh is already zero without humidity forcing, so this covers the
+            ! third case of the BESSI selection too.
+            flx%latent = semix_latent_heat_flux(sx)
         else if (forc%has_relative_humidity) then
             flx%latent = latent_vapor_flux(surface_temperature,c,forc%air_temperature, &
                                            forc%relative_humidity,forc%air_pressure)
@@ -207,7 +242,9 @@ contains
                                      *(1.0_wp - min(max(surface_albedo,0.0_wp),1.0_wp))
         end if
 
-        nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0)
+        ! h_snow = 0: this branch runs only when the column has no surface
+        ! snow, so the SEMIX roughness blend collapses to the bare-ice value.
+        nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,0.0_wp)
 
         flx%longwave = nsw%longwave
         flx%sensible = nsw%sensible
@@ -218,19 +255,31 @@ contains
 
     end function resolved_bare_ice_surface_flux_components
 
-    pure function resolved_turbulent_latent_heat_flux(c,forc,surface_temperature) result(q_lh)
+    pure function resolved_turbulent_latent_heat_flux(c,forc,surface_temperature,h_snow) &
+                                                                            result(q_lh)
         ! Chion.jl/src/processes/surface_fluxes.jl:187-200.
-        ! The latent-flux-only subset of the three-case selection above.
+        ! The latent-flux-only subset of the three-case selection above, with
+        ! the same seb_scheme branch and the same h_snow argument.
 
         implicit none
 
         type(chion_const_class),        intent(IN) :: c
         type(chion_step_forcing_class), intent(IN) :: forc
         real(wp),                       intent(IN) :: surface_temperature   ! [K]
+        real(wp),                       intent(IN) :: h_snow                ! [m]
         real(wp) :: q_lh                                                    ! [W m-2]
+
+        ! Local variables
+        type(semix_exchange_class) :: sx
 
         if (forc%has_q_lh) then
             q_lh = forc%q_lh
+        else if (c%seb_scheme .eq. CHION_SEB_SEMIX) then
+            sx = semix_turbulent_exchange(c,h_snow,forc%air_temperature, &
+                                          surface_temperature,forc%wind_speed, &
+                                          forc%air_pressure,forc%relative_humidity, &
+                                          forc%has_relative_humidity)
+            q_lh = semix_latent_heat_flux(sx)
         else if (forc%has_relative_humidity) then
             q_lh = latent_vapor_flux(surface_temperature,c,forc%air_temperature, &
                                      forc%relative_humidity,forc%air_pressure)
@@ -360,6 +409,15 @@ contains
         !
         ! Only the solid branch can empty the surface layer, so only it runs
         ! the depleted-surface removal and surface-merge loops.
+        !
+        ! seb_scheme = semix splits those two roles apart. The RESERVOIR choice
+        ! (solid mass(1) against liquid mass_w(1)) still turns on T0, but the
+        ! LATENT HEAT used to convert the flux into mass no longer does: SEMIX
+        ! builds f_lh with the latent heat of sublimation at every temperature
+        ! (smb_ebal.f90:107), so converting with Lv above the melting point
+        ! would overstate the mass by (Lv+Lm)/Lv. Bare ice already uses
+        ! (Lv+Lm) unconditionally (bare_ice_ablation_mass), so this also makes
+        ! the snow and bare-ice budgets agree under the SEMIX scheme.
 
         implicit none
 
@@ -379,7 +437,7 @@ contains
         type(surface_vapor_flux_class), intent(OUT)   :: vflux
 
         ! Local variables
-        real(wp)     :: surface_temperature, q_lh
+        real(wp)     :: surface_temperature, q_lh, h_snow, L_exchange
         real(wp_acc) :: vapor
 
         vflux%vapor_mass       = 0.0_wp
@@ -389,8 +447,9 @@ contains
         if (.not. surface_has_snow(mass,n)) return
 
         surface_temperature = temperature(1)
+        h_snow              = semix_snow_depth(mass,density,n)
 
-        q_lh = resolved_turbulent_latent_heat_flux(c,forc,surface_temperature)
+        q_lh = resolved_turbulent_latent_heat_flux(c,forc,surface_temperature,h_snow)
 
         vflux%latent_heat_flux = q_lh
 
@@ -398,11 +457,15 @@ contains
         ! humidity forcing never touches the layer structure. Reproduced.
         if (q_lh .eq. 0.0_wp) return
 
-        if (surface_temperature .lt. c%T0) then
-            vapor = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(c%Lv + c%Lm,wp_acc)
+        if (c%seb_scheme .eq. CHION_SEB_SEMIX) then
+            L_exchange = c%Lv + c%Lm
+        else if (surface_temperature .lt. c%T0) then
+            L_exchange = c%Lv + c%Lm
         else
-            vapor = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(c%Lv,wp_acc)
+            L_exchange = c%Lv
         end if
+
+        vapor = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(L_exchange,wp_acc)
 
         vflux%vapor_mass       = real(vapor,wp)
         vflux%sublimation_mass = max(-vflux%vapor_mass,0.0_wp)

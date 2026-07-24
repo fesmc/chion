@@ -18,9 +18,11 @@ program test_surface
 
     use chion_defs,          only : wp, wp_acc, chion_const_class, &
                                     chion_step_forcing_class, chion_const_init, &
-                                    CHION_ALBEDO_PRESCRIBED, DEF_SEA_LEVEL_AIR_PRESSURE
+                                    CHION_ALBEDO_PRESCRIBED, DEF_SEA_LEVEL_AIR_PRESSURE, &
+                                    CHION_SEB_BESSI, CHION_SEB_SEMIX
     use snow_surface_fluxes
     use snow_vapor
+    use snow_seb_semix
 
     implicit none
 
@@ -32,8 +34,17 @@ program test_surface
     type(latent_vapor_flux_lin_class) :: lin
     type(latent_heat_coeff_class)     :: coef
 
+    ! Snow depth, needed only by seb_scheme = "semix" for its roughness blend.
+    ! Every check below except the SEMIX section runs the BESSI scheme, which
+    ! ignores it entirely.
+    real(wp), parameter :: H_NONE = 0.0_wp
+    real(wp), parameter :: H_DEEP = 1.0_wp
+
     real(wp) :: Tn, q_exact, q_lin, dt_seconds, q_net, expected
+    real(wp) :: f_sh_semix
     integer  :: nfail
+
+    type(semix_exchange_class) :: sx
 
     nfail = 0
 
@@ -124,7 +135,7 @@ program test_surface
     forc%rainfall_rate   = 0.0_wp
 
     ! Baseline: nothing prescribed, no humidity.
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
 
     call check_close("LW parameterized = sigma*(eps_a*Ta^4 - eps_s*Ts^4)", &
                      nsw%longwave, &
@@ -139,7 +150,7 @@ program test_surface
     ! has_q_lw_down: the downward term is replaced, the upward term is kept.
     forc%has_q_lw_down = .TRUE.
     forc%q_lw_down     = 250.0_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
     call check_close("has_q_lw_down -> q_lw_down - sigma*eps_s*Ts^4", &
                      nsw%longwave, 250.0_wp - c%sigma_sb*c%eps_snow*265.0_wp**4, &
                      1.0e-5_wp, nfail)
@@ -147,14 +158,14 @@ program test_surface
     ! has_q_sh: taken verbatim, no dependence on Ta or Ts at all.
     forc%has_q_sh = .TRUE.
     forc%q_sh     = -17.5_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
     call check_close("has_q_sh -> prescribed value verbatim", &
                      nsw%sensible, -17.5_wp, 1.0e-6_wp, nfail)
 
     ! has_relative_humidity alone activates the internal vapor flux.
     forc%has_relative_humidity = .TRUE.
     forc%relative_humidity     = 0.75_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
     call check_close("has_relative_humidity -> BESSI vapor flux", &
                      nsw%latent, &
                      latent_vapor_flux(265.0_wp,c,268.0_wp,0.75_wp,forc%air_pressure), &
@@ -163,18 +174,86 @@ program test_surface
     ! has_q_lh takes precedence over has_relative_humidity.
     forc%has_q_lh = .TRUE.
     forc%q_lh     = -8.25_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
     call check_close("has_q_lh beats has_relative_humidity", &
                      nsw%latent, -8.25_wp, 1.0e-6_wp, nfail)
     call check_close("resolved_turbulent_latent_heat_flux agrees", &
-                     resolved_turbulent_latent_heat_flux(c,forc,265.0_wp), -8.25_wp, &
+                     resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_NONE), -8.25_wp, &
                      1.0e-6_wp, nfail)
 
     ! Rain heat flux is always parameterized; there is no has_* flag for it.
     forc%rainfall_rate = 1.0e-4_wp
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
     call check_close("Q_rain = P_rain*cw*(Ta - T0)", &
                      nsw%rain, 1.0e-4_wp*c%cw*(268.0_wp - c%T0), 1.0e-5_wp, nfail)
+
+    ! === seb_scheme = "semix" ===========================================
+    ! The SEMIX aerodynamic scheme replaces the sensible and turbulent-latent
+    ! terms at BOTH exact-flux sites. Its own physics is pinned in test_seb;
+    ! what is checked here is the DISPATCH: that these two entry points route
+    ! to it, that longwave and rain are untouched by the switch, and that a
+    ! prescribed flux still wins.
+    write(*,*)
+    write(*,"(a)") "--- seb_scheme = semix dispatch ---"
+
+    call forcing_init(forc)
+    forc%air_temperature       = 268.0_wp
+    forc%wind_speed            = 5.0_wp
+    forc%rainfall_rate         = 0.0_wp
+    forc%has_relative_humidity = .TRUE.
+    forc%relative_humidity     = 0.75_wp
+
+    c%seb_scheme = CHION_SEB_SEMIX
+
+    sx  = semix_turbulent_exchange(c,H_DEEP,268.0_wp,265.0_wp,5.0_wp, &
+                                   forc%air_pressure,0.75_wp,.TRUE.)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP)
+
+    call check_close("semix SH = f_sh*(Ta - Ts)", nsw%sensible, &
+                     semix_sensible_heat_flux(sx,268.0_wp,265.0_wp), 1.0e-5_wp, nfail)
+    call check_close("semix LH = -f_lh*(qsat - q_air)", nsw%latent, &
+                     semix_latent_heat_flux(sx), 1.0e-5_wp, nfail)
+    call check_close("semix latent site agrees with the flux-components site", &
+                     resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_DEEP), &
+                     nsw%latent, 1.0e-6_wp, nfail)
+
+    ! The switch is confined to the turbulent terms.
+    call check_close("semix leaves longwave alone", nsw%longwave, &
+                     c%sigma_sb*(c%eps_air*268.0_wp**4 - c%eps_snow*265.0_wp**4), &
+                     1.0e-5_wp, nfail)
+    call check_close("semix leaves the rain flux alone", nsw%rain, 0.0_wp, &
+                     1.0e-6_wp, nfail)
+
+    ! Snow depth actually reaches the roughness blend: deeper snow is rougher
+    ! (z0m_snow > z0m_ice), so it exchanges more strongly.
+    f_sh_semix = nsw%sensible
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE)
+    call check("h_snow reaches the roughness blend", &
+               nsw%sensible .lt. f_sh_semix, nfail)
+
+    ! Prescribed fluxes still beat the scheme, exactly as under BESSI.
+    forc%has_q_sh = .TRUE.
+    forc%q_sh     = -17.5_wp
+    forc%has_q_lh = .TRUE.
+    forc%q_lh     = -8.25_wp
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP)
+    call check_close("has_q_sh still beats the semix scheme", nsw%sensible, &
+                     -17.5_wp, 1.0e-6_wp, nfail)
+    call check_close("has_q_lh still beats the semix scheme", nsw%latent, &
+                     -8.25_wp, 1.0e-6_wp, nfail)
+
+    ! Bare ice takes the same branch, at h_snow = 0 and T = T0.
+    call forcing_init(forc)
+    forc%air_temperature = 271.0_wp
+    forc%wind_speed      = 5.0_wp
+    bif = resolved_bare_ice_surface_flux_components(c,forc,0.30_wp)
+    sx  = semix_turbulent_exchange(c,0.0_wp,271.0_wp,c%T0,5.0_wp, &
+                                   forc%air_pressure,0.0_wp,.FALSE.)
+    call check_close("bare ice takes the semix sensible flux at T0", &
+                     bif%sensible, semix_sensible_heat_flux(sx,271.0_wp,c%T0), &
+                     1.0e-5_wp, nfail)
+
+    c%seb_scheme = CHION_SEB_BESSI
 
     ! === Shortwave: has_q_sw_net and the max(SWdn,0) clamp ==============
     write(*,*)
@@ -212,7 +291,7 @@ program test_surface
 
     ! Bare ice is ASSUMED at the melting point: the non-shortwave components
     ! must equal those evaluated at T = T0, not at any other temperature.
-    nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,H_NONE)
     call check_close("bare-ice LW is evaluated at T0", bif%longwave, nsw%longwave, &
                      1.0e-5_wp, nfail)
     call check_close("bare-ice SH is evaluated at T0", bif%sensible, nsw%sensible, &

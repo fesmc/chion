@@ -162,6 +162,58 @@ as new constants. `h_snow` from the column.
 
 **Effort: M.**
 
+### Rung 2 result (done)
+
+`seb_scheme` swaps the turbulent exchange at **all three** flux sites, not just
+the energy solve: the linearized surface row (`snow_energy.f90`), the exact
+bare-ice fluxes and the post-solve vapour mass (`snow_surface_fluxes.f90`).
+Wiring only the first would leave bare-ice ablation — much of the margin melt —
+on `D_sh` while the snow column used `r_a`.
+
+`f_sh = ρa·cp_air/r_a` is **not** a near-equivalent of `D_sh = 10`:
+
+| regime | `r_a` [s m⁻¹] | `f_sh` [W m⁻² K⁻¹] |
+|---|---|---|
+| stable (surface 5 K colder than air) | 168 | 8.0 |
+| unstable (surface 5 K warmer) | 67 | 19.9 |
+
+(deep snow, 5 m s⁻¹, 263 K air, CLIMBER-X defaults). SEMIX leaves the stable
+branch at the neutral coefficient and only enhances the unstable one.
+
+Over Greenland the **stable** side dominates — a melting surface sits at T0
+under warmer summer air — so the scheme damps sensible heating and reduces
+melt. GRL-16KM, 50 yr, surface SMB vs MAR:
+
+| config | bias | RMSE | R² | melt [mm/yr] |
+|---|---|---|---|---|
+| `bessi`, `Ntot=1` | −2.3 | 197 | 0.86 | 204 |
+| `semix`, `Ntot=1` | +7.0 | 204 | 0.85 | 197 |
+| `bessi`, `Ntot=15` | +18.3 | 214 | 0.84 | 203 |
+| `semix`, `Ntot=15` | +28.9 | 227 | 0.82 | 195 |
+
+The cost concentrates at the margin (`z<800`: bias +57 → +126, R² 0.62 → 0.56
+at `Ntot=1`); the interior is untouched. Two caveats on reading this as a
+verdict on SEMIX: the latent flux is **identically zero** in these runs
+(`has_relative_humidity` is false in the GRL driver), and `D_sh = 10` is a
+tuned BESSI value while `z0m_snow`/`z_sfl` are CLIMBER-X's. This is a
+faithful-port checkpoint, not a calibration.
+
+**Composability:** `seb_scheme` is one switch among several — running a full
+SEMIX configuration means setting `albedo_scheme`, `seb_scheme` and their
+sub-options together, which is the intended design (orthogonal axes, not a
+model list).
+
+Two sub-options land with it: `semix_qsat` (`"semix"` = CLIMBER-X's `q_sat_i`,
+`"bessi"` = chion's ice vapour pressure through the same 0.622/p; they agree to
+0.1%), and `l_neutral`/`l_dew` carried over from `smb_par`.
+
+**One asymmetry is deliberate.** SEMIX builds `f_lh` with the latent heat of
+sublimation at every temperature, so under `seb_scheme=semix` the post-solve
+vapour *mass* conversion uses `Lv+Lm` unconditionally, while the *reservoir*
+choice (solid `mass(1)` vs liquid `mass_w(1)`) still turns on T0. Under `bessi`
+both still turn on T0, as before. Bare ice already used `Lv+Lm`
+unconditionally, so this makes the snow and bare-ice budgets agree.
+
 ## Rung 3 — Full SEMIX flux set → `seb_scheme=semix`
 
 Complete the SEMIX surface balance under α: emissivity-based longwave (snow vs

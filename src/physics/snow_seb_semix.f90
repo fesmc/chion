@@ -24,9 +24,13 @@ module snow_seb_semix
     ! snow, 5 m s-1 wind and 263 K air, f_sh is about 8.0 W m-2 K-1 with the
     ! surface 5 K COLDER than the air (stable, r_a = 168 s m-1) and about
     ! 19.9 W m-2 K-1 with it 5 K warmer (unstable, r_a = 67 s m-1), against
-    ! BESSI's fixed D_sh = 10.0. So the SEMIX scheme damps the sensible flux
-    ! in the cold-surface regime and amplifies it in the melting-season regime
-    ! where the surface runs warmer than the air.
+    ! BESSI's fixed D_sh = 10.0.
+    !
+    ! Which side dominates is an empirical question, and over Greenland it is
+    ! the STABLE one: a melting surface is pinned at T0 while the summer air
+    ! above it is warmer, so T_s < T_air is the melting-season norm and the
+    ! unstable branch is rare. The net effect on GRL-16KM is therefore LESS
+    ! sensible heating and less melt, not more (see docs/semix_port_scope.md).
     !
     ! COUPLING (docs/semix_port_scope.md, decision alpha): chion has no massless
     ! skin node -- the top firn layer IS the surface, and the balance is
@@ -78,6 +82,7 @@ module snow_seb_semix
     end type semix_exchange_class
 
     public :: semix_exchange_class
+    public :: semix_snow_depth
     public :: semix_resistance
     public :: semix_air_density
     public :: semix_q_sat
@@ -92,6 +97,34 @@ contains
     ! =====================================================================
     ! Aerodynamic resistance
     ! =====================================================================
+
+    pure function semix_snow_depth(mass,density,n) result(h_snow)
+        ! Physical depth of the snow column, the only column property the
+        ! aerodynamic scheme needs. SEMIX gets it as w_snow/rho_snow with a
+        ! single fixed density; chion sums the true per-layer thicknesses.
+        !
+        ! Returns zero for an empty column, which is the bare-ice case: the
+        ! roughness blend then collapses to z0m_ice alone.
+
+        implicit none
+
+        real(wp), intent(IN) :: mass(:)      ! (Ntot) [kg m-2]
+        real(wp), intent(IN) :: density(:)   ! (Ntot) [kg m-3]
+        integer,  intent(IN) :: n            ! active layer count
+        real(wp) :: h_snow                   ! [m]
+
+        ! Local variables
+        integer :: k
+
+        h_snow = 0.0_wp
+
+        do k = 1, n
+            h_snow = h_snow + mass(k)/safe_positive(density(k))
+        end do
+
+        return
+
+    end function semix_snow_depth
 
     pure function semix_resistance(h_snow,t2m,t_skin,wind,c) result(r_a)
         ! CLIMBER-X smb_surface_par.f90:396-438, expression for expression.

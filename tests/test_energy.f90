@@ -14,10 +14,14 @@ program test_energy
     !   6. The single-layer shortcut vs a 2-layer column whose second layer is
     !      thermally negligible.
     !   7. The n <= 0 and mass(1) <= 0 early exits write nothing.
+    !   8. seb_scheme = "semix": the surface row picks up SEMIX's f_sh and the
+    !      ebal num_lh/denom_lh decomposition, and nothing below row 1 moves.
 
     use chion_defs,   only : wp, wp_acc, chion_const_class, chion_step_forcing_class, &
-                             chion_const_init
+                             chion_const_init, CHION_SEB_BESSI, CHION_SEB_SEMIX
     use snow_energy
+    use snow_seb_semix, only : semix_exchange_class, semix_snow_depth, &
+                               semix_turbulent_exchange
 
     implicit none
 
@@ -39,6 +43,7 @@ program test_energy
     call test_melting(nfail)
     call test_single_layer_shortcut(nfail)
     call test_early_exit(nfail)
+    call test_semix_surface_row(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -882,5 +887,135 @@ contains
         return
 
     end subroutine check_rel
+
+    ! =====================================================================
+    ! 8. seb_scheme = "semix": the surface row only
+    ! =====================================================================
+
+    subroutine test_semix_surface_row(nfail)
+        ! The SEMIX scheme swaps the flux formulas feeding rhs(1)/diag(1) and
+        ! nothing else (docs/semix_port_scope.md, coupling decision alpha).
+        ! Two things are checked: that q_const/q_lin pick up exactly the
+        ! aerodynamic sensible term plus ebal's num_lh/denom_lh, and that the
+        ! conduction machinery below row 1 is untouched -- verified by running
+        ! the same column under both schemes with the turbulent terms
+        ! PRESCRIBED, which must give bit-identical answers.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        type(chion_const_class)        :: c
+        type(chion_step_forcing_class) :: forc
+        type(snow_energy_result_class) :: res_b, res_s
+        type(semix_exchange_class)     :: sx
+
+        integer,  parameter :: n = 5
+        real(wp) :: mass(Ntot), density(Ntot), temperature(Ntot)
+        real(wp) :: t_b(Ntot), t_s(Ntot)
+        real(wp) :: t_srf_b, t_srf_s, dt, Tn, h_snow
+        real(wp) :: lw_const, lw_lin, sw_abs, expect_const, expect_lin
+        integer  :: k
+
+        write(*,*)
+        write(*,"(a)") "--- 8. seb_scheme = semix surface row ---"
+
+        call chion_const_init(c)
+
+        forc%air_temperature       = 263.15_wp
+        forc%dt_days               = 1.0_wp/24.0_wp
+        forc%snowfall_rate         = 0.0_wp
+        forc%rainfall_rate         = 0.0_wp
+        forc%shortwave_down        = 150.0_wp
+        forc%wind_speed            = 5.0_wp
+        forc%relative_humidity     = 0.75_wp
+        forc%has_relative_humidity = .TRUE.
+        forc%air_pressure          = 101325.0_wp
+
+        mass        = 0.0_wp
+        density     = 0.0_wp
+        temperature = 0.0_wp
+
+        do k = 1, n
+            mass(k)        = 120.0_wp
+            density(k)     = 320.0_wp + 20.0_wp*real(k,wp)
+            temperature(k) = 258.0_wp - 1.0_wp*real(k,wp)
+        end do
+
+        Tn     = temperature(1)
+        h_snow = semix_snow_depth(mass,density,n)
+        dt     = 3600.0_wp
+
+        ! --- the surface row under semix --------------------------------
+        c%seb_scheme = CHION_SEB_SEMIX
+        t_s(1:n)     = temperature(1:n)
+        t_srf_s      = Tn
+
+        call snow_energy_flux(mass,density,t_s,t_srf_s,n,c,forc,0.75_wp, &
+                              0.0_wp,0.0_wp,dt,res_s)
+
+        sx = semix_turbulent_exchange(c,h_snow,forc%air_temperature,Tn, &
+                                      forc%wind_speed,forc%air_pressure, &
+                                      forc%relative_humidity,.TRUE.)
+
+        ! Rebuild q_const/q_lin from the pieces: longwave and shortwave are
+        ! the untouched BESSI expressions, the two turbulent terms are SEMIX's.
+        lw_const = c%sigma_sb*(c%eps_air*forc%air_temperature**4 &
+                               + c%eps_snow*3.0_wp*Tn**4)
+        lw_lin   = c%sigma_sb*c%eps_snow*4.0_wp*Tn**3
+        sw_abs   = (1.0_wp - 0.75_wp)*forc%shortwave_down
+
+        expect_const = forc%air_temperature*sx%f_sh + lw_const + sw_abs &
+                       - sx%f_lh*(sx%qsat - sx%dqsatdT*Tn - sx%q_air)
+        expect_lin   = sx%f_sh + lw_lin + sx%f_lh*sx%dqsatdT
+
+        ! check_val takes an ABSOLUTE tolerance. q_const is ~1000 W m-2 and
+        ! num_lh is itself a difference of ~600 W m-2 terms, so 0.1 W m-2 is
+        ! about what single precision can hold here; q_lin is ~14 W m-2 K-1
+        ! with no such cancellation.
+        call check_val("q_const = SH + LW + SW + ebal num_lh", &
+                       res_s%surface_flux_constant, expect_const, 0.1_wp, nfail)
+        call check_val("q_lin = f_sh + LW_lin + ebal denom_lh", &
+                       res_s%surface_flux_linear, expect_lin, 1.0e-3_wp, nfail)
+
+        ! The scheme must actually have changed something.
+        c%seb_scheme = CHION_SEB_BESSI
+        t_b(1:n)     = temperature(1:n)
+        t_srf_b      = Tn
+
+        call snow_energy_flux(mass,density,t_b,t_srf_b,n,c,forc,0.75_wp, &
+                              0.0_wp,0.0_wp,dt,res_b)
+
+        call check("semix and bessi surface rows differ", &
+                   res_s%surface_flux_linear .ne. res_b%surface_flux_linear, nfail)
+
+        ! --- nothing below row 1 moves ----------------------------------
+        ! With both turbulent fluxes prescribed, neither scheme's coefficients
+        ! are consulted, so the whole solve must agree to the last bit.
+        forc%has_q_sh = .TRUE.
+        forc%q_sh     = -12.0_wp
+        forc%has_q_lh = .TRUE.
+        forc%q_lh     = -3.0_wp
+
+        c%seb_scheme = CHION_SEB_SEMIX
+        t_s(1:n)     = temperature(1:n)
+        t_srf_s      = Tn
+        call snow_energy_flux(mass,density,t_s,t_srf_s,n,c,forc,0.75_wp, &
+                              0.0_wp,0.0_wp,dt,res_s)
+
+        c%seb_scheme = CHION_SEB_BESSI
+        t_b(1:n)     = temperature(1:n)
+        t_srf_b      = Tn
+        call snow_energy_flux(mass,density,t_b,t_srf_b,n,c,forc,0.75_wp, &
+                              0.0_wp,0.0_wp,dt,res_b)
+
+        call check("prescribed fluxes make the two schemes identical", &
+                   all(t_s(1:n) .eq. t_b(1:n)) .and. t_srf_s .eq. t_srf_b .and. &
+                   res_s%surface_flux_constant .eq. res_b%surface_flux_constant .and. &
+                   res_s%surface_flux_linear .eq. res_b%surface_flux_linear, nfail)
+
+        return
+
+    end subroutine test_semix_surface_row
 
 end program test_energy
