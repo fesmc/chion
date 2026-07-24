@@ -34,6 +34,7 @@
 
     mask_threshold      = 50.0             ! [1] BedMachine ice categories -> 100; >50 -> column
     wind_default        = 5.0             ! [m s-1] no wind field used here
+    dust_dep_default    = 0.0              ! [kg m-2 s-1] Uniform dust deposition (SEMIX albedo)
 
     n_years             = 50              ! annual cycles to repeat
     dt_out              = 360.0           ! [d] output once per year (drift)

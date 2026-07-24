@@ -52,6 +52,7 @@ program chion_grid
     !       file_out       = "chion_grid.nc"
     !       mask_threshold = 0.0           ! cells with mask > threshold -> column
     !       wind_default   = 5.0           ! [m s-1] no wind variable is read
+    !       dust_dep_default = 0.0         ! [kg m-2 s-1] uniform dust deposition
     !       dt_out         = 30.0          ! [d] output interval
     !
     !     ! --- forcing_source = "file" ---
@@ -89,6 +90,7 @@ program chion_grid
     character(len=512) :: file_out
     character(len=56)  :: forcing_source
     real(wp) :: mask_threshold, wind_default, dt_out
+    real(wp) :: dust_dep_default
 
     ! --- &ctrl : file source ----------------------------------------------
     character(len=512) :: file_forcing
@@ -147,6 +149,7 @@ program chion_grid
     call nml_read(path_par,"ctrl","file_out",       file_out)
     call nml_read(path_par,"ctrl","mask_threshold", mask_threshold)
     call nml_read(path_par,"ctrl","wind_default",   wind_default)
+    call nml_read(path_par,"ctrl","dust_dep_default", dust_dep_default)
     call nml_read(path_par,"ctrl","dt_out",         dt_out)
 
     is_domain = (trim(forcing_source) .eq. "domain")
@@ -316,6 +319,13 @@ program chion_grid
         chn%forc%surface_height(i) = zs2D(col_is(i),col_js(i))
     end do
     chn%forc%wind_speed = wind_default
+
+    ! Uniform dust deposition, for SEMIX-albedo dust sensitivity experiments.
+    ! A spatially/temporally varying dust field would come from a domain loader
+    ! (paleo) or from the coupler; this is the single-value sensitivity knob.
+    ! Left flagged off at zero so the albedo skips the dust path entirely.
+    chn%forc%dust_dep     = dust_dep_default
+    chn%forc%has_dust_dep = (dust_dep_default .gt. 0.0_wp)
 
     ! =====================================================================
     ! Setup: per-source forcing buffers
