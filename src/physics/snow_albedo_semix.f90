@@ -31,8 +31,12 @@ module snow_albedo_semix
 
     private
 
+    ! Upper bound on dust concentration in snow (smb_surface_par.f90:191).
+    real(wp), parameter, public :: SEMIX_DUST_CON_MAX = 1000.0e-6_wp   ! [kg kg-1]
+
     public :: semix_surface_albedo
     public :: semix_snow_grain_size
+    public :: semix_dust_concentration
     public :: semix_snow_albedo_bands
     public :: semix_broadband_albedo
     public :: semix_daily_coszm
@@ -77,6 +81,54 @@ contains
         return
 
     end subroutine semix_surface_albedo
+
+    pure function semix_dust_concentration(dust_dep, snowfall_rate, w_snow, w_snow_max, c) &
+                  result(dust_con)
+        ! Dust concentration in the surface snow (smb_surface_par.f90:179-218).
+        !
+        ! The base concentration is the ratio of the dust deposition rate to the
+        ! snowfall rate (kg dust per kg snow). Meltwater scavenges only 10-30 %
+        ! of the dust (Doherty 2013), so as the pack melts down from its
+        ! seasonal peak the remaining dust concentrates: the amplification is
+        ! driven by the drawdown (w_snow_max - w_snow), with w_snow_dust the SWE
+        ! whose melt doubles the concentration, capped at five-fold.
+        !
+        ! Only the drawdown enters, never the absolute column mass, so this
+        ! carries over unchanged from SEMIX's capped bulk snow reservoir to
+        ! chion's much deeper firn column.
+
+        implicit none
+
+        real(wp),                intent(IN) :: dust_dep       ! [kg m-2 s-1]
+        real(wp),                intent(IN) :: snowfall_rate  ! [kg m-2 s-1]
+        real(wp),                intent(IN) :: w_snow         ! [kg m-2] column SWE
+        real(wp),                intent(IN) :: w_snow_max     ! [kg m-2] seasonal peak SWE
+        type(chion_const_class), intent(IN) :: c
+        real(wp) :: dust_con                                  ! [kg kg-1]
+
+        real(wp) :: melt_fac
+
+        dust_con = dust_dep/max(1.0e-7_wp, snowfall_rate)
+
+        if (w_snow .gt. 1.0_wp) then
+            melt_fac = 1.0_wp + (w_snow_max - w_snow)/c%w_snow_dust
+            melt_fac = max(melt_fac, 1.0_wp)
+            melt_fac = min(melt_fac, 5.0_wp)
+        else
+            melt_fac = 1.0_wp
+        end if
+
+        dust_con = melt_fac*dust_con
+
+        ! Scaling that stands in for different dust imaginary refractive indices.
+        dust_con = c%dust_con_scale*dust_con
+
+        if (dust_con .lt. 1.0e-15_wp) dust_con = 0.0_wp
+        dust_con = min(dust_con, SEMIX_DUST_CON_MAX)
+
+        return
+
+    end function semix_dust_concentration
 
     pure function semix_snow_grain_size(t_skin, snowfall_rate, c) result(snow_grain)
         ! Diagnostic snow grain size (aging proxy), CLIMBER-2 form tuned to

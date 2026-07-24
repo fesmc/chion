@@ -70,7 +70,7 @@ module snow_bessi
 
     use snow_accumulation,  only : apply_accumulation
     use snow_albedo,        only : albedo_update
-    use snow_albedo_semix,  only : semix_surface_albedo
+    use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration
     use snow_densify,       only : densify_column, apply_htessel_liquid_water_compaction
     use snow_energy,        only : snow_energy_flux, snow_energy_result_class
     use snow_surface_fluxes,only : bare_ice_ablation_class, bare_ice_ablation_mass, &
@@ -141,6 +141,11 @@ module snow_bessi
         ! Instantaneous per-column scalars
         real(wp), allocatable :: t_srf(:)          ! (ncol) [K]
         real(wp), allocatable :: albedo(:)         ! (ncol) [1]
+
+        ! SEMIX albedo bookkeeping: column SWE last step and its seasonal peak.
+        ! The drawdown (w_snow_max - w_snow) drives dust concentration.
+        real(wp), allocatable :: w_snow_old(:)     ! (ncol) [kg m-2]
+        real(wp), allocatable :: w_snow_max(:)     ! (ncol) [kg m-2]
 
         ! Diagnostics, filled by snow_diagnostics (WP10)
         real(wp), allocatable :: thickness(:)      ! (ncol) [m]
@@ -330,6 +335,8 @@ contains
 
         allocate(bsi%now%t_srf(ncol))
         allocate(bsi%now%albedo(ncol))
+        allocate(bsi%now%w_snow_old(ncol))
+        allocate(bsi%now%w_snow_max(ncol))
 
         allocate(bsi%now%thickness(ncol))
         allocate(bsi%now%wet_mass(ncol))
@@ -363,6 +370,8 @@ contains
 
         if (allocated(bsi%now%t_srf))  deallocate(bsi%now%t_srf)
         if (allocated(bsi%now%albedo)) deallocate(bsi%now%albedo)
+        if (allocated(bsi%now%w_snow_old)) deallocate(bsi%now%w_snow_old)
+        if (allocated(bsi%now%w_snow_max)) deallocate(bsi%now%w_snow_max)
 
         if (allocated(bsi%now%thickness))    deallocate(bsi%now%thickness)
         if (allocated(bsi%now%wet_mass))     deallocate(bsi%now%wet_mass)
@@ -414,6 +423,8 @@ contains
 
         bsi%now%t_srf  = c%T0
         bsi%now%albedo = c%alpha_dry
+        bsi%now%w_snow_old = 0.0_wp
+        bsi%now%w_snow_max = 0.0_wp
 
         bsi%now%thickness    = 0.0_wp
         bsi%now%wet_mass     = 0.0_wp
@@ -471,6 +482,8 @@ contains
 
             bsi%now%t_srf(icol)  = c%T0
             bsi%now%albedo(icol) = c%alpha_dry
+            bsi%now%w_snow_old(icol) = 0.0_wp
+            bsi%now%w_snow_max(icol) = 0.0_wp
 
         end do
 
@@ -521,6 +534,9 @@ contains
         ! replaces Chion.jl's persistent workspace.liquid_water_before_energy.
         real(wp) :: mass_w_before_energy(bsi%par%Ntot)
 
+        ! SEMIX albedo scratch (column SWE and dust concentration).
+        real(wp) :: w_snow, dust_con
+
         if (icol .lt. 1 .or. icol .gt. bsi%now%ncol) then
             write(io_unit_err,*) "bessi_column_step_core:: Error: column index out of range."
             write(io_unit_err,*) "icol, ncol = ", icol, bsi%now%ncol
@@ -542,6 +558,8 @@ contains
                   lhf_sum     => bsi%now%latent_heat_flux_sum(icol),&
                   t_srf       => bsi%now%t_srf(icol),               &
                   albedo      => bsi%now%albedo(icol),              &
+                  w_snow_old  => bsi%now%w_snow_old(icol),          &
+                  w_snow_max  => bsi%now%w_snow_max(icol),          &
                   par         => bsi%par)
 
         ! === Step 1: setup ===================================================
@@ -626,9 +644,21 @@ contains
         if (use_prescribed_albedo) then
             albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
         else if (c%albedo_scheme .eq. CHION_ALBEDO_SEMIX) then
-            ! Grain aging from the surface-layer temperature; no dust yet
-            ! (dust-in-snow darkening is added in the following commit).
-            call semix_surface_albedo(forc,c,temperature(1),0.0_wp,albedo)
+            ! Column SWE and its seasonal peak drive the dust melt-amplification:
+            ! meltwater scavenges little dust, so what remains concentrates as
+            ! the pack draws down from its peak. Tracked here, where the SEMIX
+            ! albedo is the only consumer, so the other schemes pay nothing.
+            w_snow = sum(mass(1:n)) + sum(mass_w(1:n))
+            if (w_snow .gt. w_snow_old) w_snow_max = w_snow
+
+            dust_con = 0.0_wp
+            if (forc%has_dust_dep) &
+                dust_con = semix_dust_concentration(forc%dust_dep,forc%snowfall_rate, &
+                                                    w_snow,w_snow_max,c)
+
+            call semix_surface_albedo(forc,c,temperature(1),dust_con,albedo)
+
+            w_snow_old = w_snow
         else
             call albedo_update(mass,mass_w,density,temperature,n,c,albedo)
         end if

@@ -141,6 +141,8 @@ contains
         fc%has_coszm = forc%has_coszm(icol)
         fc%cloud     = forc%cloud(icol)
         fc%has_cloud = forc%has_cloud(icol)
+        fc%dust_dep     = forc%dust_dep(icol)
+        fc%has_dust_dep = forc%has_dust_dep(icol)
 
         fc%latitude_deg        = forc%latitude_deg(icol)
         fc%day_of_year         = forc%day_of_year

@@ -771,6 +771,8 @@ contains
         call nml_read(filename,group,"dT_age",          c%dT_age)
         call nml_read(filename,group,"snow_0",          c%snow_0)
         call nml_read(filename,group,"snow_1",          c%snow_1)
+        call nml_read(filename,group,"w_snow_dust",     c%w_snow_dust)
+        call nml_read(filename,group,"dust_con_scale",  c%dust_con_scale)
 
         call nml_read(filename,group,"eps_air", c%eps_air)
         call nml_read(filename,group,"eps_snow",c%eps_snow)

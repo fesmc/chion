@@ -217,6 +217,8 @@ module chion_defs
         real(wp) :: dT_age             ! [K]  aging temperature offset
         real(wp) :: snow_0             ! [kg m-2 d-1] critical snowfall rate for aging
         real(wp) :: snow_1             ! [1]  snowfall-rate aging exponent
+        real(wp) :: w_snow_dust        ! [kg m-2] SWE melt that doubles dust concentration
+        real(wp) :: dust_con_scale     ! [1]  dust concentration scaling
 
         ! Radiation
         real(wp) :: eps_air            ! [1] emissivity of air
@@ -272,6 +274,8 @@ module chion_defs
         logical  :: has_coszm
         real(wp) :: cloud               ! [1] cloud fraction, [0,1]
         logical  :: has_cloud
+        real(wp) :: dust_dep            ! [kg m-2 s-1] dust deposition rate
+        logical  :: has_dust_dep
 
         real(wp) :: latitude_deg        ! [deg N]
         real(wp) :: day_of_year         ! [d] fractional, 1-based
@@ -315,6 +319,8 @@ module chion_defs
         logical,  allocatable :: has_coszm(:)
         real(wp), allocatable :: cloud(:)                ! [1] cloud fraction
         logical,  allocatable :: has_cloud(:)
+        real(wp), allocatable :: dust_dep(:)             ! [kg m-2 s-1] dust deposition
+        logical,  allocatable :: has_dust_dep(:)
 
         real(wp), allocatable :: latitude_deg(:)         ! [deg N]
 
@@ -464,6 +470,8 @@ contains
         c%dT_age           = 0.0_wp
         c%snow_0           = 1.0_wp
         c%snow_1           = 0.5_wp
+        c%w_snow_dust      = 10.0_wp
+        c%dust_con_scale   = 1.0_wp
 
         c%eps_air  = 0.80_wp
         c%eps_snow = 0.98_wp
@@ -558,6 +566,8 @@ contains
         allocate(forc%has_coszm(ncol))
         allocate(forc%cloud(ncol))
         allocate(forc%has_cloud(ncol))
+        allocate(forc%dust_dep(ncol))
+        allocate(forc%has_dust_dep(ncol))
 
         allocate(forc%latitude_deg(ncol))
 
@@ -592,6 +602,8 @@ contains
         forc%has_coszm = .FALSE.
         forc%cloud     = 0.0_wp
         forc%has_cloud = .FALSE.
+        forc%dust_dep     = 0.0_wp
+        forc%has_dust_dep = .FALSE.
 
         forc%latitude_deg = 0.0_wp
 
@@ -637,6 +649,8 @@ contains
         if (allocated(forc%has_coszm))             deallocate(forc%has_coszm)
         if (allocated(forc%cloud))                 deallocate(forc%cloud)
         if (allocated(forc%has_cloud))             deallocate(forc%has_cloud)
+        if (allocated(forc%dust_dep))              deallocate(forc%dust_dep)
+        if (allocated(forc%has_dust_dep))          deallocate(forc%has_dust_dep)
         if (allocated(forc%latitude_deg))          deallocate(forc%latitude_deg)
         if (allocated(forc%H_ice))                 deallocate(forc%H_ice)
         if (allocated(forc%PDDs))                  deallocate(forc%PDDs)

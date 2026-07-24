@@ -68,6 +68,8 @@
     dT_age                    = 0.0         ! [K]  Aging temperature offset
     snow_0                    = 1.0         ! [kg m-2 d-1] Critical snowfall rate for grain aging
     snow_1                    = 0.5         ! [1]  Snowfall-rate aging exponent
+    w_snow_dust               = 10.0        ! [kg m-2] SWE melt that doubles dust concentration
+    dust_con_scale            = 1.0         ! [1]  Dust concentration scaling
 
     ! ## Radiation ##
     eps_air                   = 0.80        ! [1] Emissivity of air
