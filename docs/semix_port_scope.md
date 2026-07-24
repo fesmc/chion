@@ -207,6 +207,26 @@ Two sub-options land with it: `semix_qsat` (`"semix"` = CLIMBER-X's `q_sat_i`,
 `"bessi"` = chion's ice vapour pressure through the same 0.622/p; they agree to
 0.1%), and `l_neutral`/`l_dew` carried over from `smb_par`.
 
+**Humidity forcing (`rh_default`).** No domain loader carries a humidity field,
+so `has_relative_humidity` was false everywhere and the turbulent latent flux
+was identically zero in every benchmark to date — under *both* schemes. The
+grid driver now has an `rh_default` knob (mirroring `wind_default`), off at
+zero. GRL-16KM, `Ntot=1`, all ice:
+
+| config | bias | RMSE | R² | melt | subl |
+|---|---|---|---|---|---|
+| `bessi`, rh off | −2.3 | 197 | 0.86 | 204 | 0.0 |
+| `bessi`, rh=0.7 | +0.5 | 219 | 0.83 | 167 | 47.0 |
+| `semix`, rh off | +7.0 | 204 | 0.85 | 197 | 0.0 |
+| `semix`, rh=0.7 | −9.7 | 222 | 0.82 | 168 | 54.2 |
+
+A uniform 0.7 is not a good humidity field — R² falls in both schemes — but the
+latent path is large (≈50 mm/yr sublimation, melt down by a fifth) and was
+previously untested end-to-end. Caveat: the two schemes read the same number
+differently, BESSI relative to saturation over **water** and SEMIX over **ice**,
+so varying `rh_default` across `seb_scheme` is not a controlled comparison of
+the turbulent exchange alone.
+
 **One asymmetry is deliberate.** SEMIX builds `f_lh` with the latent heat of
 sublimation at every temperature, so under `seb_scheme=semix` the post-solve
 vapour *mass* conversion uses `Lv+Lm` unconditionally, while the *reservoir*

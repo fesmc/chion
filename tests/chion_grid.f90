@@ -53,6 +53,7 @@ program chion_grid
     !       mask_threshold = 0.0           ! cells with mask > threshold -> column
     !       wind_default   = 5.0           ! [m s-1] no wind variable is read
     !       dust_dep_default = 0.0         ! [kg m-2 s-1] uniform dust deposition
+    !       rh_default     = 0.0           ! [1] uniform relative humidity, 0 = off
     !       dt_out         = 30.0          ! [d] output interval
     !
     !     ! --- forcing_source = "file" ---
@@ -91,6 +92,7 @@ program chion_grid
     character(len=56)  :: forcing_source
     real(wp) :: mask_threshold, wind_default, dt_out
     real(wp) :: dust_dep_default
+    real(wp) :: rh_default
 
     ! --- &ctrl : file source ----------------------------------------------
     character(len=512) :: file_forcing
@@ -150,6 +152,7 @@ program chion_grid
     call nml_read(path_par,"ctrl","mask_threshold", mask_threshold)
     call nml_read(path_par,"ctrl","wind_default",   wind_default)
     call nml_read(path_par,"ctrl","dust_dep_default", dust_dep_default)
+    call nml_read(path_par,"ctrl","rh_default",     rh_default)
     call nml_read(path_par,"ctrl","dt_out",         dt_out)
 
     is_domain = (trim(forcing_source) .eq. "domain")
@@ -326,6 +329,22 @@ program chion_grid
     ! Left flagged off at zero so the albedo skips the dust path entirely.
     chn%forc%dust_dep     = dust_dep_default
     chn%forc%has_dust_dep = (dust_dep_default .gt. 0.0_wp)
+
+    ! Uniform relative humidity. No domain loader carries a humidity field yet,
+    ! so without this knob has_relative_humidity is false everywhere and the
+    ! turbulent latent flux is identically zero -- under BOTH surface schemes.
+    ! That is the standing state of every GRL benchmark to date, and it is why
+    ! the seb_scheme comparison in docs/semix_port_scope.md is a
+    ! sensible-heat-only result.
+    !
+    ! Left flagged OFF at zero so existing par files are unaffected. Note the
+    ! two schemes read the same number differently: BESSI takes it relative to
+    ! saturation over WATER (energy_flux.jl:57-60), SEMIX over ICE
+    ! (semi.f90:201). Both are their own source's reading, so a run that varies
+    ! rh_default across seb_scheme is not a controlled comparison of the
+    ! turbulent exchange alone.
+    chn%forc%relative_humidity     = rh_default
+    chn%forc%has_relative_humidity = (rh_default .gt. 0.0_wp)
 
     ! =====================================================================
     ! Setup: per-source forcing buffers

@@ -44,6 +44,7 @@
     precip_in_mmwe_day  = .FALSE.           ! Convert SF/RF by /86400
     wind_default        = 5.0               ! [m s-1] used; no wind variable is read
     dust_dep_default    = 0.0              ! [kg m-2 s-1] Uniform dust deposition (SEMIX albedo)
+    rh_default          = 0.0              ! [1] Uniform relative humidity (0 = no humidity forcing)
 
     dt                  = -1.0              ! [d] <= 0 infers the step from the time axis
     dt_out              = 30.0              ! [d] Output interval
