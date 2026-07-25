@@ -92,6 +92,9 @@ module chion_io
 
     use chion_api,  only : chion_class, chion_get_smb
 
+    use chion_model, only : CHION_NFLUX, CHION_IMELT, CHION_IRUNOFF, &
+                            CHION_IREFRZ, CHION_ISUBL
+
     use snow_diagnostics, only : summarize_domain_state
 
     implicit none
@@ -684,6 +687,17 @@ contains
                       start=[1,1],units="kg m-2", &
                       long_name="Cumulative ice-facing mass flux at the start of the last step",grid_mapping="",ncid=ncid)
 
+        ! Same baseline for the surface-flux diagnostics (chion_get_surface_fluxes),
+        ! so those replay the last step after a restart exactly as smb does.
+        call nc_write(filename,"flux_cum_prev_melt",  chn%flux_cum_prev(CHION_IMELT,:),  dim1="column",dim2="time", &
+                      start=[1,1],units="kg m-2",long_name="Cumulative melt at the start of the last step",grid_mapping="",ncid=ncid)
+        call nc_write(filename,"flux_cum_prev_runoff",chn%flux_cum_prev(CHION_IRUNOFF,:),dim1="column",dim2="time", &
+                      start=[1,1],units="kg m-2",long_name="Cumulative runoff at the start of the last step",grid_mapping="",ncid=ncid)
+        call nc_write(filename,"flux_cum_prev_refrz", chn%flux_cum_prev(CHION_IREFRZ,:), dim1="column",dim2="time", &
+                      start=[1,1],units="kg m-2",long_name="Cumulative refreezing at the start of the last step",grid_mapping="",ncid=ncid)
+        call nc_write(filename,"flux_cum_prev_subl",  chn%flux_cum_prev(CHION_ISUBL,:),  dim1="column",dim2="time", &
+                      start=[1,1],units="kg m-2",long_name="Cumulative sublimation at the start of the last step",grid_mapping="",ncid=ncid)
+
         call nc_write(filename,"dt_last",chn%dt_last,dim1="time",start=[1],count=[1], &
                       units="days",long_name="Length of the last completed step",grid_mapping="",ncid=ncid)
 
@@ -864,6 +878,10 @@ contains
         active = (active_int .eq. 1)
 
         call nc_read(filename,"smb_cum_prev",chn%smb_cum_prev,start=[1,nt],count=[ncol,1],ncid=ncid)
+        call nc_read(filename,"flux_cum_prev_melt",  chn%flux_cum_prev(CHION_IMELT,:),  start=[1,nt],count=[ncol,1],ncid=ncid)
+        call nc_read(filename,"flux_cum_prev_runoff",chn%flux_cum_prev(CHION_IRUNOFF,:),start=[1,nt],count=[ncol,1],ncid=ncid)
+        call nc_read(filename,"flux_cum_prev_refrz", chn%flux_cum_prev(CHION_IREFRZ,:), start=[1,nt],count=[ncol,1],ncid=ncid)
+        call nc_read(filename,"flux_cum_prev_subl",  chn%flux_cum_prev(CHION_ISUBL,:),  start=[1,nt],count=[ncol,1],ncid=ncid)
         call nc_read(filename,"dt_last",chn%dt_last,start=[nt],count=[1],ncid=ncid)
 
         select case(trim(chn%par%model))

@@ -79,7 +79,10 @@ module chion_api
                             chion_model_alloc, chion_model_dealloc, &
                             chion_model_init_state, chion_model_reset_columns, &
                             chion_model_step, chion_model_smb_cum, &
-                            chion_model_surface, chion_model_summary_line
+                            chion_model_flux_cum, chion_model_surface, &
+                            chion_model_summary_line, &
+                            CHION_NFLUX, CHION_IMELT, CHION_IRUNOFF, &
+                            CHION_IREFRZ, CHION_ISUBL
 
     use snow_bessi, only : bessi_class, bessi_par_class, bessi_par_init, bessi_par_validate
     use snow_pdd,   only : pdd_class, pdd_par_class, pdd_par_init, pdd_par_validate, &
@@ -147,6 +150,13 @@ module chion_api
         ! accumulators exist to avoid (docs/porting_notes.md D1).
 
         real(wp_acc), allocatable :: smb_cum_prev(:)   ! (ncol) [kg m-2]
+
+        ! Same one-step-behind snapshot for the surface flux diagnostics
+        ! (melt, runoff, refreezing, sublimation), so chion_get_surface_fluxes
+        ! can hand back a per-step rate. Shape (CHION_NFLUX,ncol); fields a
+        ! model does not resolve are held at MV. See chion_model_flux_cum.
+        real(wp_acc), allocatable :: flux_cum_prev(:,:)  ! (CHION_NFLUX,ncol) [kg m-2]
+
         real(wp)                  :: dt_last           ! [d] length of the last step
     end type chion_class
 
@@ -167,6 +177,7 @@ module chion_api
     public :: chion_set_active_mask
     public :: chion_get_smb
     public :: chion_get_surface
+    public :: chion_get_surface_fluxes
     public :: chion_print_summary
 
     ! Parameter loading, exposed so a host or a test can load a group without
@@ -259,6 +270,11 @@ contains
         if (allocated(chn%smb_cum_prev)) deallocate(chn%smb_cum_prev)
         allocate(chn%smb_cum_prev(ncol))
         chn%smb_cum_prev = 0.0_wp_acc
+
+        if (allocated(chn%flux_cum_prev)) deallocate(chn%flux_cum_prev)
+        allocate(chn%flux_cum_prev(CHION_NFLUX,ncol))
+        chn%flux_cum_prev = 0.0_wp_acc
+
         chn%dt_last      = 0.0_wp
 
         call chion_print_summary(chn,n_threads)
@@ -295,6 +311,7 @@ contains
         ! so a chion_get_smb before the first chion_update reports zero rather
         ! than the whole initial accumulator.
         call chion_model_smb_cum(chn%par,chn%bsi,chn%pdd,chn%itm,chn%smb_cum_prev)
+        call chion_model_flux_cum(chn%par,chn%bsi,chn%pdd,chn%itm,chn%flux_cum_prev)
         chn%dt_last = 0.0_wp
 
         return
@@ -314,6 +331,7 @@ contains
         ! written during a run, which is what makes chion_get_smb mean "the
         ! step that just finished" and nothing else.
         call chion_model_smb_cum(chn%par,chn%bsi,chn%pdd,chn%itm,chn%smb_cum_prev)
+        call chion_model_flux_cum(chn%par,chn%bsi,chn%pdd,chn%itm,chn%flux_cum_prev)
 
         call chion_model_step(chn%par,chn%c,chn%grd,chn%forc, &
                               chn%bsi,chn%pdd,chn%itm,dt_days)
@@ -337,7 +355,8 @@ contains
         call chion_forcing_dealloc(chn%forc)
         call chion_grid_dealloc(chn%grd)
 
-        if (allocated(chn%smb_cum_prev)) deallocate(chn%smb_cum_prev)
+        if (allocated(chn%smb_cum_prev))  deallocate(chn%smb_cum_prev)
+        if (allocated(chn%flux_cum_prev)) deallocate(chn%flux_cum_prev)
         chn%dt_last = 0.0_wp
 
         return
@@ -440,8 +459,9 @@ contains
             ! Re-baseline the SMB snapshot for the reset columns. Without
             ! this, a chion_get_smb issued between chion_set_active_mask and
             ! the next chion_update would report the reset itself as a
-            ! gigantic mass flux.
+            ! gigantic mass flux. Same for the surface-flux snapshot.
             call chion_model_smb_cum(chn%par,chn%bsi,chn%pdd,chn%itm,chn%smb_cum_prev)
+            call chion_model_flux_cum(chn%par,chn%bsi,chn%pdd,chn%itm,chn%flux_cum_prev)
         end if
 
         deallocate(idx_off)
@@ -684,6 +704,111 @@ contains
         return
 
     end subroutine chion_get_surface
+
+    subroutine chion_get_surface_fluxes(chn,melt,runoff,refrz,subl)
+        ! ===================================================================
+        ! Surface flux diagnostics for the step chion_update just finished, as
+        ! per-column RATES [kg m-2 s-1] (== [mm w.e. s-1]):
+        !
+        !   melt    total melt (snow + ice)
+        !   runoff  runoff
+        !   refrz   refreezing
+        !   subl    sublimation (>= 0)
+        !
+        ! These are the surface (whole-column) budget terms, NOT the ice-facing
+        ! flux chion_get_smb returns. A host builds the surface mass balance --
+        ! the quantity MAR/RACMO report and the right target for validation --
+        ! from the precipitation it forced chion with:
+        !
+        !     smb_surface = snowfall + rainfall - runoff - subl
+        !
+        ! Unlike the ice-facing flux, this needs no firn equilibration: it is an
+        ! instantaneous surface budget, so a short atmosphere spin-up suffices.
+        !
+        ! Differenced against the one-step-behind snapshot flux_cum_prev, the
+        ! same way and for the same reason as chion_get_smb. A field the model
+        ! does not resolve (e.g. sublimation under ITM, everything but runoff
+        ! under PDD) is MV, as is every inactive column and every column before
+        ! the first chion_update. Optional arguments: request only what is
+        ! needed.
+        ! ===================================================================
+
+        implicit none
+
+        type(chion_class),  intent(IN)  :: chn
+        real(wp), optional, intent(OUT) :: melt(:)
+        real(wp), optional, intent(OUT) :: runoff(:)
+        real(wp), optional, intent(OUT) :: refrz(:)
+        real(wp), optional, intent(OUT) :: subl(:)
+
+        integer :: i, icol, ncol
+        real(wp_acc), allocatable :: flux_cum(:,:)
+        real(wp_acc) :: dt
+
+        ncol = chn%grd%ncol
+        call check_flux_arg("melt",  melt,  ncol)
+        call check_flux_arg("runoff",runoff,ncol)
+        call check_flux_arg("refrz", refrz, ncol)
+        call check_flux_arg("subl",  subl,  ncol)
+
+        if (present(melt))   melt   = MV
+        if (present(runoff)) runoff = MV
+        if (present(refrz))  refrz  = MV
+        if (present(subl))   subl   = MV
+
+        if (chn%dt_last .le. 0.0_wp) return
+
+        allocate(flux_cum(CHION_NFLUX,ncol))
+        call chion_model_flux_cum(chn%par,chn%bsi,chn%pdd,chn%itm,flux_cum)
+
+        dt = real(chn%dt_last,wp_acc)*real(chn%c%seconds_per_day,wp_acc)
+
+        do i = 1, chn%grd%n_active
+            icol = chn%grd%active_idx(i)
+            if (present(melt))   call flux_rate(flux_cum,chn%flux_cum_prev,CHION_IMELT,  icol,dt,melt(icol))
+            if (present(runoff)) call flux_rate(flux_cum,chn%flux_cum_prev,CHION_IRUNOFF,icol,dt,runoff(icol))
+            if (present(refrz))  call flux_rate(flux_cum,chn%flux_cum_prev,CHION_IREFRZ, icol,dt,refrz(icol))
+            if (present(subl))   call flux_rate(flux_cum,chn%flux_cum_prev,CHION_ISUBL,  icol,dt,subl(icol))
+        end do
+
+        deallocate(flux_cum)
+
+        return
+
+    end subroutine chion_get_surface_fluxes
+
+    subroutine flux_rate(cum,prev,islot,icol,dt,out)
+        ! Difference one packed flux slot into a rate, propagating the MV
+        ! sentinel: a field the model does not resolve stays MV rather than
+        ! becoming a spurious zero.
+        implicit none
+        real(wp_acc), intent(IN)  :: cum(:,:), prev(:,:)
+        integer,      intent(IN)  :: islot, icol
+        real(wp_acc), intent(IN)  :: dt
+        real(wp),     intent(OUT) :: out
+        if (cum(islot,icol) .eq. real(MV,wp_acc)) then
+            out = MV
+        else
+            out = real((cum(islot,icol) - prev(islot,icol))/dt, wp)
+        end if
+        return
+    end subroutine flux_rate
+
+    subroutine check_flux_arg(name,arr,ncol)
+        ! Length guard for the optional chion_get_surface_fluxes outputs.
+        implicit none
+        character(len=*),   intent(IN) :: name
+        real(wp), optional, intent(IN) :: arr(:)
+        integer,            intent(IN) :: ncol
+        if (present(arr)) then
+            if (size(arr) .ne. ncol) then
+                write(io_unit_err,*) "chion_get_surface_fluxes:: Error: "//trim(name)//" must have length ncol."
+                write(io_unit_err,*) "ncol, size = ", ncol, size(arr)
+                stop "Program stopped."
+            end if
+        end if
+        return
+    end subroutine check_flux_arg
 
     subroutine chion_print_summary(chn,n_threads)
         ! One block of provenance for the run log: which model, how it is

@@ -80,6 +80,14 @@ module chion_model
     ! disagree.
     character(len=*), parameter, public :: CHION_MODEL_CHOICES = "bessi|pdd|itm"
 
+    ! Surface flux diagnostics packed by chion_model_flux_cum, in this order.
+    ! One place, so the accessor and every model map onto the same slots.
+    integer, parameter, public :: CHION_NFLUX  = 4
+    integer, parameter, public :: CHION_IMELT  = 1   ! total melt (snow + ice)
+    integer, parameter, public :: CHION_IRUNOFF= 2   ! runoff
+    integer, parameter, public :: CHION_IREFRZ = 3   ! refreezing
+    integer, parameter, public :: CHION_ISUBL  = 4   ! sublimation (>= 0)
+
     public :: chion_pack_step_forcing
     public :: chion_model_alloc
     public :: chion_model_dealloc
@@ -87,6 +95,7 @@ module chion_model
     public :: chion_model_reset_columns
     public :: chion_model_step
     public :: chion_model_smb_cum
+    public :: chion_model_flux_cum
     public :: chion_model_surface
     public :: chion_model_summary_line
 
@@ -487,6 +496,69 @@ contains
         return
 
     end subroutine chion_model_smb_cum
+
+    subroutine chion_model_flux_cum(par,bsi,pdd,itm,flux_cum)
+        ! Cumulative surface flux diagnostics per column, since the last cold
+        ! start or column reset: melt, runoff, refreezing, sublimation, packed
+        ! (CHION_NFLUX,ncol) in the CHION_I* slot order. Units [kg m-2]
+        ! (== [mm w.e.]), all >= 0 in the sign each model stores them. This is
+        ! the raw material chion_get_surface_fluxes differences into rates, and
+        ! from which a host builds the whole-column surface mass balance
+        ! (accumulation - runoff - sublimation), the MAR-comparable quantity
+        ! that chion_get_smb -- ice-facing by design -- does not provide.
+        !
+        ! A field a model does not resolve is set to MV, and stays MV through
+        ! the differencing, so a host sees "not supplied" rather than a zero it
+        ! could mistake for "no flux".
+        !
+        !   BESSI  all four (melt, runoff, refreezing, sublimation).
+        !   ITM    melt, runoff, refreezing; no sublimation (MV).
+        !   PDD    runoff only; no melt / refreezing / sublimation (MV).
+
+        implicit none
+
+        type(chion_param_class), intent(IN)  :: par
+        type(bessi_class),       intent(IN)  :: bsi
+        type(pdd_class),         intent(IN)  :: pdd
+        type(itm_class),         intent(IN)  :: itm
+        real(wp_acc),            intent(OUT) :: flux_cum(:,:)
+
+        integer :: ncol
+
+        ncol = size(flux_cum,2)
+        if (size(flux_cum,1) .ne. CHION_NFLUX) call chion_size_error(size(flux_cum,1),CHION_NFLUX)
+
+        flux_cum = real(MV,wp_acc)
+
+        select case(trim(par%model))
+
+            case("bessi")
+                if (ncol .ne. bsi%now%ncol) call chion_size_error(ncol,bsi%now%ncol)
+                flux_cum(CHION_IMELT,:)   = bsi%now%melt
+                flux_cum(CHION_IRUNOFF,:) = bsi%now%runoff
+                flux_cum(CHION_IREFRZ,:)  = bsi%now%refreezing
+                flux_cum(CHION_ISUBL,:)   = bsi%now%sublimation
+
+            case("itm")
+                if (ncol .ne. itm%now%ncol) call chion_size_error(ncol,itm%now%ncol)
+                flux_cum(CHION_IMELT,:)   = itm%now%melt_cum
+                flux_cum(CHION_IRUNOFF,:) = itm%now%runoff_cum
+                flux_cum(CHION_IREFRZ,:)  = itm%now%refrz_cum
+                ! sublimation: MV (ITM has no vapour pathway)
+
+            case("pdd")
+                if (ncol .ne. pdd%now%ncol) call chion_size_error(ncol,pdd%now%ncol)
+                flux_cum(CHION_IRUNOFF,:) = pdd%now%runoff
+                ! melt / refreezing / sublimation: MV
+
+            case DEFAULT
+                call chion_model_error("chion_model_flux_cum",par%model)
+
+        end select
+
+        return
+
+    end subroutine chion_model_flux_cum
 
     subroutine chion_model_surface(par,bsi,pdd,itm,t_srf,albedo)
         ! Per-column surface skin temperature [K] and surface (all-sky broadband)
