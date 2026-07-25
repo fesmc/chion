@@ -60,7 +60,7 @@ module chion_api
 
     use nml, only : nml_read, nml_validate
 
-    use chion_defs, only : wp, wp_acc, io_unit_err, &
+    use chion_defs, only : wp, wp_acc, io_unit_err, MV, &
                            chion_const_class, chion_param_class, &
                            chion_grid_class, chion_forcing_class, &
                            chion_const_init, chion_const_print, &
@@ -79,7 +79,7 @@ module chion_api
                             chion_model_alloc, chion_model_dealloc, &
                             chion_model_init_state, chion_model_reset_columns, &
                             chion_model_step, chion_model_smb_cum, &
-                            chion_model_summary_line
+                            chion_model_surface, chion_model_summary_line
 
     use snow_bessi, only : bessi_class, bessi_par_class, bessi_par_init, bessi_par_validate
     use snow_pdd,   only : pdd_class, pdd_par_class, pdd_par_init, pdd_par_validate, &
@@ -166,6 +166,7 @@ module chion_api
     public :: chion_set_grid
     public :: chion_set_active_mask
     public :: chion_get_smb
+    public :: chion_get_surface
     public :: chion_print_summary
 
     ! Parameter loading, exposed so a host or a test can load a group without
@@ -630,6 +631,59 @@ contains
         return
 
     end subroutine chion_get_smb
+
+    subroutine chion_get_surface(chn,t_srf,albedo)
+        ! ===================================================================
+        ! Model-agnostic surface-boundary accessor.
+        !
+        !   t_srf   surface skin temperature  [K]
+        !   albedo  surface broadband albedo  [1]
+        !
+        ! The two fields an atmosphere needs to close its radiation over the
+        ! surface: OLR / longwave from t_srf, planetary albedo from albedo.
+        ! Both are instantaneous diagnostics of the surface state as of the
+        ! last chion_update (not step-averaged, unlike chion_get_smb).
+        !
+        ! Inactive columns, and every column when the model exposes no such
+        ! field (PDD), return MV. A caller must treat MV as "not supplied" and
+        ! fall back to its own value -- the same contract PDD already imposes
+        ! on the melt physics it does not resolve.
+        ! ===================================================================
+
+        implicit none
+
+        type(chion_class), intent(IN)  :: chn
+        real(wp),          intent(OUT) :: t_srf(:)
+        real(wp),          intent(OUT) :: albedo(:)
+
+        integer :: i, icol
+        real(wp), allocatable :: t_all(:), alb_all(:)
+
+        if (size(t_srf) .ne. chn%grd%ncol .or. size(albedo) .ne. chn%grd%ncol) then
+            write(io_unit_err,*) "chion_get_surface:: Error: t_srf/albedo must have length ncol."
+            write(io_unit_err,*) "ncol, size(t_srf), size(albedo) = ", &
+                                 chn%grd%ncol, size(t_srf), size(albedo)
+            stop "Program stopped."
+        end if
+
+        t_srf  = MV
+        albedo = MV
+
+        allocate(t_all(chn%grd%ncol), alb_all(chn%grd%ncol))
+        call chion_model_surface(chn%par,chn%bsi,chn%pdd,chn%itm,t_all,alb_all)
+
+        ! Only active columns; an inactive column keeps MV.
+        do i = 1, chn%grd%n_active
+            icol = chn%grd%active_idx(i)
+            t_srf(icol)  = t_all(icol)
+            albedo(icol) = alb_all(icol)
+        end do
+
+        deallocate(t_all,alb_all)
+
+        return
+
+    end subroutine chion_get_surface
 
     subroutine chion_print_summary(chn,n_threads)
         ! One block of provenance for the run log: which model, how it is

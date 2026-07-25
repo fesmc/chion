@@ -57,7 +57,7 @@ module chion_model
     ! default(shared) is stated explicitly rather than relied upon, so that a
     ! newly added local cannot silently become shared.
 
-    use chion_defs, only : wp, wp_acc, io_unit_err, &
+    use chion_defs, only : wp, wp_acc, io_unit_err, MV, &
                            chion_const_class, chion_param_class, &
                            chion_grid_class, chion_forcing_class, &
                            chion_step_forcing_class
@@ -87,6 +87,7 @@ module chion_model
     public :: chion_model_reset_columns
     public :: chion_model_step
     public :: chion_model_smb_cum
+    public :: chion_model_surface
     public :: chion_model_summary_line
 
 contains
@@ -486,6 +487,56 @@ contains
         return
 
     end subroutine chion_model_smb_cum
+
+    subroutine chion_model_surface(par,bsi,pdd,itm,t_srf,albedo)
+        ! Per-column surface skin temperature [K] and surface (all-sky broadband)
+        ! albedo [1], as the selected model holds them at the end of the last
+        ! chion_model_step. These are the two surface-boundary fields an
+        ! atmosphere needs to close its radiation (OLR from t_srf, planetary
+        ! albedo from albedo); they are diagnostics of the surface state, not
+        ! mass fluxes, so they are read directly rather than differenced.
+        !
+        ! BESSI -- t_srf, albedo used unchanged (bsi%now%t_srf / %albedo).
+        ! ITM   -- tsrf, alb_s used unchanged (itm%now%tsrf / %alb_s).
+        ! PDD   -- a bulk degree-day model with no surface energy balance and no
+        !          albedo (see snow_pdd.f90 header). It has neither field, so
+        !          both are returned as MV: a host coupling to PDD must supply
+        !          its own surface albedo / temperature, exactly as it already
+        !          supplies the melt physics PDD lacks.
+
+        implicit none
+
+        type(chion_param_class), intent(IN)  :: par
+        type(bessi_class),       intent(IN)  :: bsi
+        type(pdd_class),         intent(IN)  :: pdd
+        type(itm_class),         intent(IN)  :: itm
+        real(wp),                intent(OUT) :: t_srf(:)
+        real(wp),                intent(OUT) :: albedo(:)
+
+        select case(trim(par%model))
+
+            case("bessi")
+                if (size(t_srf) .ne. bsi%now%ncol) call chion_size_error(size(t_srf),bsi%now%ncol)
+                t_srf  = bsi%now%t_srf
+                albedo = bsi%now%albedo
+
+            case("itm")
+                if (size(t_srf) .ne. itm%now%ncol) call chion_size_error(size(t_srf),itm%now%ncol)
+                t_srf  = itm%now%tsrf
+                albedo = itm%now%alb_s
+
+            case("pdd")
+                t_srf  = MV
+                albedo = MV
+
+            case DEFAULT
+                call chion_model_error("chion_model_surface",par%model)
+
+        end select
+
+        return
+
+    end subroutine chion_model_surface
 
     ! =====================================================================
     ! Provenance
