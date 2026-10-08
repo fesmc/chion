@@ -22,6 +22,8 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- `chion_get_surface`: outputs optional; parallel over active columns, no
+  full-array copies (cheap enough to call every step).
 - `chion_update` snapshots (for `chion_get_smb`/`chion_get_surface_fluxes`)
   only active columns, in parallel (`chion_model_cum_active`); was a serial
   copy over all columns every step.

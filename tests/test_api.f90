@@ -875,10 +875,11 @@ contains
         integer  :: gidx(2)
         real(wp) :: rate(2,4)
         real(wp_acc) :: tot0(2,4), tot1(2,4), rsum(4), dt_sec, denom
+        real(wp) :: ts(2,2), al(2,2)
         logical  :: ok_sum, ok_mv
         character(len=8) :: models(3)
 
-        write(*,"(a)") "--- 8. chion_get_surface_flux_totals: running total of the rates ---"
+        write(*,"(a)") "--- 8. chion_get_surface_flux_totals and chion_get_surface ---"
 
         models(1) = "bessi"
         models(2) = "pdd"
@@ -924,6 +925,16 @@ contains
 
             call check(trim(models(im))//": totals difference = sum(rate*dt)", ok_sum, nfail)
             call check(trim(models(im))//": MV for unresolved fields and inactive columns", ok_mv, nfail)
+
+            ! chion_get_surface: active column = model state, inactive = MV.
+            call chion_get_surface(chn,t_srf=ts(:,1),albedo=al(:,1))
+            call chion_model_surface(chn%par,chn%bsi,chn%pdd,chn%itm,ts(:,2),al(:,2))
+            call check(trim(models(im))//": chion_get_surface = model state (active), MV (inactive)", &
+                       ts(1,1) .eq. ts(1,2) .and. al(1,1) .eq. al(1,2) .and. &
+                       ts(2,1) .eq. MV .and. al(2,1) .eq. MV, nfail)
+            call chion_get_surface(chn,albedo=al(:,1))
+            call check(trim(models(im))//": chion_get_surface with one output omitted", &
+                       al(1,1) .eq. al(1,2), nfail)
 
             call chion_end(chn)
 

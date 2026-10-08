@@ -98,6 +98,7 @@ module chion_model
     public :: chion_model_flux_cum
     public :: chion_model_cum_active
     public :: chion_model_surface
+    public :: chion_model_surface_active
     public :: chion_model_summary_line
 
 contains
@@ -680,6 +681,62 @@ contains
         return
 
     end subroutine chion_model_surface
+
+    subroutine chion_model_surface_active(par,grd,bsi,pdd,itm,t_srf,albedo)
+        ! chion_model_surface for the ACTIVE columns only, parallel over
+        ! columns, writing straight into the caller's (ncol) arrays; other
+        ! columns are left untouched. Either output may be omitted. PDD
+        ! resolves neither field and writes MV.
+
+        implicit none
+
+        type(chion_param_class), intent(IN)    :: par
+        type(chion_grid_class),  intent(IN)    :: grd
+        type(bessi_class),       intent(IN)    :: bsi
+        type(pdd_class),         intent(IN)    :: pdd
+        type(itm_class),         intent(IN)    :: itm
+        real(wp), optional,      intent(INOUT) :: t_srf(:)
+        real(wp), optional,      intent(INOUT) :: albedo(:)
+
+        integer :: i, icol
+
+        select case(trim(par%model))
+
+            case("bessi")
+                !$omp parallel do default(shared) private(i,icol)
+                do i = 1, grd%n_active
+                    icol = grd%active_idx(i)
+                    if (present(t_srf))  t_srf(icol)  = bsi%now%t_srf(icol)
+                    if (present(albedo)) albedo(icol) = bsi%now%albedo(icol)
+                end do
+                !$omp end parallel do
+
+            case("itm")
+                !$omp parallel do default(shared) private(i,icol)
+                do i = 1, grd%n_active
+                    icol = grd%active_idx(i)
+                    if (present(t_srf))  t_srf(icol)  = itm%now%tsrf(icol)
+                    if (present(albedo)) albedo(icol) = itm%now%alb_s(icol)
+                end do
+                !$omp end parallel do
+
+            case("pdd")
+                !$omp parallel do default(shared) private(i,icol)
+                do i = 1, grd%n_active
+                    icol = grd%active_idx(i)
+                    if (present(t_srf))  t_srf(icol)  = MV
+                    if (present(albedo)) albedo(icol) = MV
+                end do
+                !$omp end parallel do
+
+            case DEFAULT
+                call chion_model_error("chion_model_surface_active",par%model)
+
+        end select
+
+        return
+
+    end subroutine chion_model_surface_active
 
     ! =====================================================================
     ! Provenance
