@@ -22,6 +22,12 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- Shared physical constants (`rho_i`, `rho_w`, `ci`, `cw`, `Lm`, `grav`, `T0`)
+  come from fesm-utils `phys_const_class`: `chion_init(..., cnst=)` takes the
+  host's record, otherwise chion loads `phys_const_file` (now the `phys_const`
+  schema, Chion.jl values). chion's own constants moved to `&chion_const` in
+  `input/chion_defaults.nml` (sparse overrides). `seconds_per_day` removed
+  (`phys_constants:sec_day`). Standalone output unchanged (D28).
 - `chion_get_surface`: outputs optional; parallel over active columns, no
   full-array copies (cheap enough to call every step).
 - `chion_update` snapshots (for `chion_get_smb`/`chion_get_surface_fluxes`)

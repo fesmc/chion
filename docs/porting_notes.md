@@ -422,6 +422,54 @@ remains a per-step value: `max(0,.)` and the `min(T0,.)` cap act per step, so it
 still differs from smbpal's annual-mean `tsrf` where either is active. `test_itm`'s reference
 scales the same way; `tsrf` stays bit-identical.
 
+### D28. Shared physical constants come from fesm-utils `phys_const_class`
+**What:** `chion_init(chn,filename,ncol,group,cnst)` takes an optional
+`phys_const_class` (fesm-utils `phys_constants`). `chion_const_from_phys` fills the seven
+shared fields of `chion_const_class` from it:
+
+| chion | `phys_const_class` |
+|---|---|
+| `rho_i` | `rho_ice` |
+| `rho_w` | `rho_w` |
+| `ci` | `cp_ice` |
+| `cw` | `cp_w` |
+| `Lm` | `L_ice` |
+| `grav` (SEMIX SEB) | `g` |
+| `T0` | `T0` |
+
+Without `cnst`, chion loads the record itself from `&chion:phys_const_file`, which is now in
+the `phys_const` schema (`input/chion_phys_const.nml`, all 12 primitives). chion's own
+constants and scheme flags moved to `&chion_const` in `input/chion_defaults.nml` (group name
+`&chion:nml_const`), read through the schema defaults, so a par file may override any subset.
+The `seconds_per_day` field is gone; the day length is the named convention
+`phys_constants:sec_day`. chion's field names stay those of Chion.jl.
+
+**Why:** a coupled host (yelmox) passes one constants record to every component. Before
+this, chion carried its own copy, so ice density, latent heat and heat capacity of water
+silently differed from the rest of the program.
+
+**Not shared, on purpose:** densification's `DENSIFY_GRAVITY` stays chion-internal (D25): it
+is part of the `legacy_chion` reference-reproduction switch. chion therefore still has two
+gravities, as before this change: 9.80665 in densification and `g` (9.81 in both shipped sets)
+in the SEMIX SEB. Universal constants with no
+`phys_const_class` counterpart (`Lv`, `cp_air`, `karman`, `R_dry`, `sigma_sb`, `Ki`) stay in
+`&chion_const`.
+
+**Impact:**
+- Standalone: none. `input/chion_phys_const.nml` keeps Chion.jl's values (`rho_ice = 917`,
+  `cp_w = 4181`, `L_ice = 3.34e5`), so validation against Chion.jl is unchanged.
+  `chion_column.x` output is identical to before for all three models (ncdump text).
+- Coupled with the fesm-utils / yelmox Earth set (`rho_ice = 910`, `cp_w = 4187`,
+  `L_ice = 3.335e5`), measured with `chion_column.x` (one column, 10 years, final values):
+  - ITM: melt +0.150%, which is exactly `3.34e5/3.335e5`. Only `L_ice` matters; `itm_c`/`itm_t`
+    were calibrated in smbpal at 3.35e5, so this stays well within their tuning uncertainty
+    (cf. D26).
+  - PDD: no change (uses only `T0`).
+  - BESSI: melt +0.17%, runoff +0.48%, refreezing −0.38%, `smb_ice` −0.78%, liquid water
+    −1.4%. By constant: `L_ice` gives melt +0.17% and `smb_ice` −0.77%; `rho_ice` gives
+    runoff +0.22%, refreezing −0.31% and liquid water −1.9% (smaller pore space); `cp_w` is
+    negligible (<0.01%).
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was
