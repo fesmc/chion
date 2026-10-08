@@ -53,8 +53,8 @@ module chion_api
     ! bessi_par_load and pdd_par_load live in THIS module rather than in
     ! snow_bessi.f90 / snow_pdd.f90, where they belong, because WP11/WP13 may
     ! not modify the physics modules. itm_par_load already exists in
-    ! snow_itm.f90 and is used from there, not duplicated -- see
-    ! chion_itm_par_load below for the one wrinkle that causes.
+    ! snow_itm.f90 and is used from there, not duplicated (chion_itm_par_load
+    ! below passes it the schema as defaults).
 
     !$ use omp_lib
 
@@ -1094,29 +1094,9 @@ contains
     end subroutine pdd_par_load
 
     subroutine chion_itm_par_load(par,filename,group)
-        ! The &itm block, via snow_itm.f90's own itm_par_load. That routine is
-        ! NOT duplicated here (WP12 owns it); this is a two-call wrapper.
-        !
-        ! LIMITATION, and the reason a wrapper is needed at all:
-        ! itm_par_load predates the defaults_file mechanism and passes only
-        ! (filename,group) to nml_read. On that legacy path nml's
-        ! ERROR_NO_PARAM makes any parameter missing from `filename` a hard
-        ! error, so itm_par_load cannot be pointed at a sparse user file.
-        !
-        ! The wrapper therefore:
-        !   1. loads the complete baseline from the defaults file, which is
-        !      guaranteed complete and which doubles as the "every parameter
-        !      appears in the schema" check for the &itm group;
-        !   2. overlays the user file ONLY IF it declares the group -- in
-        !      which case that group must be COMPLETE.
-        !
-        ! nml_validate still runs against the schema, so an unknown &itm
-        ! parameter is caught either way.
-        !
-        ! The proper fix is to give itm_par_load an optional defaults_file
-        ! argument, exactly as bessi_par_load and pdd_par_load have; that is a
-        ! one-line-per-parameter change to snow_itm.f90 and is reported as a
-        ! follow-up rather than made here.
+        ! The &itm block, via snow_itm.f90's own itm_par_load (WP12 owns it),
+        ! with the schema as defaults: the user's group may be sparse or
+        ! absent, exactly as for bessi_par_load and pdd_par_load.
 
         implicit none
 
@@ -1124,72 +1104,13 @@ contains
         character(len=*),    intent(IN)    :: filename
         character(len=*),    intent(IN)    :: group        ! usually "itm"
 
-        call itm_par_load(par,def_file,init=.TRUE.,group=def_itm)
+        call nml_validate(filename,def_file,group,defaults_group=def_itm)
 
-        if (chion_nml_has_group(filename,group)) then
-            call nml_validate(filename,def_file,group,defaults_group=def_itm)
-            call itm_par_load(par,filename,group=group)
-        end if
+        call itm_par_load(par,filename,init=.TRUE.,group=group, &
+                          defaults_file=def_file,defaults_group=def_itm)
 
         return
 
     end subroutine chion_itm_par_load
-
-    function chion_nml_has_group(filename,group) result(found)
-        ! Does `filename` declare namelist group `group`?
-        !
-        ! Recognises both formats nml supports (nml.f90:170):
-        !   classic   a line whose first non-blank character is & followed by
-        !             the group name;
-        !   flat      a line containing "group." before the first '='.
-        !
-        ! Used only by chion_itm_par_load, to decide whether an overlay read
-        ! is possible at all. Deliberately simple: a false positive costs a
-        ! clear "parameter not found" error from nml, not a wrong answer.
-
-        implicit none
-
-        character(len=*), intent(IN) :: filename
-        character(len=*), intent(IN) :: group
-        logical :: found
-
-        ! Local variables
-        integer             :: io, iostat, ieq, idot
-        character(len=1000) :: line
-        character(len=1000) :: work
-
-        found = .FALSE.
-
-        open(newunit=io,file=trim(filename),status="old",action="read",iostat=iostat)
-        if (iostat .ne. 0) return
-
-        do
-            read(io,"(a1000)",iostat=iostat) line
-            if (iostat .ne. 0) exit
-
-            work = adjustl(line)
-
-            if (work(1:1) .eq. "&") then
-                if (trim(adjustl(work(2:))) .eq. trim(group)) then
-                    found = .TRUE.
-                    exit
-                end if
-            else
-                ieq = index(work,"=")
-                if (ieq .gt. 1) then
-                    idot = index(work(1:ieq-1),trim(group)//".")
-                    if (idot .eq. 1) then
-                        found = .TRUE.
-                        exit
-                    end if
-                end if
-            end if
-        end do
-
-        close(io)
-
-        return
-
-    end function chion_nml_has_group
 
 end module chion_api

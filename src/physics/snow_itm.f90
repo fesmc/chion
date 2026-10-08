@@ -196,9 +196,14 @@ module snow_itm
 
 contains
 
-    subroutine itm_par_load(par,filename,init,group)
+    subroutine itm_par_load(par,filename,init,group,defaults_file,defaults_group)
         ! smbpal itm_par_load (smb_itm.f90:35-77), one nml_read per
         ! parameter, plus firn_fac.
+        !
+        ! defaults_file / defaults_group are passed through to nml_read: a
+        ! parameter missing from `filename` then comes from the schema, so the
+        ! user's group may be sparse (as for bessi_par_load / pdd_par_load).
+        ! Without them every parameter must be in `filename`.
 
         implicit none
 
@@ -206,6 +211,8 @@ contains
         character(len=*),           intent(IN)    :: filename
         logical,          optional, intent(IN)    :: init
         character(len=*), optional, intent(IN)    :: group
+        character(len=*), optional, intent(IN)    :: defaults_file
+        character(len=*), optional, intent(IN)    :: defaults_group
 
         ! Local variables
         logical            :: init_pars
@@ -217,25 +224,44 @@ contains
         init_pars = .FALSE.
         if (present(init)) init_pars = init
 
-        call nml_read(filename,nml_group,"trans_a",           par%trans_a,           init=init_pars)
-        call nml_read(filename,nml_group,"trans_b",           par%trans_b,           init=init_pars)
-        call nml_read(filename,nml_group,"trans_c",           par%trans_c,           init=init_pars)
-        call nml_read(filename,nml_group,"itm_c",             par%itm_c,             init=init_pars)
-        call nml_read(filename,nml_group,"itm_t",             par%itm_t,             init=init_pars)
-        call nml_read(filename,nml_group,"itm_b",             par%itm_b,             init=init_pars)
-        call nml_read(filename,nml_group,"itm_lat0",          par%itm_lat0,          init=init_pars)
-        call nml_read(filename,nml_group,"H_snow_max",        par%H_snow_max,        init=init_pars)
-        call nml_read(filename,nml_group,"Pmaxfrac",          par%Pmaxfrac,          init=init_pars)
-        call nml_read(filename,nml_group,"H_snow_crit_desert",par%H_snow_crit_desert,init=init_pars)
-        call nml_read(filename,nml_group,"H_snow_crit_forest",par%H_snow_crit_forest,init=init_pars)
-        call nml_read(filename,nml_group,"melt_crit",         par%melt_crit,         init=init_pars)
-        call nml_read(filename,nml_group,"alb_ocean",         par%alb_ocean,         init=init_pars)
-        call nml_read(filename,nml_group,"alb_land",          par%alb_land,          init=init_pars)
-        call nml_read(filename,nml_group,"alb_forest",        par%alb_forest,        init=init_pars)
-        call nml_read(filename,nml_group,"alb_ice",           par%alb_ice,           init=init_pars)
-        call nml_read(filename,nml_group,"alb_snow_dry",      par%alb_snow_dry,      init=init_pars)
-        call nml_read(filename,nml_group,"alb_snow_wet",      par%alb_snow_wet,      init=init_pars)
-        call nml_read(filename,nml_group,"firn_fac",          par%firn_fac,          init=init_pars)
+        call nml_read(filename,nml_group,"trans_a",           par%trans_a,           init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"trans_b",           par%trans_b,           init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"trans_c",           par%trans_c,           init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"itm_c",             par%itm_c,             init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"itm_t",             par%itm_t,             init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"itm_b",             par%itm_b,             init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"itm_lat0",          par%itm_lat0,          init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"H_snow_max",        par%H_snow_max,        init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"Pmaxfrac",          par%Pmaxfrac,          init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"H_snow_crit_desert",par%H_snow_crit_desert,init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"H_snow_crit_forest",par%H_snow_crit_forest,init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"melt_crit",         par%melt_crit,         init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"alb_ocean",         par%alb_ocean,         init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"alb_land",          par%alb_land,          init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"alb_forest",        par%alb_forest,        init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"alb_ice",           par%alb_ice,           init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"alb_snow_dry",      par%alb_snow_dry,      init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"alb_snow_wet",      par%alb_snow_wet,      init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
+        call nml_read(filename,nml_group,"firn_fac",          par%firn_fac,          init=init_pars, &
+                      defaults_file=defaults_file,defaults_group=defaults_group)
 
         return
 

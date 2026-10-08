@@ -101,10 +101,8 @@ contains
         ! Write a namelist whose every value differs from the default, load it
         ! back through each *_par_load, and check that every value arrived.
         !
-        ! The &chion, &bessi and &pdd groups are written SPARSE on purpose,
-        ! omitting some parameters, to prove the defaults overlay works. The
-        ! &itm group is written complete, because itm_par_load predates the
-        ! defaults mechanism (see chion_itm_par_load).
+        ! The &chion, &bessi, &pdd and &itm groups are written SPARSE on
+        ! purpose, omitting some parameters, to prove the defaults overlay works.
 
         implicit none
 
@@ -140,7 +138,8 @@ contains
         write(io,"(a)") "    pdd_method = 'simple'"
         write(io,"(a)") "/"
         write(io,"(a)") "&itm"
-        call write_full_itm_group(io)
+        write(io,"(a)") "    itm_c              = -55.0"
+        write(io,"(a)") "    alb_ice            = 0.7"
         write(io,"(a)") "/"
         close(io)
 
@@ -224,8 +223,11 @@ contains
         ! --- &itm -----------------------------------------------------
         call chion_itm_par_load(ipar,PAR_TMP,"itm")
 
+        ! Set in the sparse user group:
+        call check_val("itm: itm_c",      ipar%itm_c,     -55.0_wp,    nfail)
+        call check_val("itm: alb_ice",    ipar%alb_ice,     0.7_wp,    nfail)
+        ! Absent from it, so from the schema:
         call check_val("itm: trans_a",    ipar%trans_a,     0.46_wp,   nfail)
-        call check_val("itm: itm_c",      ipar%itm_c,     -45.0_wp,    nfail)
         call check_val("itm: itm_t",      ipar%itm_t,      10.0_wp,    nfail)
         call check_val("itm: H_snow_max", ipar%H_snow_max,5000.0_wp,   nfail)
         call check_val("itm: alb_snow_dry",ipar%alb_snow_dry,0.8_wp,   nfail)
@@ -241,39 +243,6 @@ contains
         return
 
     end subroutine test_parameters
-
-    subroutine write_full_itm_group(io)
-        ! itm_par_load reads the legacy nml path, so a user &itm group must be
-        ! complete. Kept in one place so the test file does not drift from the
-        ! parameter set.
-
-        implicit none
-
-        integer, intent(IN) :: io
-
-        write(io,"(a)") "    trans_a            = 0.46"
-        write(io,"(a)") "    trans_b            = 6e-5"
-        write(io,"(a)") "    trans_c            = 0.01"
-        write(io,"(a)") "    itm_c              = -45.0"
-        write(io,"(a)") "    itm_t              = 10.0"
-        write(io,"(a)") "    itm_b              = -2.0"
-        write(io,"(a)") "    itm_lat0           = 65.0"
-        write(io,"(a)") "    H_snow_max         = 5000.0"
-        write(io,"(a)") "    Pmaxfrac           = 0.6"
-        write(io,"(a)") "    H_snow_crit_desert = 10.0"
-        write(io,"(a)") "    H_snow_crit_forest = 100.0"
-        write(io,"(a)") "    melt_crit          = 0.5"
-        write(io,"(a)") "    alb_ocean          = 0.1"
-        write(io,"(a)") "    alb_land           = 0.2"
-        write(io,"(a)") "    alb_forest         = 0.1"
-        write(io,"(a)") "    alb_ice            = 0.4"
-        write(io,"(a)") "    alb_snow_dry       = 0.8"
-        write(io,"(a)") "    alb_snow_wet       = 0.65"
-        write(io,"(a)") "    firn_fac           = 0.0266"
-
-        return
-
-    end subroutine write_full_itm_group
 
     ! =====================================================================
     ! 2. Enum rejection

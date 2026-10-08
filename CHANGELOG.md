@@ -8,6 +8,15 @@ All notable changes to chion are recorded here. Format follows
 the CLIMBER-X SEMIX surface-scheme port on top of it; the history before this
 tag is the port itself, summarised rather than enumerated.
 
+## [Unreleased]
+
+### Changed
+
+- `itm_par_load` takes optional `defaults_file`/`defaults_group`; `&itm` may now
+  be sparse or absent, like `&bessi` and `&pdd` (needed to share smbpal's `&itm`
+  group in yelmox).
+- Build: `libchion.a` is a file target; objects depend on `libfesmutils.a`.
+
 ## [v0.1.0] — 2026-07-24
 
 First tagged release: a complete Fortran port of Chion.jl, plus SEMIX's surface
