@@ -27,6 +27,7 @@ module snow_albedo_semix
     ! dust-in-snow darkening are shared by the two.
 
     use chion_defs, only : wp, chion_const_class, SEMIX_SNOW_ALBEDO_DANG
+    use phys_constants, only : sec_day
 
     implicit none
 
@@ -152,7 +153,7 @@ contains
         f_tage2 = exp(          min(0.0_wp, t_skin - (c%T0 - c%dT_age)))
         f_tage  = f_tage1 + f_tage2
 
-        snow_per_day = snowfall_rate*c%seconds_per_day
+        snow_per_day = snowfall_rate*real(sec_day,wp)
         f_p   = f_tage*(c%snow_0/max(1.0e-20_wp, snow_per_day))**c%snow_1
         f_age = 1.0_wp - log(1.0_wp + f_p)/f_p
 

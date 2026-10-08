@@ -66,6 +66,7 @@ module snow_bessi
                            CHION_DENSIFY_HTESSEL, &
                            chion_const_class, chion_step_forcing_class
 
+    use phys_constants,     only : sec_day
     use snow_column_utils,  only : surface_has_snow, column_has_liquid_water
 
     use snow_accumulation,  only : apply_accumulation
@@ -575,7 +576,7 @@ contains
         ! this step onto bare ground, and so should carry the air temperature
         ! rather than whatever temperature_init the slot was reset to.
 
-        dt_seconds = forc%dt_days*c%seconds_per_day
+        dt_seconds = forc%dt_days*real(sec_day,wp)
 
         started_without_surface_snow = .not. surface_has_snow(mass,n)
 

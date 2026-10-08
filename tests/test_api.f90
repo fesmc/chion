@@ -32,6 +32,7 @@ program test_api
 
     use nml,   only : nml_set_verbose
     use chion
+    use phys_constants, only : sec_day, phys_const_class, phys_const_load, phys_const_set
 
     implicit none
 
@@ -112,6 +113,7 @@ contains
         ! Local variables
         type(chion_param_class) :: par
         type(chion_const_class) :: c
+        type(phys_const_class)  :: cnst
         type(bessi_par_class)   :: bpar
         type(pdd_par_class)     :: ppar
         type(itm_par_class)     :: ipar
@@ -142,6 +144,10 @@ contains
         write(io,"(a)") "    itm_c              = -55.0"
         write(io,"(a)") "    alb_ice            = 0.7"
         write(io,"(a)") "/"
+        write(io,"(a)") "&chion_const"
+        write(io,"(a)") "    alpha_dry          = 0.85"
+        write(io,"(a)") "    seb_scheme         = 'semix'"
+        write(io,"(a)") "/"
         close(io)
 
         ! --- &chion ---------------------------------------------------
@@ -153,24 +159,54 @@ contains
         ! Omitted from the user file -> must come from the defaults schema.
         call check("chion: nml_pdd from defaults",    trim(par%nml_pdd) .eq. "pdd", nfail)
         call check("chion: nml_itm from defaults",    trim(par%nml_itm) .eq. "itm", nfail)
+        call check("chion: nml_const from defaults",  trim(par%nml_const) .eq. "chion_const", nfail)
         call check("chion: phys_const from defaults", trim(par%phys_const) .eq. "Earth", nfail)
         call check("chion: phys_const_file from defaults", &
                    trim(par%phys_const_file) .eq. "input/chion_phys_const.nml", nfail)
         call check("chion: nml_chion echoes the group", trim(par%nml_chion) .eq. "chion", nfail)
 
-        ! --- constants ------------------------------------------------
-        ! Reading this at all proves all 26 names are present in the &Earth
-        ! group: chion_const_load uses the legacy nml path, where a missing
-        ! parameter is a hard error.
+        ! --- &chion_const: chion's own, sparse over the schema ----------
+        ! The shared fields are poisoned first: chion_const_load must not
+        ! touch them, only chion_const_from_phys may.
         call chion_const_init(c)
-        call chion_const_load(c,par%phys_const_file,par%phys_const)
+        c%rho_i = -1.0_wp; c%rho_w = -1.0_wp; c%ci = -1.0_wp; c%cw = -1.0_wp
+        c%Lm    = -1.0_wp; c%grav  = -1.0_wp; c%T0 = -1.0_wp
+        call chion_const_load(c,PAR_TMP,par%nml_const,init=.TRUE.)
+
+        call check_val("const: alpha_dry overridden",c%alpha_dry,0.85_wp,nfail)
+        call check("const: seb_scheme overridden -> semix flag", &
+                   c%seb_scheme .eq. CHION_SEB_SEMIX, nfail)
+        call check_val("const: alpha_wet from defaults",c%alpha_wet,0.70_wp,nfail)
+        call check_val("const: sigma_sb from defaults",c%sigma_sb,5.670373e-8_wp,nfail)
+        call check("const: shared fields not read from &chion_const", &
+                   all([c%rho_i,c%rho_w,c%ci,c%cw,c%Lm,c%grav,c%T0] .eq. -1.0_wp), nfail)
+
+        ! --- shared: standalone file (Chion.jl values) ------------------
+        call phys_const_load(cnst,par%phys_const_file,group=par%phys_const)
+        call chion_const_from_phys(c,cnst)
 
         call check_val("const: rho_i",   c%rho_i,   917.0_wp,    nfail)
         call check_val("const: rho_w",   c%rho_w,   1000.0_wp,   nfail)
-        call check_val("const: T0",      c%T0,      273.15_wp,   nfail)
+        call check_val("const: ci",      c%ci,      2110.0_wp,   nfail)
+        call check_val("const: cw",      c%cw,      4181.0_wp,   nfail)
         call check_val("const: Lm",      c%Lm,      334000.0_wp, nfail)
-        call check_val("const: alpha_dry",c%alpha_dry,0.81_wp,   nfail)
-        call check_val("const: seconds_per_day",c%seconds_per_day,86400.0_wp,nfail)
+        call check_val("const: grav",    c%grav,    9.81_wp,     nfail)
+        call check_val("const: T0",      c%T0,      273.15_wp,   nfail)
+
+        ! --- shared: a host's record wins --------------------------------
+        call phys_const_set(cnst,label="host",source="test_api",g=9.80665_dp, &
+                            T0=273.16_dp,rho_ice=910.0_dp,rho_w=999.0_dp, &
+                            L_ice=333500.0_dp,cp_ice=2100.0_dp,cp_w=4187.0_dp)
+        call chion_const_from_phys(c,cnst)
+
+        call check_val("host: rho_i",    c%rho_i,   910.0_wp,    nfail)
+        call check_val("host: rho_w",    c%rho_w,   999.0_wp,    nfail)
+        call check_val("host: ci",       c%ci,      2100.0_wp,   nfail)
+        call check_val("host: cw",       c%cw,      4187.0_wp,   nfail)
+        call check_val("host: Lm",       c%Lm,      333500.0_wp, nfail)
+        call check_val("host: grav",     c%grav,    9.80665_wp,  nfail)
+        call check_val("host: T0",       c%T0,      273.16_wp,   nfail)
+
         call check("const: albedo_scheme -> dynamic flag", &
                    c%albedo_scheme .eq. CHION_ALBEDO_DYNAMIC, nfail)
         call check("const: fresh_snow_density_scheme -> constant flag", &
@@ -318,7 +354,8 @@ contains
         integer, intent(INOUT) :: nfail
 
         ! Local variables
-        type(chion_class) :: chn
+        type(chion_class)      :: chn
+        type(phys_const_class) :: cnst
         integer  :: im, n
         real(wp) :: smb(5)
         character(len=8) :: models(3)
@@ -373,6 +410,18 @@ contains
                        .not. allocated(chn%itm%now%H_snow), nfail)
 
         end do
+
+        ! A host's constants reach the model through chion_init, and the
+        ! standalone file is then not consulted (D28).
+        call phys_const_set(cnst,label="host",source="test_api",g=9.81_dp,T0=273.15_dp, &
+                            rho_ice=910.0_dp,rho_w=1000.0_dp,L_ice=333500.0_dp, &
+                            cp_ice=2110.0_dp,cp_w=4187.0_dp)
+        call write_model_par(PAR_TMP,"itm")
+        call chion_init(chn,PAR_TMP,5,cnst=cnst)
+        call check("host cnst reaches chion_init (Lm)",    chn%c%Lm    .eq. 333500.0_wp, nfail)
+        call check("host cnst reaches chion_init (rho_i)", chn%c%rho_i .eq. 910.0_wp,    nfail)
+        call check("host cnst reaches chion_init (cw)",    chn%c%cw    .eq. 4187.0_wp,   nfail)
+        call chion_end(chn)
 
         write(*,*)
 
@@ -792,7 +841,7 @@ contains
             if (trim(models(im)) .eq. "pdd") then
                 smb_floor = -4.0_wp*epsilon(1.0_wp) &
                             *max(abs(chn%pdd%now%snowpack_swe(1)),1.0_wp) &
-                            /real(DT_DAYS*chn%c%seconds_per_day,wp)
+                            /real(DT_DAYS*real(sec_day,wp),wp)
             end if
 
             call check(trim(models(im))//": accumulating forcing -> smb >= 0", &
@@ -819,7 +868,7 @@ contains
             if (trim(models(im)) .eq. "itm") chn%itm%now%H_snow = 0.0_wp
 
             smb_sum = 0.0_wp_acc
-            dt_sec  = real(DT_DAYS,wp_acc)*real(chn%c%seconds_per_day,wp_acc)
+            dt_sec  = real(DT_DAYS,wp_acc)*real(sec_day,wp_acc)
 
             do n = 1, NSTEP
                 call set_forcing(chn,gidx,n,"ablate")
@@ -898,7 +947,7 @@ contains
             call get_totals(chn,tot0)
 
             rsum   = 0.0_wp_acc
-            dt_sec = real(DT_DAYS,wp_acc)*real(chn%c%seconds_per_day,wp_acc)
+            dt_sec = real(DT_DAYS,wp_acc)*real(sec_day,wp_acc)
             do n = 1, NSTEP
                 call set_forcing(chn,gidx,n,"ablate")
                 call chion_update(chn,DT_DAYS)

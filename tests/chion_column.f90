@@ -65,6 +65,7 @@ program chion_column
     use chion
     use chion_io, only : chion_write_init, chion_write_step, chion_restart_write
     use nml,      only : nml_read
+    use phys_constants, only : sec_day
 
     implicit none
 
@@ -233,7 +234,7 @@ program chion_column
         ! the same reason the model accumulators are (docs/porting_notes.md D1).
         if (time .gt. time_end - YEAR_LENGTH) then
             smb_year = smb_year + real(smb(1),wp_acc)*real(dt,wp_acc) &
-                                  *real(chn%c%seconds_per_day,wp_acc)
+                                  *real(sec_day,wp_acc)
             n_year   = n_year + 1
         end if
 

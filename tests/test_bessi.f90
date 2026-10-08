@@ -76,6 +76,7 @@ program test_bessi
     use snow_column_utils,  only : total_snow_water_mass, surface_has_snow
     use snow_diurnal,       only : diurnal_substep_bounds
     use snow_bessi
+    use phys_constants, only : sec_day
 
     implicit none
 
@@ -241,7 +242,7 @@ contains
                 end if
                 if (.not. rain_would_land) forc%rainfall_rate = 0.0_wp
 
-                dt_seconds = forc%dt_days*c%seconds_per_day
+                dt_seconds = forc%dt_days*real(sec_day,wp)
 
                 precip = precip + real(forc%snowfall_rate*dt_seconds,wp_acc) &
                                 + real(forc%rainfall_rate*dt_seconds,wp_acc)
@@ -583,7 +584,7 @@ contains
         n_max  = 0
 
         do istep = 1, 400
-            precip = precip + real(forc%snowfall_rate*forc%dt_days*c%seconds_per_day,wp_acc)
+            precip = precip + real(forc%snowfall_rate*forc%dt_days*real(sec_day,wp),wp_acc)
             call bessi_column_step(bsi,1,forc,c)
             n_max = max(n_max,bsi%now%n_lay(1))
             if (bsi%now%n_lay(1) .gt. bsi%par%Ntot) exit
@@ -1002,7 +1003,7 @@ contains
                 end if
                 if (.not. rain_would_land) forc%rainfall_rate = 0.0_wp
 
-                dt_seconds = forc%dt_days*c%seconds_per_day
+                dt_seconds = forc%dt_days*real(sec_day,wp)
 
                 precip = precip + real(forc%snowfall_rate*dt_seconds,wp_acc) &
                                 + real(forc%rainfall_rate*dt_seconds,wp_acc)
@@ -1057,7 +1058,7 @@ contains
 
         precip = 0.0_wp_acc
         do istep = 1, 500
-            precip = precip + real(forc%snowfall_rate*forc%dt_days*c%seconds_per_day,wp_acc)
+            precip = precip + real(forc%snowfall_rate*forc%dt_days*real(sec_day,wp),wp_acc)
             call bessi_column_step(bsi,1,forc,c)
         end do
 

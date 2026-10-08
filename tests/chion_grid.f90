@@ -84,6 +84,7 @@ program chion_grid
     use chion_domain, only : chion_domain_class, chion_domain_load
     use ncio
     use nml, only : nml_read
+    use phys_constants, only : sec_day
 
     implicit none
 
@@ -520,7 +521,7 @@ program chion_grid
         ! Integrated over a year this is a mass in kg m-2 == mm w.e. yr-1.
         if (is_domain) then
             call chion_get_smb(chn,smb_step)
-            export_year = export_year + smb_step*chn%c%seconds_per_day*dt_use
+            export_year = export_year + smb_step*real(sec_day,wp)*dt_use
             doy = mod(it-1, nday_year) + 1
             if (doy .eq. nday_year) then
                 iyear    = it/nday_year

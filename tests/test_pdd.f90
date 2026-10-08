@@ -18,6 +18,7 @@ program test_pdd
                            chion_step_forcing_class, chion_const_init, &
                            chion_forcing_alloc, chion_forcing_dealloc
     use snow_pdd
+    use phys_constants, only : sec_day
 
     implicit none
 
@@ -512,7 +513,7 @@ contains
         forc%dt_days       = 1.0_wp
         forc%rainfall_rate = 0.0_wp
         ! 6 kg m-2 of snowfall in the step: 6/86400 kg m-2 s-1.
-        forc%snowfall_rate = 6.0_wp/real(c%seconds_per_day,wp)
+        forc%snowfall_rate = 6.0_wp/real(sec_day,wp)
 
         ! available_snow = 90 + 6 = 96; ddf_snow = 3, so 32 K d exhausts it.
 
@@ -554,7 +555,7 @@ contains
                          1.0e-12_wp_acc, nfail)
 
         ! (e) rainfall never touches the ice budget: it is pure runoff.
-        forc%rainfall_rate   = 20.0_wp/real(c%seconds_per_day,wp)
+        forc%rainfall_rate   = 20.0_wp/real(sec_day,wp)
         forc%air_temperature = c%T0 - 10.0_wp
         call run_one(swe0,swe,smb,runoff,pdd_sum,ice_melt,100.0_wp,forc,par,c)
         call check_close("rainfall goes entirely to runoff", runoff, &
@@ -675,7 +676,7 @@ contains
         ! below. At 10 kg m-2 d-1 the pack cannot survive at all now that
         ! refrozen mass leaves the reservoir (docs/porting_notes.md D23).
         forc%air_temperature = c%T0 + 5.0_wp
-        forc%snowfall_rate   = 30.0_wp/real(c%seconds_per_day,wp)
+        forc%snowfall_rate   = 30.0_wp/real(sec_day,wp)
         forc%rainfall_rate   = 0.0_wp
 
         ! Column 3 is deactivated.

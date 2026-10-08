@@ -442,8 +442,8 @@ contains
         end if
 
         ! [kg m-2 s-1] -> [mm w.e. d-1], smbpal's working units.
-        sf = forc%snowfall_rate*cn%seconds_per_day
-        rf = forc%rainfall_rate*cn%seconds_per_day
+        sf = forc%snowfall_rate*real(sec_day,wp)
+        rf = forc%rainfall_rate*real(sec_day,wp)
         pr = sf + rf
         ! smbpal receives (pr,sf) and forms rf = pr - sf (smb_itm.f90:107).
         ! chion receives snowfall and rainfall separately and forms pr
@@ -696,8 +696,9 @@ contains
         ! and `max(melt,0.d0)*sec_day*1d3` promote to dp via the literals.
         ! chion evaluates in wp throughout.
         !
-        ! rho_w, Lm and seconds_per_day come from the constants struct, which
-        ! is named `cn` here because ITM's own `c` is the offset coefficient.
+        ! rho_w and Lm come from the constants struct, which is named `cn`
+        ! here because ITM's own `c` is the offset coefficient; the day length
+        ! is phys_constants:sec_day.
 
         implicit none
 
@@ -714,7 +715,7 @@ contains
         melt = (atrans*(1.0_wp - alb_s)*S + c + t*t2m)/(cn%rho_w*cn%Lm)
 
         ! [m s-1] -> [mm d-1], positive melt only
-        melt = max(melt,0.0_wp)*cn%seconds_per_day*1.0e3_wp
+        melt = max(melt,0.0_wp)*real(sec_day,wp)*1.0e3_wp
 
         return
 

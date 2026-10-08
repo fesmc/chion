@@ -37,6 +37,7 @@ module snow_pdd
     use chion_defs, only : wp, wp_acc, io_unit_err, &
                            chion_const_class, chion_forcing_class, &
                            chion_step_forcing_class
+    use phys_constants, only : sec_day
 
     implicit none
 
@@ -442,8 +443,8 @@ contains
     elemental function pdd_step_mass(rate,dt_days,c) result(mass)
         ! Convert a precipitation rate [kg m-2 s-1] to a per-step mass
         ! [kg m-2], clipping negative rates. Chion.jl _pdd_step_mass
-        ! (pdd.jl:11), except that seconds_per_day comes from the constants
-        ! struct rather than the hard-coded 86400.0.
+        ! (pdd.jl:11), except that the day length is phys_constants:sec_day
+        ! rather than a bare 86400.0.
         !
         ! Returned in wp_acc: this feeds the cumulative accumulators directly
         ! and is the reference term of the mass-balance identity.
@@ -456,7 +457,7 @@ contains
         real(wp_acc) :: mass                             ! [kg m-2]
 
         mass = max(real(rate,wp_acc),0.0_wp_acc) &
-             * real(dt_days,wp_acc)*real(c%seconds_per_day,wp_acc)
+             * real(dt_days,wp_acc)*real(sec_day,wp_acc)
 
         return
 

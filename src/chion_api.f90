@@ -8,7 +8,7 @@ module chion_api
     !
     !     type(chion_class) :: chn
     !
-    !     call chion_init(chn,filename,ncol,group="chion")  ! params + allocate
+    !     call chion_init(chn,filename,ncol,group="chion",cnst=cnst)  ! params + allocate
     !     call chion_init_state(chn)                        ! cold start
     !     do while (...)
     !         ! host writes chn%forc%<field>(:) directly
@@ -59,6 +59,8 @@ module chion_api
     !$ use omp_lib
 
     use nml, only : nml_read, nml_validate
+    use phys_constants, only : phys_const_class, phys_const_load, &
+                               phys_const_require, phys_const_get, sec_day
 
     use chion_defs, only : wp, wp_acc, io_unit_err, MV, &
                            chion_const_class, chion_param_class, &
@@ -106,6 +108,7 @@ module chion_api
     character(len=*), parameter :: def_bessi = "bessi"
     character(len=*), parameter :: def_pdd   = "pdd"
     character(len=*), parameter :: def_itm   = "itm"
+    character(len=*), parameter :: def_const = "chion_const"
 
     ! Allowed values, in one place so the error messages and the validation
     ! can never disagree. Aliases are included because chion_defs' *_flag
@@ -186,6 +189,7 @@ module chion_api
     ! constructing a chion_class.
     public :: chion_par_load
     public :: chion_const_load
+    public :: chion_const_from_phys
     public :: bessi_par_load
     public :: pdd_par_load
     public :: chion_itm_par_load
@@ -196,7 +200,7 @@ contains
     ! Lifecycle
     ! =====================================================================
 
-    subroutine chion_init(chn,filename,ncol,group)
+    subroutine chion_init(chn,filename,ncol,group,cnst)
         ! Load parameters and allocate. Computes NO state -- call
         ! chion_init_state next.
         !
@@ -207,17 +211,23 @@ contains
         !            The model sub-group names are read FROM that block
         !            (nml_bessi / nml_pdd / nml_itm), so a second instance can
         !            use a completely disjoint set of groups.
+        ! cnst     : the host's physical constants (fesm-utils). When given,
+        !            chion takes its shared constants from it, so it agrees
+        !            with every other component of the program. When absent,
+        !            chion loads them from &chion:phys_const_file (standalone).
 
         implicit none
 
-        type(chion_class),          intent(INOUT) :: chn
-        character(len=*),           intent(IN)    :: filename
-        integer,                    intent(IN)    :: ncol
-        character(len=*), optional, intent(IN)    :: group
+        type(chion_class),                intent(INOUT) :: chn
+        character(len=*),                 intent(IN)    :: filename
+        integer,                          intent(IN)    :: ncol
+        character(len=*),       optional, intent(IN)    :: group
+        type(phys_const_class), optional, intent(IN)    :: cnst
 
         ! Local variables
-        character(len=56) :: nml_group
-        integer           :: n_threads
+        character(len=56)      :: nml_group
+        integer                :: n_threads
+        type(phys_const_class) :: cnst_own
 
         nml_group = def_chion
         if (present(group)) nml_group = trim(group)
@@ -241,11 +251,22 @@ contains
         call chion_par_load(chn%par,filename,nml_group)
 
         ! --- Physical constants ---------------------------------------
-        ! Defaults first, so that a constants file which omits a value still
-        ! yields the Chion.jl value rather than uninitialised memory.
+        ! chion's own from its &chion_const group (sparse, schema defaults);
+        ! the shared ones from the host's record, or, standalone, from
+        ! phys_const_file (docs/porting_notes.md D28).
 
         call chion_const_init(chn%c)
-        call chion_const_load(chn%c,chn%par%phys_const_file,chn%par%phys_const)
+        call chion_const_load(chn%c,filename,chn%par%nml_const)
+
+        if (present(cnst)) then
+            call chion_const_from_phys(chn%c,cnst)
+            chn%par%phys_const_src = "host: "//trim(cnst%source)//" ["//trim(cnst%label)//"]"
+        else
+            call chion_check_file(chn%par%phys_const_file)
+            call phys_const_load(cnst_own,chn%par%phys_const_file,group=chn%par%phys_const)
+            call chion_const_from_phys(chn%c,cnst_own)
+            chn%par%phys_const_src = trim(chn%par%phys_const_file)//" ["//trim(chn%par%phys_const)//"]"
+        end if
 
         ! --- Model parameters -----------------------------------------
         ! Only the selected model's group is read. The other two models are
@@ -553,7 +574,7 @@ contains
         !
         ! and the returned rate is
         !
-        !     smb = (X_now - X_at_start_of_step) / (dt_days*seconds_per_day)
+        !     smb = (X_now - X_at_start_of_step) / (dt_days*sec_day)
         !
         ! X_at_start_of_step is chn%smb_cum_prev, refreshed at the top of
         ! every chion_update. The host tracks nothing.
@@ -638,9 +659,9 @@ contains
         allocate(smb_cum(chn%grd%ncol))
         call chion_model_smb_cum(chn%par,chn%bsi,chn%pdd,chn%itm,smb_cum)
 
-        ! Days -> seconds using the SAME seconds_per_day the models used, so
+        ! Days -> seconds using the SAME sec_day the models used, so
         ! the round trip smb*dt_seconds -> cumulative is exact.
-        dt = real(chn%dt_last,wp_acc)*real(chn%c%seconds_per_day,wp_acc)
+        dt = real(chn%dt_last,wp_acc)*real(sec_day,wp_acc)
 
         ! Only active columns: an inactive column was not stepped, so its
         ! difference is zero anyway, but saying so explicitly means a column
@@ -767,7 +788,7 @@ contains
         allocate(flux_cum(CHION_NFLUX,ncol))
         call chion_model_flux_cum(chn%par,chn%bsi,chn%pdd,chn%itm,flux_cum)
 
-        dt = real(chn%dt_last,wp_acc)*real(chn%c%seconds_per_day,wp_acc)
+        dt = real(chn%dt_last,wp_acc)*real(sec_day,wp_acc)
 
         do i = 1, chn%grd%n_active
             icol = chn%grd%active_idx(i)
@@ -915,8 +936,8 @@ contains
         write(*,"(a,i0)")    " ncol       : ", chn%grd%ncol
         write(*,"(a,i0)")    " n_active   : ", chn%grd%n_active
         write(*,"(a,l1,a,i0)") " openmp     : ", chn%par%use_omp, "   threads = ", nt
-        write(*,"(a,a,a,a)") " constants  : ", trim(chn%par%phys_const_file), &
-                             "  group = ", trim(chn%par%phys_const)
+        write(*,"(a,a,a,a)") " constants  : ", trim(chn%par%phys_const_src), &
+                             "  + chion's own group = ", trim(chn%par%nml_const)
 
         call chion_model_summary_line(chn%par,chn%bsi,chn%pdd,chn%itm,line)
         write(*,"(a,a)")     " ", trim(line)
@@ -959,12 +980,12 @@ contains
         call nml_read(filename,group,"nml_bessi",      par%nml_bessi,      init=init_pars,defaults_file=def_file,defaults_group=def_chion)
         call nml_read(filename,group,"nml_pdd",        par%nml_pdd,        init=init_pars,defaults_file=def_file,defaults_group=def_chion)
         call nml_read(filename,group,"nml_itm",        par%nml_itm,        init=init_pars,defaults_file=def_file,defaults_group=def_chion)
+        call nml_read(filename,group,"nml_const",      par%nml_const,      init=init_pars,defaults_file=def_file,defaults_group=def_chion)
         call nml_read(filename,group,"phys_const_file",par%phys_const_file,init=init_pars,defaults_file=def_file,defaults_group=def_chion)
         call nml_read(filename,group,"phys_const",     par%phys_const,     init=init_pars,defaults_file=def_file,defaults_group=def_chion)
         call nml_read(filename,group,"restart",        par%restart,        init=init_pars,defaults_file=def_file,defaults_group=def_chion)
 
         par%nml_chion = trim(group)
-        par%nml_const = trim(par%phys_const)
 
         call chion_check_enum(group,"model",par%model,CHION_MODEL_CHOICES)
 
@@ -972,29 +993,29 @@ contains
 
     end subroutine chion_par_load
 
-    subroutine chion_const_load(c,filename,group)
-        ! The &Earth block of input/chion_phys_const.nml: all 26 fields of
-        ! chion_const_class, in declaration order.
+    subroutine chion_const_load(c,filename,group,init)
+        ! chion's own constants: the &chion_const group, read through the
+        ! schema defaults (input/chion_defaults.nml) like every other chion
+        ! group, so a run's par file lists only what it overrides.
         !
-        ! Read WITHOUT defaults_file, because this file IS the schema for the
-        ! constants -- exactly as yelmo treats input/yelmo_const_Earth.nml.
-        ! Consequence: the group must be complete. chion_const_init has
-        ! already filled every field with the Chion.jl default, so a missing
-        ! value is caught by nml (ERROR_NO_PARAM) rather than silently
-        ! inherited.
+        ! The SHARED fields (rho_i, rho_w, ci, cw, Lm, grav, T0) are not read
+        ! here: they come from the program's phys_const_class through
+        ! chion_const_from_phys (docs/porting_notes.md D28).
         !
-        ! The three scheme flags are stored in this type rather than in
+        ! The scheme flags are stored in this type rather than in
         ! chion_param_class, mirroring Chion.jl's SnowpackPhysicalConstants
         ! (docs/porting_notes.md D3), so they are read here too. They arrive
         ! as strings and are converted to integer flags (D4).
 
         implicit none
 
-        type(chion_const_class), intent(INOUT) :: c
-        character(len=*),        intent(IN)    :: filename
-        character(len=*),        intent(IN)    :: group        ! usually "Earth"
+        type(chion_const_class),    intent(INOUT) :: c
+        character(len=*),           intent(IN)    :: filename
+        character(len=*),           intent(IN)    :: group        ! usually "chion_const"
+        logical,          optional, intent(IN)    :: init
 
         ! Local variables
+        logical           :: init_pars
         character(len=56) :: albedo_scheme
         character(len=56) :: semix_snow_albedo
         character(len=56) :: seb_scheme
@@ -1002,73 +1023,68 @@ contains
         character(len=56) :: fresh_snow_density_scheme
         character(len=56) :: low_density_densification
 
-        call chion_check_file(filename)
+        init_pars = .FALSE.
+        if (present(init)) init_pars = init
 
-        call nml_read(filename,group,"rho_s",  c%rho_s)
-        call nml_read(filename,group,"rho_i",  c%rho_i)
-        call nml_read(filename,group,"rho_w",  c%rho_w)
+        call nml_validate(filename,def_file,group,defaults_group=def_const)
 
-        call nml_read(filename,group,"rho_s_a",c%rho_s_a)
-        call nml_read(filename,group,"rho_s_b",c%rho_s_b)
-        call nml_read(filename,group,"rho_s_c",c%rho_s_c)
-        call nml_read(filename,group,"fresh_snow_density_scheme",fresh_snow_density_scheme)
+        call nml_read(filename,group,"rho_s",                    c%rho_s,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"Ki",     c%Ki)
-        call nml_read(filename,group,"ci",     c%ci)
-        call nml_read(filename,group,"cw",     c%cw)
-        call nml_read(filename,group,"Lm",     c%Lm)
-        call nml_read(filename,group,"Lv",     c%Lv)
-        call nml_read(filename,group,"cp_air", c%cp_air)
-        call nml_read(filename,group,"latent_heat_flux_ratio",c%latent_heat_flux_ratio)
+        call nml_read(filename,group,"rho_s_a",                  c%rho_s_a,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"rho_s_b",                  c%rho_s_b,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"rho_s_c",                  c%rho_s_c,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"fresh_snow_density_scheme",fresh_snow_density_scheme, init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"D_sh",   c%D_sh)
+        call nml_read(filename,group,"Ki",                       c%Ki,                      init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"Lv",                       c%Lv,                      init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"cp_air",                   c%cp_air,                  init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"latent_heat_flux_ratio",   c%latent_heat_flux_ratio,  init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"seb_scheme",seb_scheme)
-        call nml_read(filename,group,"z0m_snow",  c%z0m_snow)
-        call nml_read(filename,group,"z0m_ice",   c%z0m_ice)
-        call nml_read(filename,group,"zm_to_zh",  c%zm_to_zh)
-        call nml_read(filename,group,"z_sfl",     c%z_sfl)
-        call nml_read(filename,group,"karman",    c%karman)
-        call nml_read(filename,group,"grav",      c%grav)
-        call nml_read(filename,group,"R_dry",     c%R_dry)
-        call nml_read(filename,group,"l_neutral", c%l_neutral)
-        call nml_read(filename,group,"l_dew",     c%l_dew)
-        call nml_read(filename,group,"semix_qsat",semix_qsat)
+        call nml_read(filename,group,"D_sh",                     c%D_sh,                    init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"alpha_dry",     c%alpha_dry)
-        call nml_read(filename,group,"alpha_wet",     c%alpha_wet)
-        call nml_read(filename,group,"alpha_ice",     c%alpha_ice)
-        call nml_read(filename,group,"max_lwc_albedo",c%max_lwc_albedo)
-        call nml_read(filename,group,"albedo_scheme", albedo_scheme)
+        call nml_read(filename,group,"seb_scheme",               seb_scheme,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"z0m_snow",                 c%z0m_snow,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"z0m_ice",                  c%z0m_ice,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"zm_to_zh",                 c%zm_to_zh,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"z_sfl",                    c%z_sfl,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"karman",                   c%karman,                  init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"R_dry",                    c%R_dry,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"l_neutral",                c%l_neutral,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"l_dew",                    c%l_dew,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_qsat",               semix_qsat,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"frac_vu",         c%frac_vu)
-        call nml_read(filename,group,"alb_snow_vis_new",c%alb_snow_vis_new)
-        call nml_read(filename,group,"alb_snow_nir_new",c%alb_snow_nir_new)
-        call nml_read(filename,group,"snow_grain_fresh",c%snow_grain_fresh)
-        call nml_read(filename,group,"snow_grain_old",  c%snow_grain_old)
-        call nml_read(filename,group,"d_alb_age_vis",   c%d_alb_age_vis)
-        call nml_read(filename,group,"d_alb_age_nir",   c%d_alb_age_nir)
-        call nml_read(filename,group,"f_age_t",         c%f_age_t)
-        call nml_read(filename,group,"dT_age",          c%dT_age)
-        call nml_read(filename,group,"snow_0",          c%snow_0)
-        call nml_read(filename,group,"snow_1",          c%snow_1)
-        call nml_read(filename,group,"w_snow_dust",     c%w_snow_dust)
-        call nml_read(filename,group,"dust_con_scale",  c%dust_con_scale)
-        call nml_read(filename,group,"semix_snow_albedo",semix_snow_albedo)
-        call nml_read(filename,group,"dalb_snow_vis",   c%dalb_snow_vis)
-        call nml_read(filename,group,"dalb_snow_nir",   c%dalb_snow_nir)
-        call nml_read(filename,group,"k_sigma_orog",    c%k_sigma_orog)
-        call nml_read(filename,group,"sigma_orog_crit", c%sigma_orog_crit)
+        call nml_read(filename,group,"alpha_dry",                c%alpha_dry,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"alpha_wet",                c%alpha_wet,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"alpha_ice",                c%alpha_ice,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"max_lwc_albedo",           c%max_lwc_albedo,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"albedo_scheme",            albedo_scheme,             init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"eps_air", c%eps_air)
-        call nml_read(filename,group,"eps_snow",c%eps_snow)
-        call nml_read(filename,group,"eps_ice", c%eps_ice)
-        call nml_read(filename,group,"sigma_sb",c%sigma_sb)
+        call nml_read(filename,group,"frac_vu",                  c%frac_vu,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"alb_snow_vis_new",         c%alb_snow_vis_new,        init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"alb_snow_nir_new",         c%alb_snow_nir_new,        init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"snow_grain_fresh",         c%snow_grain_fresh,        init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"snow_grain_old",           c%snow_grain_old,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"d_alb_age_vis",            c%d_alb_age_vis,           init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"d_alb_age_nir",            c%d_alb_age_nir,           init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"f_age_t",                  c%f_age_t,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"dT_age",                   c%dT_age,                  init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"snow_0",                   c%snow_0,                  init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"snow_1",                   c%snow_1,                  init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"w_snow_dust",              c%w_snow_dust,             init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"dust_con_scale",           c%dust_con_scale,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_snow_albedo",        semix_snow_albedo,         init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"dalb_snow_vis",            c%dalb_snow_vis,           init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"dalb_snow_nir",            c%dalb_snow_nir,           init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"k_sigma_orog",             c%k_sigma_orog,            init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"sigma_orog_crit",          c%sigma_orog_crit,         init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"T0",             c%T0)
-        call nml_read(filename,group,"seconds_per_day",c%seconds_per_day)
+        call nml_read(filename,group,"eps_air",                  c%eps_air,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"eps_snow",                 c%eps_snow,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"eps_ice",                  c%eps_ice,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"sigma_sb",                 c%sigma_sb,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"low_density_densification",low_density_densification)
+
+        call nml_read(filename,group,"low_density_densification",low_density_densification, init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         ! Validate before converting, so the error names the group and the
         ! full allowed set rather than only the offending value.
@@ -1089,6 +1105,42 @@ contains
         return
 
     end subroutine chion_const_load
+
+    subroutine chion_const_from_phys(c,cnst)
+        ! Fill the SHARED fields of chion's constants from the program's
+        ! fesm-utils record, narrowing to wp. This is the only place they are
+        ! set outside chion_const_init (the Chion.jl defaults, used by tests).
+        !
+        !   chion           phys_const_class
+        !   rho_i           rho_ice
+        !   rho_w           rho_w
+        !   ci              cp_ice
+        !   cw              cp_w
+        !   Lm              L_ice
+        !   grav            g            (SEMIX SEB only)
+        !   T0              T0
+        !
+        ! Densification's DENSIFY_GRAVITY is deliberately NOT taken from g: it
+        ! is part of the reference-reproduction switch (D25).
+
+        implicit none
+
+        type(chion_const_class), intent(INOUT) :: c
+        type(phys_const_class),  intent(IN)    :: cnst
+
+        call phys_const_require(cnst,"chion_const_from_phys")
+
+        call phys_const_get(cnst,"rho_ice",c%rho_i)
+        call phys_const_get(cnst,"rho_w",  c%rho_w)
+        call phys_const_get(cnst,"cp_ice", c%ci)
+        call phys_const_get(cnst,"cp_w",   c%cw)
+        call phys_const_get(cnst,"L_ice",  c%Lm)
+        call phys_const_get(cnst,"g",      c%grav)
+        call phys_const_get(cnst,"T0",     c%T0)
+
+        return
+
+    end subroutine chion_const_from_phys
 
     subroutine bessi_par_load(par,filename,group,init)
         ! The &bessi block. One nml_read per parameter, in the declaration

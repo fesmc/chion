@@ -587,7 +587,7 @@ contains
         ! untested. The constant change itself is D26, measured separately.
         melt = (atrans*(1.0_wp - alb_s)*S + c + t*t2m) / (cn%rho_w*cn%Lm)
 
-        melt = max( melt, 0.0_wp ) * cn%seconds_per_day * 1.0e3_wp
+        melt = max( melt, 0.0_wp ) * SEC_DAY * 1.0e3_wp
 
         return
 

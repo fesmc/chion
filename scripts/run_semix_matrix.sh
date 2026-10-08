@@ -23,14 +23,12 @@ for cfg in "${configs[@]}"; do
   d=$chion/output/$name
   rm -rf "$d"; mkdir -p "$d/input"
   for f in "$chion"/input/*; do ln -sfn "$f" "$d/input/$(basename "$f")"; done
-  rm -f "$d/input/chion_phys_const.nml"
-  sed -e "s/^\( *seb_scheme *= *\)\"bessi\"/\1\"$seb\"/" \
-      -e "s/^\( *albedo_scheme *= *\)\"dynamic\"/\1\"$alb\"/" \
-      "$chion/input/chion_phys_const.nml" > "$d/input/chion_phys_const.nml"
   ln -sfn "$chion/output/cmp_maps" "$d/maps"
   sed -e "s/^\( *Ntot *= *\)[0-9]*/\1$nt/" \
       -e "s/^\( *rh_default *= *\)0\.0/\1$rh/" \
       "$chion/par/chion_grl16.nml" > "$d/chion_grl16.nml"
+  printf '\n&chion_const\n    albedo_scheme = "%s"\n    seb_scheme    = "%s"\n/\n' \
+      "$alb" "$seb" >> "$d/chion_grl16.nml"
 
   echo "=== $name : albedo=$alb seb=$seb rh=$rh Ntot=$nt"
   ( cd "$d" && OMP_NUM_THREADS=1 "$bin" "$d/chion_grl16.nml" > run.log 2>&1 )

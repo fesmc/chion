@@ -125,8 +125,6 @@ module chion_defs
     ! === Defaults ============================================================
     ! Chion.jl/src/constants.jl:16-40.
 
-    real(wp), parameter, public :: DEF_SECONDS_PER_DAY = 86400.0_wp
-
     real(wp), parameter, public :: DEF_SEA_LEVEL_AIR_PRESSURE = 101325.0_wp
     real(wp), parameter, public :: DEF_GRAVITY                = 9.80665_wp
     real(wp), parameter, public :: DEF_MOLAR_MASS_DRY_AIR     = 0.0289644_wp
@@ -191,11 +189,19 @@ module chion_defs
         ! Porting note: Chion.jl keeps the three scheme flags inside this struct.
         ! chion does the same, so that every physics routine (which already
         ! receives c) can branch without threading an extra argument.
+        !
+        ! SHARED fields -- rho_i, rho_w, ci, cw, Lm, grav, T0 -- are not chion's
+        ! to choose: chion_const_from_phys fills them from the program's
+        ! fesm-utils phys_const_class (rho_ice, rho_w, cp_ice, cp_w, L_ice, g,
+        ! T0), so a host hands chion the same constants as every other
+        ! component. All other fields are chion's own (&chion_const in
+        ! input/chion_defaults.nml). Day length is the named convention
+        ! phys_constants:sec_day, not a field. See docs/porting_notes.md D28.
 
         ! Densities
         real(wp) :: rho_s              ! [kg m-3] fresh snow density (constant scheme)
-        real(wp) :: rho_i              ! [kg m-3] ice density
-        real(wp) :: rho_w              ! [kg m-3] water density
+        real(wp) :: rho_i              ! [kg m-3] ice density              (shared: rho_ice)
+        real(wp) :: rho_w              ! [kg m-3] water density            (shared: rho_w)
 
         ! Parameterized fresh-snow density: rho = a + b*(T-T0) + c*sqrt(wind)
         real(wp) :: rho_s_a            ! [kg m-3]
@@ -205,9 +211,9 @@ module chion_defs
 
         ! Thermal properties
         real(wp) :: Ki                 ! [W m-1 K-1] thermal conductivity of ice
-        real(wp) :: ci                 ! [J kg-1 K-1] heat capacity of ice
-        real(wp) :: cw                 ! [J kg-1 K-1] heat capacity of water
-        real(wp) :: Lm                 ! [J kg-1] latent heat of melting
+        real(wp) :: ci                 ! [J kg-1 K-1] heat capacity of ice   (shared: cp_ice)
+        real(wp) :: cw                 ! [J kg-1 K-1] heat capacity of water (shared: cp_w)
+        real(wp) :: Lm                 ! [J kg-1] latent heat of melting     (shared: L_ice)
         real(wp) :: Lv                 ! [J kg-1] latent heat of vaporization
         real(wp) :: cp_air             ! [J kg-1 K-1] heat capacity of air
         real(wp) :: latent_heat_flux_ratio  ! [1] scaling of turbulent latent flux
@@ -228,7 +234,7 @@ module chion_defs
         real(wp) :: zm_to_zh           ! [1] heat/momentum roughness ratio
         real(wp) :: z_sfl              ! [m] surface layer height
         real(wp) :: karman             ! [1] von Karman constant
-        real(wp) :: grav               ! [m s-2] gravitational acceleration
+        real(wp) :: grav               ! [m s-2] gravitational acceleration (shared: g)
         real(wp) :: R_dry              ! [J kg-1 K-1] gas constant of dry air
         logical  :: l_neutral          ! [1] force neutral stratification
         logical  :: l_dew              ! [1] allow dew/frost deposition
@@ -271,8 +277,7 @@ module chion_defs
         real(wp) :: sigma_sb           ! [W m-2 K-4] Stefan-Boltzmann constant
 
         ! Reference values
-        real(wp) :: T0                 ! [K] freezing point of water
-        real(wp) :: seconds_per_day    ! [s]
+        real(wp) :: T0                 ! [K] freezing point of water       (shared: T0)
 
         ! Densification
         integer  :: low_density_densification   ! CHION_DENSIFY_*
@@ -440,10 +445,13 @@ module chion_defs
         character(len=56)  :: nml_bessi
         character(len=56)  :: nml_pdd
         character(len=56)  :: nml_itm
-        character(len=56)  :: nml_const
+        character(len=56)  :: nml_const      ! group holding chion's own constants
 
-        character(len=512) :: phys_const_file ! path to the physical constants file
+        ! The shared constants (fesm-utils phys_const_class), read only when the
+        ! host passes none to chion_init.
+        character(len=512) :: phys_const_file ! path to the phys_const file
         character(len=512) :: phys_const     ! group name within phys_const_file
+        character(len=512) :: phys_const_src ! provenance of the shared constants used
         character(len=512) :: restart        ! restart file, or "none"
 
         logical :: use_omp                   ! set at init from OpenMP availability
@@ -553,8 +561,7 @@ contains
         c%eps_ice  = 0.98_wp
         c%sigma_sb = 5.670373e-8_wp
 
-        c%T0              = 273.15_wp
-        c%seconds_per_day = DEF_SECONDS_PER_DAY
+        c%T0      = 273.15_wp
 
         c%low_density_densification = CHION_DENSIFY_BESSI
 
@@ -603,7 +610,6 @@ contains
         write(*,"(a25,g14.6,a)") "eps_ice  = ", c%eps_ice,  "  [1]"
         write(*,"(a25,g14.6,a)") "sigma_sb = ", c%sigma_sb, "  [W m-2 K-4]"
         write(*,"(a25,g14.6,a)") "T0       = ", c%T0,       "  [K]"
-        write(*,"(a25,g14.6,a)") "seconds_per_day = ", c%seconds_per_day, "  [s]"
         write(*,"(a25,i14)")     "low_density_densification = ", c%low_density_densification
 
         return

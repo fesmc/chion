@@ -93,7 +93,6 @@ program test_defs
     call check_val("eps_snow",        c%eps_snow,       0.98_wp,        nfail)
     call check_val("sigma_sb",        c%sigma_sb,       5.670373e-8_wp, nfail)
     call check_val("T0",              c%T0,             273.15_wp,      nfail)
-    call check_val("seconds_per_day", c%seconds_per_day,86400.0_wp,     nfail)
 
     call check("default albedo_scheme = dynamic", &
                c%albedo_scheme .eq. CHION_ALBEDO_DYNAMIC, nfail)
