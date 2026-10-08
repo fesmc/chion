@@ -406,6 +406,22 @@ is the failure mode worth preventing.
   contrast. The flat "4 ulp" bound that stood there was passing at 3.3 ulp — on luck, not on
   a stated error path.
 
+### D27. ITM's per-step `tsrf` scales `melt_net` to an annual rate
+**What:** `itm_step` passes `melt_net*days_year_firn` to `calc_temp_surf`, with
+`days_year_firn = sec_year_360d/sec_day` (fesm-utils `phys_constants`). `firn_fac` is now
+documented as `[K (mm w.e. yr-1)-1]`.
+
+**Why:** smbpal applies `calc_temp_surf` once per year to the annual net melt in
+`[mm w.e. yr-1]` (360-day year), and `firn_fac` is calibrated against that. chion applied it
+per step to the daily rate `[mm w.e. d-1]`, so the firn warming was ~360x too small. The year
+length is a property of the calibration, not of the host's calendar, hence the named 360-day
+convention rather than a parameter.
+
+**Impact:** firn warming on refreezing columns is restored to smbpal's magnitude. `tsrf`
+remains a per-step value: `max(0,.)` and the `min(T0,.)` cap act per step, so its annual mean
+still differs from smbpal's annual-mean `tsrf` where either is active. `test_itm`'s reference
+scales the same way; `tsrf` stays bit-identical.
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was

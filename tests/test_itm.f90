@@ -172,7 +172,9 @@ program test_itm
                                                S,t2m,PDDs(i),sf_mmd+rf_mmd,sf_mmd,   &
                                                r_H_snow(i),r_alb_s,r_smbi,r_smb,     &
                                                r_melt,r_runoff,r_refrz,r_melt_net)
-            r_tsrf = ref_calc_temp_surf(cn,t2m,H_ice(i),r_melt_net,itm%par%firn_fac)
+            ! smbpal's calc_temp_surf takes the annual net melt [mm w.e. yr-1]
+            ! on a 360-day year; scale the daily step rate the same way.
+            r_tsrf = ref_calc_temp_surf(cn,t2m,H_ice(i),r_melt_net*360.0_wp,itm%par%firn_fac)
 
             call track(1,itm%now%H_snow(i),  r_H_snow(i))
             call track(2,itm%now%alb_s(i),   r_alb_s)

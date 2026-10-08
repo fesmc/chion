@@ -61,10 +61,16 @@ module snow_itm
     use chion_defs, only : wp, wp_acc, io_unit_err, chion_step_forcing_class, &
                            chion_const_class
     use nml,        only : nml_read
+    use phys_constants, only : sec_year_360d, sec_day
 
     implicit none
 
     private
+
+    ! Days per year of the calendar firn_fac is calibrated on: smbpal's annual
+    ! totals are on a 360-day year. A property of the calibration, not of the
+    ! host's calendar (fesm-utils phys_constants names the convention).
+    real(wp), parameter :: days_year_firn = real(sec_year_360d/sec_day, wp)
 
     ! ITM's physical constants come from chion_const_class, NOT from private
     ! copies. smbpal carries its own (smb_itm.f90:12-14), and this module used
@@ -115,7 +121,7 @@ module snow_itm
         ! because smbpal applies calc_temp_surf once per year outside the ITM
         ! module (smbpal.f90:457). chion computes tsrf inside itm_step, so
         ! the parameter has to travel with the ITM parameters.
-        real(wp) :: firn_fac              ! [K (mm w.e.)-1] firn warming per unit net refreezing
+        real(wp) :: firn_fac              ! [K (mm w.e. yr-1)-1] firn warming per annual net refreezing
     end type itm_par_class
 
     type itm_state_class
@@ -550,12 +556,14 @@ contains
 
         ! Surface temperature. smbpal applies calc_temp_surf once per year to
         ! the ANNUAL MEAN t2m and melt_net (smbpal.f90:457); chion applies it
-        ! per step to the step values. Over a full year of equal-length steps
-        ! the two agree only where the min(T0,...) cap is inactive -- the cap
-        ! makes it a nonlinear function, so a per-step mean is not the same
-        ! as a function of the mean. Recorded as a deviation; the host can
+        ! per step to the step values. firn_fac is calibrated against smbpal's
+        ! annual net melt [mm w.e. yr-1] on its 360-day year, so the step rate
+        ! [mm w.e. d-1] is scaled to that annual rate first (days_year_firn).
+        ! Even so the two agree only where neither max(0,.) nor the min(T0,.)
+        ! cap is active: both are nonlinear, so a per-step mean is not the same
+        ! as a function of the means. Recorded as a deviation; the host can
         ! recover smbpal's exact behaviour by averaging tsrf's inputs itself.
-        itm%now%tsrf(icol) = calc_temp_surf(cn,t2m,H_ice,melt_net,itm%par%firn_fac)
+        itm%now%tsrf(icol) = calc_temp_surf(cn,t2m,H_ice,melt_net*days_year_firn,itm%par%firn_fac)
 
         ! Cumulative accumulators, in wp_acc. Rates x dt, so these are the
         ! integrated quantities in [mm w.e.].
@@ -744,8 +752,8 @@ contains
         type(chion_const_class), intent(IN) :: cn
         real(wp), intent(IN) :: tann      ! [K] air temperature
         real(wp), intent(IN) :: H_ice     ! [m]
-        real(wp), intent(IN) :: melt_net  ! [mm w.e. d-1] refrz - melt
-        real(wp), intent(IN) :: fac       ! [K (mm w.e.)-1]
+        real(wp), intent(IN) :: melt_net  ! [mm w.e. yr-1] refrz - melt, as an annual rate
+        real(wp), intent(IN) :: fac       ! [K (mm w.e. yr-1)-1]
         real(wp) :: ts                    ! [K]
 
         if (H_ice .gt. 0.0_wp) then

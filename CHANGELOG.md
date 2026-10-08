@@ -15,6 +15,11 @@ tag is the port itself, summarised rather than enumerated.
 - `chion_get_surface_flux_totals`: cumulative melt/runoff/refrz/subl [kg m-2],
   so a host aggregating over many steps differences two calls.
 
+### Fixed
+
+- ITM per-step `tsrf`: `melt_net` scaled to the annual rate `firn_fac` is
+  calibrated on (360-day year); firn warming was ~360x too small (D27).
+
 ### Changed
 
 - `chion_update` snapshots (for `chion_get_smb`/`chion_get_surface_fluxes`)
