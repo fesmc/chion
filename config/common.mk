@@ -16,14 +16,14 @@
 # with `make openmp=0`.
 FESMUTILSROOT = fesm-utils
 ifeq ($(openmp), 0)
-    INC_FESMUTILS = -I${FESMUTILSROOT}/include-serial
-    LIB_FESMUTILS = -L${FESMUTILSROOT}/include-serial -lfesmutils
+    FESMUTILSLIBDIR = ${FESMUTILSROOT}/include-serial
 else
-    INC_FESMUTILS = -I${FESMUTILSROOT}/include-omp
-    LIB_FESMUTILS = -L${FESMUTILSROOT}/include-omp -lfesmutils
+    FESMUTILSLIBDIR = ${FESMUTILSROOT}/include-omp
 
     FFLAGS += $(FFLAGS_OPENMP)
 endif
+INC_FESMUTILS = -I${FESMUTILSLIBDIR}
+LIB_FESMUTILS = -L${FESMUTILSLIBDIR} -lfesmutils
 
 # Extra link flags. -Wl,-zmuldefs works around duplicate symbols in the static
 # deps (the default on Linux). A machine fragment can disable it by setting

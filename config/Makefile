@@ -121,10 +121,18 @@ include config/Makefile_chion.mk
 check-hash:
 	./check_githash > git_chion.txt
 
-# Static library compilation
-chion-static: $(chion_base) $(chion_physics) $(chion_core)
-	ar rc $(objdir)/libchion.a $(chion_base) $(chion_physics) $(chion_core)
-	ranlib $(objdir)/libchion.a
+# chion objects embed fesm-utils types: rebuild them when libfesmutils.a
+# changes, or objects keep a stale type layout (fesmc/FastHydrology#10).
+$(chion_base) $(chion_physics) $(chion_core): $(FESMUTILSLIBDIR)/libfesmutils.a
+
+# Static library compilation. The archive is a file target, so its mtime only
+# changes when an object does (hosts such as yelmox depend on it to rebuild
+# their own objects).
+chion-static: $(objdir)/libchion.a
+
+$(objdir)/libchion.a: $(chion_base) $(chion_physics) $(chion_core)
+	ar rc $@ $(chion_base) $(chion_physics) $(chion_core)
+	ranlib $@
 	./check_githash > git_chion.txt
 	@echo " "
 	@echo "    $(objdir)/libchion.a is ready."
