@@ -79,7 +79,8 @@ module chion_api
                             chion_model_alloc, chion_model_dealloc, &
                             chion_model_init_state, chion_model_reset_columns, &
                             chion_model_step, chion_model_smb_cum, &
-                            chion_model_flux_cum, chion_model_surface, &
+                            chion_model_flux_cum, chion_model_cum_active, &
+                            chion_model_surface, &
                             chion_model_summary_line, &
                             CHION_NFLUX, CHION_IMELT, CHION_IRUNOFF, &
                             CHION_IREFRZ, CHION_ISUBL
@@ -178,6 +179,7 @@ module chion_api
     public :: chion_get_smb
     public :: chion_get_surface
     public :: chion_get_surface_fluxes
+    public :: chion_get_surface_flux_totals
     public :: chion_print_summary
 
     ! Parameter loading, exposed so a host or a test can load a group without
@@ -329,9 +331,11 @@ contains
 
         ! Snapshot BEFORE stepping. This is the only place smb_cum_prev is
         ! written during a run, which is what makes chion_get_smb mean "the
-        ! step that just finished" and nothing else.
-        call chion_model_smb_cum(chn%par,chn%bsi,chn%pdd,chn%itm,chn%smb_cum_prev)
-        call chion_model_flux_cum(chn%par,chn%bsi,chn%pdd,chn%itm,chn%flux_cum_prev)
+        ! step that just finished" and nothing else. Active columns only, in
+        ! parallel: inactive columns are not stepped, so their snapshot stays
+        ! valid (and is re-baselined on reset by chion_set_active_mask).
+        call chion_model_cum_active(chn%par,chn%grd,chn%bsi,chn%pdd,chn%itm, &
+                                    chn%smb_cum_prev,chn%flux_cum_prev)
 
         call chion_model_step(chn%par,chn%c,chn%grd,chn%forc, &
                               chn%bsi,chn%pdd,chn%itm,dt_days)
@@ -776,6 +780,82 @@ contains
         return
 
     end subroutine chion_get_surface_fluxes
+
+    subroutine chion_get_surface_flux_totals(chn,melt,runoff,refrz,subl)
+        ! ===================================================================
+        ! Cumulative surface flux totals since the last cold start or column
+        ! reset, per column, [kg m-2] (== [mm w.e.]):
+        !
+        !   melt    total melt (snow + ice)
+        !   runoff  runoff
+        !   refrz   refreezing
+        !   subl    sublimation (>= 0)
+        !
+        ! The same quantities as chion_get_surface_fluxes, as running totals
+        ! instead of the last step's rate. A host that aggregates over many
+        ! steps (e.g. an annual cycle of daily steps) differences two calls
+        ! instead of fetching a rate every step. Totals restart from zero when
+        ! a column is reset (chion_set_active_mask), so set the mask before
+        ! the first of the two calls. Unresolved fields and inactive columns
+        ! are MV, as in chion_get_surface_fluxes.
+        ! ===================================================================
+
+        implicit none
+
+        type(chion_class),  intent(IN)  :: chn
+        real(wp_acc), optional, intent(OUT) :: melt(:)
+        real(wp_acc), optional, intent(OUT) :: runoff(:)
+        real(wp_acc), optional, intent(OUT) :: refrz(:)
+        real(wp_acc), optional, intent(OUT) :: subl(:)
+
+        integer :: i, icol, ncol
+        real(wp_acc), allocatable :: flux_cum(:,:)
+
+        ncol = chn%grd%ncol
+        call check_total_arg("melt",  melt,  ncol)
+        call check_total_arg("runoff",runoff,ncol)
+        call check_total_arg("refrz", refrz, ncol)
+        call check_total_arg("subl",  subl,  ncol)
+
+        if (present(melt))   melt   = real(MV,wp_acc)
+        if (present(runoff)) runoff = real(MV,wp_acc)
+        if (present(refrz))  refrz  = real(MV,wp_acc)
+        if (present(subl))   subl   = real(MV,wp_acc)
+
+        allocate(flux_cum(CHION_NFLUX,ncol))
+        call chion_model_flux_cum(chn%par,chn%bsi,chn%pdd,chn%itm,flux_cum)
+
+        !$omp parallel do default(shared) private(i,icol)
+        do i = 1, chn%grd%n_active
+            icol = chn%grd%active_idx(i)
+            if (present(melt))   melt(icol)   = flux_cum(CHION_IMELT,  icol)
+            if (present(runoff)) runoff(icol) = flux_cum(CHION_IRUNOFF,icol)
+            if (present(refrz))  refrz(icol)  = flux_cum(CHION_IREFRZ, icol)
+            if (present(subl))   subl(icol)   = flux_cum(CHION_ISUBL,  icol)
+        end do
+        !$omp end parallel do
+
+        deallocate(flux_cum)
+
+        return
+
+    end subroutine chion_get_surface_flux_totals
+
+    subroutine check_total_arg(name,arr,ncol)
+        ! Length guard for the optional chion_get_surface_flux_totals outputs.
+        implicit none
+        character(len=*),       intent(IN) :: name
+        real(wp_acc), optional, intent(IN) :: arr(:)
+        integer,                intent(IN) :: ncol
+        if (present(arr)) then
+            if (size(arr) .ne. ncol) then
+                write(io_unit_err,*) "chion_get_surface_flux_totals:: Error: "//trim(name)//" must have length ncol."
+                write(io_unit_err,*) "ncol, size = ", ncol, size(arr)
+                stop "Program stopped."
+            end if
+        end if
+        return
+    end subroutine check_total_arg
 
     subroutine flux_rate(cum,prev,islot,icol,dt,out)
         ! Difference one packed flux slot into a rate, propagating the MV

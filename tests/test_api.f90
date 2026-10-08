@@ -74,6 +74,7 @@ program test_api
     call test_thread_equivalence(nfail)
     call test_active_mask(nfail)
     call test_get_smb(nfail)
+    call test_flux_totals(nfail)
 
     ! The scratch parameter file is written into the working directory, so
     ! remove it rather than leaving it in a git status.
@@ -856,6 +857,91 @@ contains
         return
 
     end subroutine test_get_smb
+
+    subroutine test_flux_totals(nfail)
+        ! chion_get_surface_flux_totals must be the running total of what
+        ! chion_get_surface_fluxes reports per step: for every model and every
+        ! field, (total_end - total_start) == sum(rate*dt_seconds) to sp
+        ! round-off, MV exactly where the rate is MV, and MV for an inactive
+        ! column.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_class) :: chn
+        integer  :: im, n, k
+        integer  :: gidx(2)
+        real(wp) :: rate(2,4)
+        real(wp_acc) :: tot0(2,4), tot1(2,4), rsum(4), dt_sec, denom
+        logical  :: ok_sum, ok_mv
+        character(len=8) :: models(3)
+
+        write(*,"(a)") "--- 8. chion_get_surface_flux_totals: running total of the rates ---"
+
+        models(1) = "bessi"
+        models(2) = "pdd"
+        models(3) = "itm"
+
+        gidx = [1,2]
+
+        do im = 1, 3
+
+            call write_model_par(PAR_TMP,trim(models(im)))
+            call chion_init(chn,PAR_TMP,2)
+            call chion_init_state(chn)
+            if (trim(models(im)) .eq. "itm") chn%itm%now%H_snow = 0.0_wp
+            call chion_set_active_mask(chn,[.TRUE.,.FALSE.])
+
+            call get_totals(chn,tot0)
+
+            rsum   = 0.0_wp_acc
+            dt_sec = real(DT_DAYS,wp_acc)*real(chn%c%seconds_per_day,wp_acc)
+            do n = 1, NSTEP
+                call set_forcing(chn,gidx,n,"ablate")
+                call chion_update(chn,DT_DAYS)
+                call chion_get_surface_fluxes(chn,melt=rate(:,1),runoff=rate(:,2), &
+                                              refrz=rate(:,3),subl=rate(:,4))
+                do k = 1, 4
+                    if (rate(1,k) .ne. MV) rsum(k) = rsum(k) + real(rate(1,k),wp_acc)*dt_sec
+                end do
+            end do
+
+            call get_totals(chn,tot1)
+
+            ok_sum = .TRUE.
+            ok_mv  = .TRUE.
+            do k = 1, 4
+                if (rate(1,k) .eq. MV) then
+                    ok_mv = ok_mv .and. (tot1(1,k) .eq. real(MV,wp_acc))
+                else
+                    denom  = max(abs(tot1(1,k) - tot0(1,k)),1.0_wp_acc)
+                    ok_sum = ok_sum .and. (abs((tot1(1,k) - tot0(1,k)) - rsum(k))/denom .lt. 1.0e-5_wp_acc)
+                end if
+                ok_mv = ok_mv .and. (tot1(2,k) .eq. real(MV,wp_acc))
+            end do
+
+            call check(trim(models(im))//": totals difference = sum(rate*dt)", ok_sum, nfail)
+            call check(trim(models(im))//": MV for unresolved fields and inactive columns", ok_mv, nfail)
+
+            call chion_end(chn)
+
+        end do
+
+        write(*,*)
+
+        return
+
+    end subroutine test_flux_totals
+
+    subroutine get_totals(chn,tot)
+        implicit none
+        type(chion_class), intent(IN)  :: chn
+        real(wp_acc),      intent(OUT) :: tot(:,:)   ! (ncol,4)
+        call chion_get_surface_flux_totals(chn,melt=tot(:,1),runoff=tot(:,2), &
+                                           refrz=tot(:,3),subl=tot(:,4))
+    end subroutine get_totals
 
     ! =====================================================================
     ! Helpers

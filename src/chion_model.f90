@@ -96,6 +96,7 @@ module chion_model
     public :: chion_model_step
     public :: chion_model_smb_cum
     public :: chion_model_flux_cum
+    public :: chion_model_cum_active
     public :: chion_model_surface
     public :: chion_model_summary_line
 
@@ -559,6 +560,76 @@ contains
         return
 
     end subroutine chion_model_flux_cum
+
+    subroutine chion_model_cum_active(par,grd,bsi,pdd,itm,smb_cum,flux_cum)
+        ! chion_model_smb_cum and chion_model_flux_cum together, for the
+        ! ACTIVE columns only and parallel over columns. chion_update takes
+        ! its one-step-behind snapshot with this every step: an inactive
+        ! column is not stepped, so its snapshot cannot go stale, and a column
+        ! that is reset keeps the full-array re-baseline in
+        ! chion_set_active_mask. Same per-model mapping as the two routines
+        ! above; fields a model does not resolve are MV.
+
+        implicit none
+
+        type(chion_param_class), intent(IN)    :: par
+        type(chion_grid_class),  intent(IN)    :: grd
+        type(bessi_class),       intent(IN)    :: bsi
+        type(pdd_class),         intent(IN)    :: pdd
+        type(itm_class),         intent(IN)    :: itm
+        real(wp_acc),            intent(INOUT) :: smb_cum(:)      ! (ncol)
+        real(wp_acc),            intent(INOUT) :: flux_cum(:,:)   ! (CHION_NFLUX,ncol)
+
+        integer :: i, icol
+
+        if (size(flux_cum,1) .ne. CHION_NFLUX) call chion_size_error(size(flux_cum,1),CHION_NFLUX)
+
+        select case(trim(par%model))
+
+            case("bessi")
+                !$omp parallel do default(shared) private(i,icol)
+                do i = 1, grd%n_active
+                    icol = grd%active_idx(i)
+                    smb_cum(icol)                = bsi%now%smb_ice(icol)
+                    flux_cum(CHION_IMELT,icol)   = bsi%now%melt(icol)
+                    flux_cum(CHION_IRUNOFF,icol) = bsi%now%runoff(icol)
+                    flux_cum(CHION_IREFRZ,icol)  = bsi%now%refreezing(icol)
+                    flux_cum(CHION_ISUBL,icol)   = bsi%now%sublimation(icol)
+                end do
+                !$omp end parallel do
+
+            case("itm")
+                !$omp parallel do default(shared) private(i,icol)
+                do i = 1, grd%n_active
+                    icol = grd%active_idx(i)
+                    smb_cum(icol)                = itm%now%smbi_cum(icol)
+                    flux_cum(CHION_IMELT,icol)   = itm%now%melt_cum(icol)
+                    flux_cum(CHION_IRUNOFF,icol) = itm%now%runoff_cum(icol)
+                    flux_cum(CHION_IREFRZ,icol)  = itm%now%refrz_cum(icol)
+                    flux_cum(CHION_ISUBL,icol)   = real(MV,wp_acc)
+                end do
+                !$omp end parallel do
+
+            case("pdd")
+                !$omp parallel do default(shared) private(i,icol)
+                do i = 1, grd%n_active
+                    icol = grd%active_idx(i)
+                    smb_cum(icol)                = pdd%now%smb_ice(icol)
+                    flux_cum(CHION_IMELT,icol)   = real(MV,wp_acc)
+                    flux_cum(CHION_IRUNOFF,icol) = pdd%now%runoff(icol)
+                    flux_cum(CHION_IREFRZ,icol)  = real(MV,wp_acc)
+                    flux_cum(CHION_ISUBL,icol)   = real(MV,wp_acc)
+                end do
+                !$omp end parallel do
+
+            case DEFAULT
+                call chion_model_error("chion_model_cum_active",par%model)
+
+        end select
+
+        return
+
+    end subroutine chion_model_cum_active
 
     subroutine chion_model_surface(par,bsi,pdd,itm,t_srf,albedo)
         ! Per-column surface skin temperature [K] and surface (all-sky broadband)

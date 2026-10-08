@@ -10,8 +10,16 @@ tag is the port itself, summarised rather than enumerated.
 
 ## [Unreleased]
 
+### Added
+
+- `chion_get_surface_flux_totals`: cumulative melt/runoff/refrz/subl [kg m-2],
+  so a host aggregating over many steps differences two calls.
+
 ### Changed
 
+- `chion_update` snapshots (for `chion_get_smb`/`chion_get_surface_fluxes`)
+  only active columns, in parallel (`chion_model_cum_active`); was a serial
+  copy over all columns every step.
 - `itm_par_load` takes optional `defaults_file`/`defaults_group`; `&itm` may now
   be sparse or absent, like `&bessi` and `&pdd` (needed to share smbpal's `&itm`
   group in yelmox).
