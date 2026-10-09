@@ -26,7 +26,9 @@ CLIMBER-X's SEMIX surface scheme.
 
 ## Build
 
-`make` builds `libchion.a` (OpenMP by default; `make openmp=0` for serial).
+`make` builds `libchion.a` (OpenMP by default; `make openmp=0` for serial;
+switching `openmp` rebuilds the objects, so `configme install`, which builds
+serial then OpenMP, leaves an OpenMP library).
 `make tests` builds the acceptance tests, `make grid` the gridded driver.
 Build and run the tests with `fpsafe=1` (value-safe `-O2` in
 `libchion/*-fpsafe`; a machine's `-Ofast` breaks their one-ulp checks); see

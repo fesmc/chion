@@ -64,6 +64,10 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- BESSI performance (results bit-identical): dynamic OpenMP schedule of the column loop
+  (chunks of 8), solar geometry once per column-day. GRL-16KM 50 yr, one exclusive node:
+  1 thread 605 -> 548 s, 16 threads 69 -> 41 s (speedup 8.8x -> 13.5x); shared node
+  456 -> 432 s and 75 -> 43 s (baseline main: 109 and 20 s).
 - ITM output takes Chion.jl's names and units (D42): `alb_s`, rates `smb` (total SMB),
   `smbi`, `melt`, `runoff`, `refreezing`, `melt_net` [mmWE day-1], cumulative `smb_cum`,
   `smb_ice`, `melt_cum`, `runoff_cum`, `refreezing_cum` (were `albedo`, `smb_total`,

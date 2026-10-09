@@ -30,6 +30,13 @@ regenerated if absent). A 50-year GRL-16KM BESSI run (7204 columns) is ~47 s on
 one core; the build is OpenMP by default, so `OMP_NUM_THREADS=8` cuts it to
 ~17 s (see Performance).
 
+The Greenland loader needs ~34 MB of main-thread stack: fesm-utils'
+`grid_init` of the global 0.25° ERA5 source grid passes `reshape` temporaries
+of the 1440×721 point set (8.3 MB each) on the stack. With an 8 MB default
+(Levante) `chion_grid.x` segfaults at start-up, so run with
+`ulimit -s unlimited` (or ≥ 40000). The library and the column loop need no
+large stack (the default 4 MB per OpenMP thread suffices).
+
 ### Antarctica (RACMO2.4 / ANT-12)
 
 Antarctica needs a one-time preprocessing step because the source is a 30-year
