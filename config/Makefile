@@ -54,8 +54,11 @@ endif
 # .configme/manifest.toml and .runme/info.json are unchanged and the dp build
 # is purely additive. The two builds therefore coexist without `make clean`.
 #
-# NOTE (pre-existing): openmp=0 and openmp=1 still share these directories, so
-# switching openmp does need a clean. Only fesm-utils' include dir is swapped.
+# openmp=0 and openmp=1 share these directories (as in yelmo; yelmox links
+# libchion/include for both). The objects instead depend on a stamp naming the
+# OpenMP setting they were built with ($(ompstamp), below), so switching
+# openmp rebuilds them: `configme install` (serial, then omp) leaves an OpenMP
+# library, and a host's `make openmp=0|1` always gets the variant it asked for.
 srcdir  = src
 physdir = src/physics
 libsdir = libs
@@ -155,6 +158,18 @@ $(objdir) $(bindir):
 	mkdir -p $@
 
 $(chion_base) $(chion_physics) $(chion_core) $(driver_objs): | $(objdir)
+
+# The OpenMP setting the objects in $(objdir) were compiled with. A missing
+# stamp (first build, or openmp switched) is created newer than every object,
+# so all of them are rebuilt with the current flags; the other setting's stamp
+# is removed so that switching back rebuilds again.
+ompstamp = $(objdir)/.openmp$(openmp)
+
+$(ompstamp): | $(objdir)
+	rm -f $(objdir)/.openmp*
+	touch $@
+
+$(chion_base) $(chion_physics) $(chion_core) $(driver_objs): $(ompstamp)
 
 # chion objects embed fesm-utils types: rebuild them when libfesmutils.a
 # changes, or objects keep a stale type layout (fesmc/FastHydrology#10).
@@ -303,6 +318,6 @@ usage:
 
 clean:
 	rm -f $(bindir)/*.x
-	rm -f *.x gmon.out $(objdir)/*.o $(objdir)/*.mod $(objdir)/*.a $(objdir)/*.so
+	rm -f *.x gmon.out $(objdir)/*.o $(objdir)/*.mod $(objdir)/*.a $(objdir)/*.so $(objdir)/.openmp*
 	rm -rf *.x.dSYM
 	rm -f ./git_chion.txt

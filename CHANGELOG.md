@@ -105,6 +105,9 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Fixed
 
+- Build: objects depend on a stamp of the `openmp` setting, so switching it rebuilds
+  them; a fresh `configme install` (serial, then omp) now leaves an OpenMP `libchion.a`
+  (it stayed serial until `make clean`).
 - `chion_grid.x` reads `&ctrl trans_a/b/c` only for the `swd_source` that uses them
   (`par/chion_grl8.nml` lacked `trans_c`); grl8 takes grl16's coefficient block.
 - `chion_column.x` and `chion_grid.x` derive the solar longitude with Chion.jl's
