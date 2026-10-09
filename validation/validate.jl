@@ -29,7 +29,10 @@ See README.md for the tolerance derivations.
 """
 
 using Pkg
-Pkg.activate(@__DIR__)
+# CHION_VALIDATION_PROJECT selects another environment, e.g. one that
+# develops a Chion.jl checkout on a different machine, so the committed
+# Manifest.toml is left untouched.
+Pkg.activate(get(ENV, "CHION_VALIDATION_PROJECT", @__DIR__))
 
 include("forcing.jl")
 include("compare.jl")
@@ -158,7 +161,8 @@ function run_itm_check()
             nfail += 1
             continue
         end
-        out = read(Cmd(`$exe`; dir=CHION_ROOT), String)
+        # ignorestatus: a failing test exits non-zero; report it rather than abort.
+        out = read(ignorestatus(Cmd(`$exe`; dir=CHION_ROOT)), String)
         worst = ""
         for ln in split(out, '\n')
             occursin("equivalence,", ln) && occursin("rel =", ln) && (worst = strip(ln))

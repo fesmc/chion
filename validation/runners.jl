@@ -70,6 +70,9 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
     open(nml, "w") do io
         print(io, """
 &ctrl
+    forcing_source      = "file"
+    dust_dep_default    = 0.0
+    rh_default          = 0.0
     file_forcing        = "$(abspath(forcing))"
     file_out            = "$(outfile)"
     name_x              = "x"
