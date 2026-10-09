@@ -24,7 +24,10 @@ module chion_io
     !
     ! Variable names and units are Chion.jl's (src/io.jl NETCDF_METADATA), so
     ! chion and Chion.jl output files are directly comparable. See the tables
-    ! for the handful of chion-only additions.
+    ! for the handful of chion-only additions and the few long names chion
+    ! corrects. Note `smb` differs by model: BESSI and PDD write chion's
+    ! ice-facing flux [kg m-2 s-1] (chion_get_smb), ITM Chion.jl's total
+    ! surface mass balance rate [mmWE day-1].
     !
     ! -----------------------------------------------------------------------
     ! The `dimensions` column is LOGICAL
@@ -48,12 +51,11 @@ module chion_io
     !
     ! In-memory the scattered array is (nx,ny) and is written with
     ! dim1="xc",dim2="yc", so the file dimension order is (time,yc,xc) --
-    ! CF-standard, and the same convention as yelmo. Chion.jl declares
-    ! ("t","x","y") which lands in the file as (y,x,t). The dimension ORDER
-    ! therefore differs from Chion.jl and cannot be made to match, because
-    ! chion's `time` is unlimited and netCDF requires the unlimited dimension
-    ! to be the slowest-varying one. Names, units and long names do match,
-    ! which is what WP16 compares.
+    ! CF-standard, and the same convention as yelmo. Chion.jl (9ec6cc7)
+    ! declares ("x","y","t") with an unlimited `t`, which lands in the file
+    ! as (t,y,x): the same ORDER. Only the dimension NAMES differ (time/xc/yc
+    ! vs t/x/y; chion keeps yelmo's, docs/porting_notes.md D14). Variable
+    ! names, units and long names match, which is what the harness compares.
     !
     ! -----------------------------------------------------------------------
     ! Restart
@@ -179,8 +181,13 @@ contains
         ! hard-coded reference count of 15 regardless (docs/PLAN.md section 5
         ! item 11); this dimension is the array extent, not that reference.
 
+        ! The thermal ice substrate, when configured, has its own `ice_layer`
+        ! dimension (n_ice, layer 1 at the snow/ice interface).
+
         if (trim(chn%par%model) .eq. "bessi") then
             call nc_write_dim(filename,"layer",x=1,dx=1,nx=chn%bsi%now%Ntot,units="1")
+            if (chn%bsi%now%n_ice .gt. 0) &
+                call nc_write_dim(filename,"ice_layer",x=1,dx=1,nx=chn%bsi%now%n_ice,units="1")
         end if
 
         ! --- Time, unlimited ------------------------------------------
@@ -243,26 +250,35 @@ contains
 
         ncol = chn%grd%ncol
 
-        ! The model-agnostic ice-facing flux for the step just completed.
-        ! Computed here rather than stored, because chn is intent(IN).
-        allocate(smb(ncol))
-        call chion_get_smb(chn,smb)
-
+        ! BESSI and PDD write the model-agnostic ice-facing flux for the step
+        ! just completed as `smb`; computed here rather than stored, because
+        ! chn is intent(IN). ITM's `smb` is its own state field (Chion.jl's
+        ! total surface mass balance rate), so ITM needs nothing extra.
+        !
         ! BESSI's four diagnostics are NOT updated by bessi_column_step -- in
         ! Chion.jl they are produced by summarize_domain_state on the way to
         ! output, and chion keeps that split. So they are recomputed here from
         ! the layer state. The values in chn%bsi%now%thickness etc. are
         ! whatever the last caller of summarize_domain_state left there and
         ! are deliberately not trusted.
-        if (trim(chn%par%model) .eq. "bessi") then
-            allocate(thickness(ncol))
-            allocate(wet_mass(ncol))
-            allocate(bulk_density(ncol))
-            allocate(liquid_water(ncol))
-            call summarize_domain_state(chn%bsi%now%mass,chn%bsi%now%mass_w, &
-                                        chn%bsi%now%density,chn%bsi%now%n_lay, &
-                                        thickness,wet_mass,bulk_density,liquid_water)
-        end if
+        select case(trim(chn%par%model))
+
+            case("bessi")
+                allocate(smb(ncol))
+                call chion_get_smb(chn,smb)
+                allocate(thickness(ncol))
+                allocate(wet_mass(ncol))
+                allocate(bulk_density(ncol))
+                allocate(liquid_water(ncol))
+                call summarize_domain_state(chn%bsi%now%mass,chn%bsi%now%mass_w, &
+                                            chn%bsi%now%density,chn%bsi%now%n_lay, &
+                                            thickness,wet_mass,bulk_density,liquid_water)
+
+            case("pdd")
+                allocate(smb(ncol))
+                call chion_get_smb(chn,smb)
+
+        end select
 
         call nc_open(filename,ncid,writable=.TRUE.)
 
@@ -285,7 +301,7 @@ contains
 
             case("itm")
                 do q = 1, size(var_table)
-                    call chion_write_var_itm(filename,var_table(q),chn,smb,n,ncid)
+                    call chion_write_var_itm(filename,var_table(q),chn,n,ncid)
                 end do
 
             case DEFAULT
@@ -365,13 +381,19 @@ contains
                 call chion_write_col(filename,v,smb,chn%grd,n,ncid)
 
             case("mass")
-                call chion_write_lay(filename,v,chn%bsi%now%mass,chn%grd,n,ncid)
+                call chion_write_lay(filename,v,chn%bsi%now%mass,"layer",chn%grd,n,ncid)
             case("mass_w")
-                call chion_write_lay(filename,v,chn%bsi%now%mass_w,chn%grd,n,ncid)
+                call chion_write_lay(filename,v,chn%bsi%now%mass_w,"layer",chn%grd,n,ncid)
             case("density")
-                call chion_write_lay(filename,v,chn%bsi%now%density,chn%grd,n,ncid)
+                call chion_write_lay(filename,v,chn%bsi%now%density,"layer",chn%grd,n,ncid)
             case("temperature")
-                call chion_write_lay(filename,v,chn%bsi%now%temperature,chn%grd,n,ncid)
+                call chion_write_lay(filename,v,chn%bsi%now%temperature,"layer",chn%grd,n,ncid)
+            case("ice_temperature")
+                ! The thermal ice substrate exists only when configured
+                ! (ice_substrate_layers > 0); without it the file has no
+                ! `ice_layer` dimension and no such variable.
+                if (chn%bsi%now%n_ice .gt. 0) &
+                    call chion_write_lay(filename,v,chn%bsi%now%ice_temperature,"ice_layer",chn%grd,n,ncid)
 
             case DEFAULT
                 call chion_io_var_error("chion_write_var_bessi",v%varname,table_bessi)
@@ -415,14 +437,17 @@ contains
 
     end subroutine chion_write_var_pdd
 
-    subroutine chion_write_var_itm(filename,v,chn,smb,n,ncid)
+    subroutine chion_write_var_itm(filename,v,chn,n,ncid)
+        ! Chion.jl's ITM_OUTPUT_VARS, one-to-one: the rates of the step just
+        ! completed [mmWE day-1] and the cumulative accumulators [mmWE] under
+        ! Chion.jl's names. `smb_ice` is the cumulative ice-facing balance
+        ! (smbi_cum), as in Chion.jl.
 
         implicit none
 
         character(len=*),  intent(IN) :: filename
         type(var_io_type), intent(IN) :: v
         type(chion_class), intent(IN) :: chn
-        real(wp),          intent(IN) :: smb(:)
         integer,           intent(IN) :: n
         integer,           intent(IN) :: ncid
 
@@ -430,23 +455,34 @@ contains
 
             case("H_snow")
                 call chion_write_col(filename,v,chn%itm%now%H_snow,chn%grd,n,ncid)
-            case("albedo")
+            case("alb_s")
                 call chion_write_col(filename,v,chn%itm%now%alb_s,chn%grd,n,ncid)
             case("Tsrf")
                 call chion_write_col(filename,v,chn%itm%now%tsrf,chn%grd,n,ncid)
 
+            case("smb")
+                call chion_write_col(filename,v,chn%itm%now%smb,chn%grd,n,ncid)
+            case("smbi")
+                call chion_write_col(filename,v,chn%itm%now%smbi,chn%grd,n,ncid)
+            case("melt")
+                call chion_write_col(filename,v,chn%itm%now%melt,chn%grd,n,ncid)
+            case("runoff")
+                call chion_write_col(filename,v,chn%itm%now%runoff,chn%grd,n,ncid)
+            case("refreezing")
+                call chion_write_col(filename,v,chn%itm%now%refrz,chn%grd,n,ncid)
+            case("melt_net")
+                call chion_write_col(filename,v,chn%itm%now%melt_net,chn%grd,n,ncid)
+
+            case("smb_cum")
+                call chion_write_col(filename,v,real(chn%itm%now%smb_cum,wp),chn%grd,n,ncid)
             case("smb_ice")
                 call chion_write_col(filename,v,real(chn%itm%now%smbi_cum,wp),chn%grd,n,ncid)
-            case("runoff")
-                call chion_write_col(filename,v,real(chn%itm%now%runoff_cum,wp),chn%grd,n,ncid)
-            case("melt")
+            case("melt_cum")
                 call chion_write_col(filename,v,real(chn%itm%now%melt_cum,wp),chn%grd,n,ncid)
-            case("refreezing")
+            case("runoff_cum")
+                call chion_write_col(filename,v,real(chn%itm%now%runoff_cum,wp),chn%grd,n,ncid)
+            case("refreezing_cum")
                 call chion_write_col(filename,v,real(chn%itm%now%refrz_cum,wp),chn%grd,n,ncid)
-            case("smb_total")
-                call chion_write_col(filename,v,real(chn%itm%now%smb_cum,wp),chn%grd,n,ncid)
-            case("smb")
-                call chion_write_col(filename,v,smb,chn%grd,n,ncid)
 
             case DEFAULT
                 call chion_io_var_error("chion_write_var_itm",v%varname,table_itm)
@@ -500,8 +536,10 @@ contains
 
     end subroutine chion_write_col
 
-    subroutine chion_write_lay(filename,v,dat,grd,n,ncid)
-        ! One (Ntot,ncol) layered field, one time record.
+    subroutine chion_write_lay(filename,v,dat,laydim,grd,n,ncid)
+        ! One (nlay,ncol) layered field, one time record, on the layer
+        ! dimension `laydim` ("layer" for the snow, "ice_layer" for the
+        ! thermal ice substrate).
         !
         ! Layer 1 is the SURFACE and the index increases downward, matching
         ! Chion.jl. The `layer` coordinate is 1..Ntot and carries no depth
@@ -513,32 +551,33 @@ contains
         character(len=*),       intent(IN) :: filename
         type(var_io_type),      intent(IN) :: v
         real(wp),               intent(IN) :: dat(:,:)
+        character(len=*),       intent(IN) :: laydim
         type(chion_grid_class), intent(IN) :: grd
         integer,                intent(IN) :: n
         integer,                intent(IN) :: ncid
 
         ! Local variables
-        integer :: k, nx, ny, Ntot
+        integer :: k, nx, ny, nlay
         real(wp), allocatable :: dat3D(:,:,:)
         real(wp), allocatable :: dat2D(:,:)
 
-        Ntot = size(dat,1)
+        nlay = size(dat,1)
 
         if (grd%has_spatial) then
 
             nx = size(grd%x)
             ny = size(grd%y)
 
-            allocate(dat3D(nx,ny,Ntot))
+            allocate(dat3D(nx,ny,nlay))
 
-            do k = 1, Ntot
+            do k = 1, nlay
                 call chion_scatter_to_grid(dat2D,dat(k,:),grd)
                 dat3D(:,:,k) = dat2D
                 deallocate(dat2D)
             end do
 
             call nc_write(filename,trim(v%varname),dat3D, &
-                          dim1="xc",dim2="yc",dim3="layer",dim4="time",start=[1,1,1,n], &
+                          dim1="xc",dim2="yc",dim3=laydim,dim4="time",start=[1,1,1,n], &
                           units=trim(v%units),long_name=trim(v%long_name), &
                           missing_value=MV,grid_mapping="",ncid=ncid)
 
@@ -547,7 +586,7 @@ contains
         else
 
             call nc_write(filename,trim(v%varname),dat, &
-                          dim1="layer",dim2="column",dim3="time",start=[1,1,n], &
+                          dim1=laydim,dim2="column",dim3="time",start=[1,1,n], &
                           units=trim(v%units),long_name=trim(v%long_name), &
                           missing_value=MV,grid_mapping="",ncid=ncid)
 

@@ -64,6 +64,11 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- ITM output takes Chion.jl's names and units (D42): `alb_s`, rates `smb` (total SMB),
+  `smbi`, `melt`, `runoff`, `refreezing`, `melt_net` [mmWE day-1], cumulative `smb_cum`,
+  `smb_ice`, `melt_cum`, `runoff_cum`, `refreezing_cum` (were `albedo`, `smb_total`,
+  cumulative `melt`/`runoff`/`refreezing`, ice-facing `smb` in kg m-2 s-1). BESSI output
+  adds `ice_temperature` (substrate, `ice_layer` dimension). Restart files unchanged.
 - BESSI thin-snow albedo (D40): the energy balance sees the snow albedo blended with the
   background by a snow-cover fraction, `f = min(1, SWE/swe_crit_albedo)` from the column's
   SWE (10 kg m-2; 0 = off), CLIMBER-X's `tanh` form under `albedo_scheme = "semix"`

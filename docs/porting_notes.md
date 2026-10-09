@@ -219,13 +219,13 @@ the test. Two consequences worth knowing before WP19:
 
 ## WP14/WP15 — IO and drivers
 
-### D14. Output dimension order differs from Chion.jl, of necessity
-**What:** Chion.jl declares `("t","x","y")`, landing in the file as `var(y,x,t)`. chion writes
-`var(time,yc,xc)`.
-**Why:** `time` is the unlimited dimension, and netCDF requires the unlimited dimension to be
-slowest-varying. This is also CF-standard and yelmo's convention.
-**Impact:** **WP16's comparison harness must permute axes.** Variable names, units and
-`long_name` are unaffected and match exactly for all 20 shared variables.
+### D14. Output dimension names differ from Chion.jl
+**What:** Chion.jl (9ec6cc7) declares `("x","y","t")` with an unlimited `t`, landing in the
+file as `var(t,y,x)`; chion writes `var(time,yc,xc)`. Same order, different names.
+(Before 9ec6cc7 Chion.jl wrote `var(y,x,t)`, so the order differed too.)
+**Why:** `time`/`xc`/`yc` are yelmo's names, which the stack's tools read.
+**Impact:** the harness looks dimensions up by either name (`read_canonical`). Variable names,
+units and `long_name` match for every shared variable except ITM's three rates (D42).
 
 ### D15. Unmapped grid cells use `MV = -9999`, not NaN
 **What:** Chion.jl fills cells with no column at NaN; chion uses `chion_defs`' `MV`, written as
@@ -790,6 +790,40 @@ would feed a host ice model `smb_ice` where there is no ice. The land albedo is 
 `H_ice_default` (domain) or `name_hice` (file; `"None"` = land). Mass still closes. The
 harness' configurations without `HI` are land for chion, gated under `legacy_chion`.
 
+
+### D42. Output names: Chion.jl's ITM names; chion's host-contract forcing names
+**What:** ITM output takes Chion.jl's `ITM_OUTPUT_VARS` names and units (WP15): `H_snow`,
+`alb_s`, the step's rates `smb`, `smbi`, `melt`, `runoff`, `refreezing`, `melt_net`
+[mmWE day-1], `Tsrf`, and the cumulative `smb_cum`, `smb_ice` (= `smbi_cum`), `melt_cum`,
+`runoff_cum`, `refreezing_cum` [mmWE]. Two deliberate differences:
+- ITM's `smb` is the TOTAL surface mass balance rate (`sf + rf - runoff`, mmWE day-1),
+  whereas BESSI's and PDD's `smb` is chion's ice-facing flux from `chion_get_smb`
+  [kg m-2 s-1]. ITM's ice-facing rate is `smbi`.
+- `melt`, `runoff`, `refreezing` carry the rate unit and long name ("ITM melt rate",
+  mmWE day-1). Chion.jl looks them up under BESSI's cumulative metadata ("Cumulative melt",
+  mmWE), which is wrong for ITM (upstream, 1c.7).
+BESSI adds `ice_temperature` (substrate, on `ice_layer`, only when configured; Chion.jl does
+not write it) and omits the monthly-only `surface_smb`/`latent_heat_flux` (no monthly writer).
+Forcing fields keep chion's names, which are the host contract (yelmox):
+
+| chion `chion_forcing_class` | Chion.jl forcing |
+|---|---|
+| `dust_dep`, `has_dust_dep` | `dust_deposition`, `has_dust_deposition` |
+| `alb_ice_host`, `has_alb_ice_host` | `prescribed_ice_albedo`, `has_prescribed_ice_albedo` |
+| `H_ice` | `ice_thickness` |
+| `PDDs` | `annual_pdd` |
+| `toa_shortwave` (chion only, D33) | — |
+
+ITM's Fortran state and restart fields keep smbpal's names (`refrz`, `tsrf`, `smbi_cum`,
+`refrz_cum`); only the output file is renamed.
+**Why:** plan decision 13 (Julia's ITM names); a renamed host interface would break yelmox
+for no gain. yelmox reads chion through the API and writes its own `chion.nc`, so no host
+code reads chion's output names.
+**Impact:** ITM output files change names (`albedo` -> `alb_s`, `smb_total` -> `smb_cum`,
+cumulative `melt`/`runoff`/`refreezing` -> `*_cum`, `smb` [kg m-2 s-1] -> `smbi` [mmWE day-1]).
+The harness compares all 14 ITM fields by name. `diagnostics/compare_*.jl` read
+`runoff_cum` when present.
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was
@@ -1096,6 +1130,10 @@ tightened without moving the layer mass arrays to `dp`.**
     can only return `melted < melt_mass` when the column is empty.
 20b. **(C) PDD hard-codes `273.15` and `86400.0`** rather than using a constants struct, and
     uses a single `sigma` where smbpal uses three by surface type.
+21b. **(C) ITM rates labelled cumulative (`io.jl`).** `ITM_OUTPUT_VARS` `melt`, `runoff`,
+    `refreezing` are the step's rates [mmWE day-1] but take BESSI's `NETCDF_METADATA`
+    entries ("Cumulative melt", mmWE). Suggest ITM-specific entries ("ITM melt rate",
+    "mmWE day-1"), as chion writes (D42).
 
 The full PDD analysis, with quantified impacts and recommended fixes, is in
 `docs/pdd_defects.md` (12 Chion.jl defects, 1 smbpal defect).

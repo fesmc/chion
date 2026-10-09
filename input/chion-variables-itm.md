@@ -2,16 +2,21 @@
 
 Output variable table for `model = "itm"`, read by `chion_io.f90`.
 
-Where a quantity has the same meaning as a BESSI/Chion.jl one, the Chion.jl
-BESSI NAME and UNITS are reused deliberately, so that a host can read
-`smb_ice`, `runoff`, `melt`, `refreezing`, `albedo` and `Tsrf` from any chion
-output file without knowing which model produced it. The remaining entries
-carry smbpal's own names. Chion.jl's `ITMModel` (added later, ported from
-chion) writes `alb_s`, `smb_cum`, `melt_cum`, `runoff_cum`, `refreezing_cum`
-for ids 2 and 5-8; validation/compare.jl `ITM_PAIRS` maps them.
+Names follow `Chion.jl/src/io.jl` `ITM_OUTPUT_VARS` one-to-one, so a chion and a
+Chion.jl ITM file are directly comparable. Units and long names are Chion.jl's
+(`NETCDF_METADATA`) except for `melt`, `runoff` and `refreezing`: Chion.jl
+looks these up under BESSI's cumulative entries ("Cumulative melt", mmWE),
+but for ITM they are the step's rates, so chion writes the rate unit and long
+name (reported upstream).
 
-Note ITM works internally in [mm w.e.] and [mm w.e. d-1]; mm w.e. is kg m-2 by
-definition, so `mmWE` is used throughout for consistency with the other tables.
+The rates [mmWE day-1] are those of the step just completed; the `*_cum`
+fields and `smb_ice` are cumulative [mmWE]. mm w.e. is kg m-2 by definition.
+
+**`smb` differs from BESSI's and PDD's `smb`.** Here it is ITM's TOTAL surface
+mass balance rate (`sf + rf - runoff`) in mmWE day-1, as in Chion.jl. BESSI and
+PDD write chion's ice-facing flux from `chion_get_smb` in kg m-2 s-1 under that
+name. ITM's ice-facing rate is `smbi` (mmWE day-1); `chion_get_smb` returns
+`smbi/86400` in kg m-2 s-1.
 
 The `dimensions` column is LOGICAL: `column` becomes `xc, yc` when a spatial
 mapping is attached with `chion_set_grid`, and a bare `column` dimension
@@ -19,25 +24,27 @@ otherwise. `time` is appended by the writer and is always unlimited.
 
 | id | variable             | dimensions    | units       | long_name                                            |
 |----|----------------------|---------------|-------------|------------------------------------------------------|
-|  1 | H_snow               | column        | mmWE        | Snowpack thickness                                   |
-|  2 | albedo               | column        | 1           | Surface albedo                                       |
-|  3 | Tsrf                 | column        | K           | Surface temperature                                  |
-|  4 | smb_ice              | column        | mmWE        | Net mass forcing to the ice sheet                    |
-|  5 | runoff               | column        | mmWE        | Cumulative runoff                                    |
-|  6 | melt                 | column        | mmWE        | Cumulative melt                                      |
-|  7 | refreezing           | column        | mmWE        | Cumulative refreezing                                |
-|  8 | smb_total            | column        | mmWE        | Cumulative whole-column surface mass balance         |
-|  9 | smb                  | column        | kg m-2 s-1  | Net mass flux to the ice sheet                       |
+|  1 | H_snow               | column        | mmWE        | ITM snowpack water equivalent                        |
+|  2 | alb_s                | column        | 1           | ITM surface albedo                                   |
+|  3 | smb                  | column        | mmWE day-1  | ITM total surface mass balance rate                  |
+|  4 | smbi                 | column        | mmWE day-1  | ITM ice-facing mass balance rate                     |
+|  5 | melt                 | column        | mmWE day-1  | ITM melt rate                                        |
+|  6 | runoff               | column        | mmWE day-1  | ITM runoff rate                                      |
+|  7 | refreezing           | column        | mmWE day-1  | ITM refreezing rate                                  |
+|  8 | Tsrf                 | column        | K           | Surface temperature                                  |
+|  9 | melt_net             | column        | mmWE day-1  | ITM net melt rate                                    |
+| 10 | smb_cum              | column        | mmWE        | ITM cumulative surface mass balance                  |
+| 11 | smb_ice              | column        | mmWE        | Net mass forcing to the ice sheet                    |
+| 12 | melt_cum             | column        | mmWE        | ITM cumulative melt                                  |
+| 13 | runoff_cum           | column        | mmWE        | ITM cumulative runoff                                |
+| 14 | refreezing_cum       | column        | mmWE        | ITM cumulative refreezing                            |
 
 Notes.
 
-* `albedo` is smbpal's `alb_s`, `Tsrf` is its `tsrf`.
-* `smb_ice` is `smbi_cum`, the cumulative form of smbpal's `smbi`
-  (`snow_to_ice + refrz - melted_ice`). `smb_total` is `smb_cum`, the cumulative
-  form of smbpal's whole-column `smb` (`sf + rf - runoff`). The two are
-  different quantities and both are reported, because smbpal reports both.
-* `runoff`, `melt` and `refreezing` are the cumulative accumulators
-  (`runoff_cum`, `melt_cum`, `refrz_cum`), not smbpal's per-step rates, so they
-  have the same meaning as BESSI's fields of the same name.
-* `smb` (id 9) is `chion_get_smb`, i.e. `smbi_cum` differenced over the step and
-  converted to kg m-2 s-1. It reproduces `itm%now%smbi/86400` exactly.
+* Fortran state names (`chn%itm%now`, and the restart file) keep smbpal's:
+  `refrz` = `refreezing`, `tsrf` = `Tsrf`, `smbi_cum` = `smb_ice`,
+  `refrz_cum` = `refreezing_cum`.
+* `melt_net` is `refrz - melt` (on ice) or `refrz - snow melt` (land), the
+  input of the firn-warming surface temperature.
+* `smb_ice` (`smbi_cum`, `snow_to_ice + refrz - melted_ice` integrated) is the
+  ice-facing balance; `smb_cum` the whole-column one (`sf + rf - runoff`).

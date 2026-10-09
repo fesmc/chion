@@ -124,6 +124,7 @@ Verify: gate green with Chion.jl defaults; record default-run deltas (10-yr colu
 
 **WP15 — Output/naming alignment.** Decided: ITM output takes Julia's names (`alb_s`, `smb`, `smbi`, `melt_net`, `smb_cum`, `melt_cum`, `runoff_cum`, `refreezing_cum`, …) and units, in `chion_io.f90` and `input/chion-variables-itm.md`. ITM's `smb` then means total SMB [mm w.e. d-1], unlike BESSI/PDD's ice-facing `smb` — document it. Write correct long_names (Julia labels the rates "Cumulative", 1c.7) and report that upstream. Fix stale dim-order comment `chion_io.f90:50-56`. Keep `dust_dep`/`alb_ice_host` Fortran names (host contract) and document the mapping.
 Verify: `tests/test_io.f90`; yelmox build unaffected (names it reads unchanged).
+**Done:** D42; ITM output = Chion.jl `ITM_OUTPUT_VARS` (14 fields, rates with corrected units/long names), BESSI `ice_temperature` (C10; `surface_smb` skipped, Q10), D14 and the `chion_io` dim-order comment updated (Chion.jl now writes (t,y,x) too), harness compares ITM by name (`ITM_VARS`). yelmox (read-only grep): no code reads chion output names (it writes its own `chion.nc`, reads `chn%itm%now%H_snow`, uses chion's restart unchanged).
 
 **WP16 — Docs.** `PLAN.md` header (new reference commit), `porting_notes.md` (new D-entries for WP2/5/9–11; D22/D24/D27 updates; upstream-defect status: 19, 20, 11, 24?, 26 closed), `pdd_defects.md`, CHANGELOG, `validation/README.md`. Draft the upstream issue list from §1c for Nils.
 

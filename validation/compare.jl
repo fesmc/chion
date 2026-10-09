@@ -45,17 +45,12 @@ const BESSI_AGING_VARS = vcat(BESSI_VARS, ["snow_age_days"])
 const PDD_VARS = ["snowpack_swe", "smb_ice", "runoff", "pdd_sum"]
 
 """
-ITM fields, chion name => Chion.jl name. chion writes the cumulative
-accumulators under BESSI's names (input/chion-variables-itm.md); Chion.jl
-writes them as `*_cum` next to per-step rates chion does not write. chion's
-`smb` (the step's ice-facing flux, kg m-2 s-1) is `smb_ice` differenced and is
-covered by it.
+The 14 ITM fields, Chion.jl's ITM_OUTPUT_VARS: chion writes the same names
+(input/chion-variables-itm.md), rates of the step and cumulative `*_cum`.
 """
-const ITM_PAIRS = ["H_snow" => "H_snow", "albedo" => "alb_s", "Tsrf" => "Tsrf",
-                   "smb_ice" => "smb_ice", "runoff" => "runoff_cum",
-                   "melt" => "melt_cum", "refreezing" => "refreezing_cum",
-                   "smb_total" => "smb_cum"]
-const ITM_VARS = first.(ITM_PAIRS)
+const ITM_VARS = ["H_snow", "alb_s", "smb", "smbi", "melt", "runoff", "refreezing",
+                  "Tsrf", "melt_net", "smb_cum", "smb_ice", "melt_cum", "runoff_cum",
+                  "refreezing_cum"]
 
 const TIME_NAMES = ("t", "time")
 const X_NAMES = ("x", "xc")

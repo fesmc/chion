@@ -6,8 +6,11 @@ enough on its own: it also needs a `case` in `chion_write_var_bessi`.
 
 Names, units and long names are taken verbatim from `Chion.jl/src/io.jl`
 `NETCDF_METADATA` so that a chion output file and a Chion.jl output file are
-directly comparable variable by variable (WP16). Three entries (`vapor_mass`,
-`smb`, `albedo_snow`) have no Chion.jl counterpart and are flagged below.
+directly comparable variable by variable (WP16). Four entries (`vapor_mass`,
+`smb`, `albedo_snow`, `ice_temperature`) have no Chion.jl counterpart and are
+flagged below. Chion.jl's monthly-only `surface_smb` and `latent_heat_flux` are
+not written: chion has no monthly writer, and a host forms its surface SMB
+from the cumulative fields itself (precipitation - runoff - sublimation).
 
 The `dimensions` column is LOGICAL, not literal. `column` is expanded by the
 writer to `xc, yc` when a spatial mapping has been attached with
@@ -38,6 +41,7 @@ appended by the writer and is always the unlimited dimension.
 | 20 | temperature          | layer, column | K           | Layer temperature                                    |
 | 21 | snow_age_days        | column        | day         | Time since the latest snowfall event                 |
 | 22 | albedo_snow          | column        | 1           | Snow albedo before the thin-snow blend               |
+| 23 | ice_temperature      | ice_layer, column | K       | Ice substrate layer temperature                      |
 
 Notes.
 
@@ -52,6 +56,13 @@ Notes.
   energy balance sees, `albedo_snow` blended with the background by the
   snow-cover fraction; the two agree under full snow cover and in Chion.jl,
   which has no blend.
+* `ice_temperature` (id 23) is a chion addition: the thermal ice substrate
+  (Chion.jl 03bb445 keeps it in the state but does not write it). It is
+  written only when `ice_substrate_layers > 0`, on its own `ice_layer`
+  dimension (layer 1 at the snow/ice interface, thicknesses doubling down).
+* `smb` (id 16) is the ice-facing flux in kg m-2 s-1 here and in PDD; ITM's
+  `smb` is Chion.jl's total surface mass balance rate in mmWE day-1
+  (`input/chion-variables-itm.md`).
 * `N` (id 15) is written as a float in output files so that unmapped grid cells
   can carry the missing value. The restart file writes it as an integer.
 * `latent_heat_flux_sum` is in W m-2 days, not W m-2 — the accumulator is

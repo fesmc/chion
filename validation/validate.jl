@@ -158,10 +158,10 @@ function check_itm_coverage(chion_path::AbstractString, forcing_path::AbstractSt
     NCDataset(chion_path) do dc
         tsrf, _ = read_canonical(dc, "Tsrf")
         hs, _ = read_canonical(dc, "H_snow")
-        alb, _ = read_canonical(dc, "albedo")
+        alb, _ = read_canonical(dc, "alb_s")
         smbi, _ = read_canonical(dc, "smb_ice")
-        melt, _ = read_canonical(dc, "melt")
-        refr, _ = read_canonical(dc, "refreezing")
+        melt, _ = read_canonical(dc, "melt_cum")
+        refr, _ = read_canonical(dc, "refreezing_cum")
     end
     # Record 1 is chion's initial state; columns are the scenarios in order.
     col(a, name) = Float64.(a[2:end, 1, findfirst(==(name), names)])
@@ -703,7 +703,7 @@ function run_itm_julia(nstep::Int)
                        outfile="chion_itm_dp_legacy.nc", workdir=WORKDIR,
                        model="itm", dt_out=1.0, dt=1.0, nml_extra=itm_nml(),
                        name_hice="HI", name_pdds="PDDA")
-    d = compare_files(ch_itm, jl_itm, ITM_PAIRS; eps_wp=eps_of(:dp))
+    d = compare_files(ch_itm, jl_itm, ITM_VARS; eps_wp=eps_of(:dp))
     report(d, "ITM port fidelity: chion dp+legacy vs Chion.jl")
     nfail = gate(d, "ITM port fidelity")
     nfail += check_itm_coverage(ch_itm, fitm, [sc.name for (sc, g) in ITM_SCENARIOS])

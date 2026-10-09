@@ -519,6 +519,8 @@ module chion_defs
         logical,  allocatable :: has_coszm(:)
         real(wp), allocatable :: cloud(:)                ! [1] cloud fraction
         logical,  allocatable :: has_cloud(:)
+        ! dust_dep and alb_ice_host are Chion.jl's dust_deposition and
+        ! prescribed_ice_albedo under the host-contract names (D42).
         real(wp), allocatable :: dust_dep(:)             ! [kg m-2 s-1] dust deposition
         logical,  allocatable :: has_dust_dep(:)
         real(wp), allocatable :: z_sur_std(:)            ! [m] subgrid height std dev

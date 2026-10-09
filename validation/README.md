@@ -280,9 +280,10 @@ split a layer, and `mass_base` was identically zero on both sides — so its
   The ITM forcing carries them as `HI` / `PDDA`; `run_julia_itm` merges them
   into the loaded forcing, and `chion_grid.x` reads them via `name_hice` /
   `name_pdds`.
-- **ITM output names differ.** chion writes the cumulative accumulators under
-  BESSI's names (`melt`, `runoff`, `refreezing`, `smb_total`, `albedo`),
-  Chion.jl as `*_cum`, `smb_cum` and `alb_s`; `ITM_PAIRS` maps them.
+- **ITM output names are Chion.jl's** (`ITM_OUTPUT_VARS`, WP15): all 14 fields,
+  the step's rates and the `*_cum` accumulators, are compared by name
+  (`ITM_VARS`). chion corrects the units and long names of the rates
+  `melt`/`runoff`/`refreezing`, which Chion.jl labels as cumulative.
 - **Chion.jl cannot read a CF time axis.** The forcing file carries the time
   axis twice — CF numeric for `chion_grid.x`, and YYYY/MM/DD/HH for Chion.jl.
   See the note in `forcing.jl` and the upstream defect list.

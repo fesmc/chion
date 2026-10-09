@@ -100,6 +100,7 @@ program test_io
             call test_restart_refused(nfail)
 
             call test_output_structure("bessi",nfail)
+            call test_output_structure("bessi",nfail,n_ice=0)
             call test_output_structure("pdd",  nfail)
             call test_output_structure("itm",  nfail)
 
@@ -486,12 +487,13 @@ contains
     ! (d) Output file structure
     ! =====================================================================
 
-    subroutine test_output_structure(model,nfail)
+    subroutine test_output_structure(model,nfail,n_ice)
 
         implicit none
 
-        character(len=*), intent(IN)    :: model
-        integer,          intent(INOUT) :: nfail
+        character(len=*),  intent(IN)    :: model
+        integer,           intent(INOUT) :: nfail
+        integer, optional, intent(IN)    :: n_ice
 
         ! Local variables
         type(chion_class) :: chn
@@ -500,7 +502,7 @@ contains
         write(*,*)
         write(*,"(a)") "--- (d) output file structure, model = "//trim(model)//" ---"
 
-        call write_par(par_a,model)
+        call write_par(par_a,model,n_ice=n_ice)
 
         call chion_init(chn,par_a,NCOL_TEST)
         call chion_init_state(chn)
@@ -555,6 +557,17 @@ contains
                 ! Shape of a layered variable: (layer,column,time).
                 call check_shape3("mass",chn%bsi%now%Ntot,NCOL_TEST,4,nfail)
 
+                ! The thermal ice substrate, on its own dimension, only when
+                ! configured.
+                if (chn%bsi%now%n_ice .gt. 0) then
+                    call check_int("dim ice_layer",nc_size(file_out,"ice_layer"),chn%bsi%now%n_ice,nfail)
+                    call check_var("ice_temperature","K","Ice substrate layer temperature",nfail)
+                    call check_shape3("ice_temperature",chn%bsi%now%n_ice,NCOL_TEST,4,nfail)
+                else
+                    call check("no ice_temperature without a substrate", &
+                               .not. nc_exists_var(file_out,"ice_temperature"),nfail)
+                end if
+
             case("pdd")
 
                 call check_var("snowpack_swe","mmWE",      "Snowpack water equivalent",        nfail)
@@ -568,15 +581,28 @@ contains
 
             case("itm")
 
-                call check_var("H_snow",   "mmWE",      "Snowpack thickness",                          nfail)
-                call check_var("albedo",   "1",         "Surface albedo",                              nfail)
-                call check_var("Tsrf",     "K",         "Surface temperature",                         nfail)
-                call check_var("smb_ice",  "mmWE",      "Net mass forcing to the ice sheet",           nfail)
-                call check_var("runoff",   "mmWE",      "Cumulative runoff",                           nfail)
-                call check_var("melt",     "mmWE",      "Cumulative melt",                             nfail)
-                call check_var("refreezing","mmWE",     "Cumulative refreezing",                       nfail)
-                call check_var("smb_total","mmWE",      "Cumulative whole-column surface mass balance",nfail)
-                call check_var("smb",      "kg m-2 s-1","Net mass flux to the ice sheet",              nfail)
+                ! Chion.jl ITM_OUTPUT_VARS; melt/runoff/refreezing carry the
+                ! rate unit and long name (Chion.jl labels them cumulative).
+                call check_var("H_snow",        "mmWE",       "ITM snowpack water equivalent",       nfail)
+                call check_var("alb_s",         "1",          "ITM surface albedo",                  nfail)
+                call check_var("smb",           "mmWE day-1", "ITM total surface mass balance rate", nfail)
+                call check_var("smbi",          "mmWE day-1", "ITM ice-facing mass balance rate",    nfail)
+                call check_var("melt",          "mmWE day-1", "ITM melt rate",                       nfail)
+                call check_var("runoff",        "mmWE day-1", "ITM runoff rate",                     nfail)
+                call check_var("refreezing",    "mmWE day-1", "ITM refreezing rate",                 nfail)
+                call check_var("Tsrf",          "K",          "Surface temperature",                 nfail)
+                call check_var("melt_net",      "mmWE day-1", "ITM net melt rate",                   nfail)
+                call check_var("smb_cum",       "mmWE",       "ITM cumulative surface mass balance", nfail)
+                call check_var("smb_ice",       "mmWE",       "Net mass forcing to the ice sheet",   nfail)
+                call check_var("melt_cum",      "mmWE",       "ITM cumulative melt",                 nfail)
+                call check_var("runoff_cum",    "mmWE",       "ITM cumulative runoff",               nfail)
+                call check_var("refreezing_cum","mmWE",       "ITM cumulative refreezing",           nfail)
+
+                ! The values are the state's, last record = after step 3.
+                call check_last_col("smb",           chn%itm%now%smb,                 nfail)
+                call check_last_col("refreezing",    chn%itm%now%refrz,               nfail)
+                call check_last_col("smb_ice",       real(chn%itm%now%smbi_cum,wp),   nfail)
+                call check_last_col("refreezing_cum",real(chn%itm%now%refrz_cum,wp),  nfail)
 
         end select
 
@@ -622,6 +648,29 @@ contains
         return
 
     end subroutine check_var
+
+    subroutine check_last_col(varname,expected,nfail)
+        ! The last record (4) of a (column,time) output field equals `expected`
+        ! exactly: the writer copies the state, it computes nothing.
+
+        implicit none
+
+        character(len=*), intent(IN)    :: varname
+        real(wp),         intent(IN)    :: expected(:)
+        integer,          intent(INOUT) :: nfail
+
+        ! Local variables
+        real(wp), allocatable :: got(:)
+
+        allocate(got(size(expected)))
+        call nc_read(file_out,trim(varname),got,start=[1,4],count=[size(expected),1])
+
+        call check(trim(varname)//" last record equals the state", &
+                   all(got .eq. expected),nfail)
+
+        return
+
+    end subroutine check_last_col
 
     subroutine check_shape3(varname,n1,n2,n3,nfail)
 
