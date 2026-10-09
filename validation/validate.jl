@@ -455,6 +455,60 @@ function run_bessi_fine_substrate(nstep::Int)
 end
 
 """
+BESSI with the cloud-proxy longwave (Chion.jl 03bb445, plan C5): the
+downwelling longwave from an emissivity in air temperature and a shortwave
+cloudiness proxy, `n = 1 - SWD/(TOA*tau_clear(z))`, with chion's internal
+daily TOA (the host TOA of D33 is not set). Gated like the default
+configuration (dp+legacy, every BESSI field, same forcing). The TOA needs the
+same day of year and solar longitude on both sides (see runners.jl). Coverage:
+at LAT = 70 N the year has days on the shortwave proxy and polar-night days on
+the night cloudiness, the proxy is unclamped on some days, and chion's result
+differs from the graybody run `ch_graybody`.
+"""
+function run_bessi_cloud_proxy(fbessi::AbstractString, ch_graybody::AbstractString)
+    jl = run_julia_bessi(; forcing=fbessi, outfile="julia_bessi_lwcp.nc", workdir=WORKDIR,
+                         ntot=15, years=1, overrides=(longwave_scheme=:cloud_proxy,))
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
+                   outfile="chion_bessi_lwcp_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0,
+                   nml_extra=const_nml(longwave_scheme="cloud_proxy"))
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, cloud-proxy longwave: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity (cloud-proxy longwave)")
+
+    # Which cloudiness branch each day takes, from Chion.jl's own TOA and
+    # calendar (record k <-> day of year k on the harness axis).
+    lat, zs, sw = NCDataset(fbessi) do ds
+        (Float64(ds["LAT"][1, 1]), Float64(ds["SH"][1, 1]), Array(ds["SWD"]))   # SWD (x, y, time)
+    end
+    nt = size(sw, 3)
+    toa = [Chion._daily_toa_shortwave(lat, Chion._solar_longitude_deg_from_calendar_day(Float64(k)),
+                                      Float64(k)) for k in 1:nt]
+    daily = toa .> 50.0
+    tau = 0.85 + 0.075 * zs / 1000
+    inner = count(k -> daily[k] && any(0.0 < 1 - sw[i, 1, k] / (toa[k] * tau) < 1.0
+                                       for i in axes(sw, 1)), 1:nt)
+    tsrf(path) = NCDataset(dc -> read_canonical(dc, "Tsrf")[1], path)
+    ts, ts_g = tsrf(ch), tsrf(ch_graybody)
+    moved = maximum(abs(Float64(x)) for x in skipmissing(ts .- ts_g))
+    println()
+    println("      $(count(daily)) days on the shortwave proxy, $(nt - count(daily)) on the " *
+            "night cloudiness; $(inner) days with an unclamped cloudiness; " *
+            "max |Tsrf - Tsrf(graybody)| = $(round(moved; digits=2)) K")
+    checks = [("cloud proxy: days on the shortwave cloudiness proxy", count(daily) > 0),
+              ("cloud proxy: polar-night days on the night cloudiness", count(.!daily) > 0),
+              ("cloud proxy: cloudiness unclamped on some days", inner > 0),
+              ("cloud proxy: result differs from the graybody run", moved > 0.1)]
+    println()
+    println("--- coverage assertions (cloud-proxy longwave) ---")
+    for (label, ok) in checks
+        println(ok ? "  ok   : $label" : "  FAIL : $label")
+        ok || (nfail += 1)
+    end
+    return nfail
+end
+
+"""
 ITM against Chion.jl's ITMModel (ported from chion, 29eb867): dp+legacy, so
 chion's tsrf uses the daily melt_net as Chion.jl does (D27), and all eight
 written fields are gated.
@@ -559,6 +613,7 @@ function main()
     nfail += run_bessi_substrate(nstep)
     nfail += run_bessi_fine(fbessi)
     nfail += run_bessi_fine_substrate(nstep)
+    nfail += run_bessi_cloud_proxy(fbessi, ch_legacy)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

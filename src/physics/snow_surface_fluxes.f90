@@ -34,15 +34,22 @@ module snow_surface_fluxes
     ! mass conversion are accumulated in real(wp_acc) locals. See
     ! docs/PLAN.md section 3.1.
 
+    use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
+
     use chion_defs, only : wp, wp_acc, TOL_EMPTY_LAYER, io_unit_err, &
                            CHION_ALBEDO_PRESCRIBED, CHION_SEB_SEMIX, &
+                           CHION_LONGWAVE_CLOUD_PROXY, &
                            chion_const_class, chion_step_forcing_class
     use snow_column_utils, only : surface_has_snow
+
+    ! Daily-mean top-of-atmosphere shortwave for the cloud-proxy longwave.
+    use snow_diurnal, only : daily_toa_shortwave
 
     ! Vapour-pressure parameterizations and the BESSI latent flux built from
     ! them. Extracted to snow_vapor so that snow_seb_semix can share them
     ! without a circular dependency on this module.
-    use snow_vapor, only : latent_vapor_flux, vapor_mass_flux, surface_vapor_latent_heat
+    use snow_vapor, only : latent_vapor_flux, vapor_mass_flux, surface_vapor_latent_heat, &
+                           safe_positive
 
     ! SEMIX aerodynamic surface scheme, selected by c%seb_scheme. It supplies
     ! the exact-at-known-T turbulent fluxes here, as it supplies the linearized
@@ -66,6 +73,16 @@ module snow_surface_fluxes
     implicit none
 
     private
+
+    ! Cloud-proxy longwave limits, literals in Chion.jl 03bb445
+    ! (surface_fluxes.jl LONGWAVE_CLOUD_PROXY_MIN_TOA, _cloud_proxy_emissivity):
+    ! below this daily-mean TOA (polar night) the shortwave cloudiness proxy is
+    ! undefined; it needs a daily-mean shortwave, so a step of at least
+    ! CLOUD_PROXY_DT_DAYS_MIN; the emissivity is clamped to [MIN, MAX].
+    real(wp), parameter :: CLOUD_PROXY_MIN_TOA        = 50.0_wp   ! [W m-2]
+    real(wp), parameter :: CLOUD_PROXY_DT_DAYS_MIN    = 0.75_wp   ! [d]
+    real(wp), parameter :: CLOUD_PROXY_EMISSIVITY_MIN = 0.4_wp    ! [1]
+    real(wp), parameter :: CLOUD_PROXY_EMISSIVITY_MAX = 1.3_wp    ! [1]
 
     ! === Return types ========================================================
     ! Julia returns named tuples; Fortran gets small derived types. FIELD ORDER
@@ -123,6 +140,10 @@ module snow_surface_fluxes
     public :: surface_vapor_flux_class
     public :: latent_heat_coeff_class
 
+    ! Parameterized downwelling longwave (longwave_scheme)
+    public :: cloud_proxy_emissivity
+    public :: with_parameterized_longwave
+
     ! Resolved (exact-at-known-T) surface fluxes
     public :: resolved_nonshortwave_surface_flux_components
     public :: resolved_bare_ice_surface_flux_components
@@ -134,6 +155,111 @@ module snow_surface_fluxes
     public :: apply_snow_surface_vapor_mass_flux
 
 contains
+
+    ! =====================================================================
+    ! Parameterized downwelling longwave
+    ! =====================================================================
+
+    pure function cloud_proxy_emissivity(c,forc) result(emissivity)
+        ! Chion.jl/src/processes/surface_fluxes.jl:_cloud_proxy_emissivity
+        ! (03bb445). Effective atmospheric emissivity relative to the air
+        ! temperature,
+        !     eps = clamp(eps0 + eps_T*(T_a - T0) + eps_n*n, 0.4, 1.3),
+        ! with the cloudiness n = clamp(1 - SWdn/(TOA*tau_clear(z)), 0, 1)
+        ! from the daily shortwave transmissivity the forcing already carries,
+        ! and tau_clear = tau0 + tau_km*z/1000 (z = surface_height; non-finite
+        ! or negative -> 0). Where the proxy is undefined -- polar night
+        ! (TOA <= 50 W m-2), a sub-daily step (dt < 0.75 d, where SWdn is not
+        ! a daily mean), no latitude -- n is the constant night cloudiness.
+        !
+        ! TOA is chion's fixed-orbit daily mean from latitude, solar longitude
+        ! and day of year, as in Julia, unless the host supplies its own
+        ! (has_toa_shortwave; chion only, docs/porting_notes.md D33). The
+        ! host's TOA needs no latitude.
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        real(wp) :: emissivity                                ! [1]
+
+        ! Local variables
+        logical  :: daily
+        real(wp) :: toa, height, clear_transmissivity, cloudiness
+
+        if (forc%has_toa_shortwave) then
+            toa   = forc%toa_shortwave
+            daily = .TRUE.
+        else if (ieee_is_finite(forc%latitude_deg)) then
+            toa   = daily_toa_shortwave(forc%latitude_deg,forc%solar_longitude_deg, &
+                                        forc%day_of_year)
+            daily = .TRUE.
+        else
+            toa   = 0.0_wp
+            daily = .FALSE.
+        end if
+
+        daily = daily .and. toa .gt. CLOUD_PROXY_MIN_TOA &
+                      .and. forc%dt_days .ge. CLOUD_PROXY_DT_DAYS_MIN
+
+        ! Forcing without a surface height (NaN) uses the sea-level clear-sky
+        ! transmissivity.
+        if (ieee_is_finite(forc%surface_height)) then
+            height = max(forc%surface_height,0.0_wp)
+        else
+            height = 0.0_wp
+        end if
+
+        clear_transmissivity = c%lw_clear_sky_transmissivity &
+                               + c%lw_clear_sky_transmissivity_per_km*height/1000.0_wp
+
+        if (daily) then
+            cloudiness = min(max(1.0_wp - forc%shortwave_down &
+                                 /safe_positive(toa*clear_transmissivity), &
+                                 0.0_wp),1.0_wp)
+        else
+            cloudiness = c%lw_night_cloud_fraction
+        end if
+
+        emissivity = c%lw_emissivity_base &
+                     + c%lw_emissivity_temperature_slope*(forc%air_temperature - c%T0) &
+                     + c%lw_emissivity_cloud_slope*cloudiness
+
+        emissivity = min(max(emissivity,CLOUD_PROXY_EMISSIVITY_MIN),CLOUD_PROXY_EMISSIVITY_MAX)
+
+        return
+
+    end function cloud_proxy_emissivity
+
+    pure function with_parameterized_longwave(c,forc) result(fc)
+        ! Chion.jl/src/processes/surface_fluxes.jl:_with_parameterized_longwave
+        ! (03bb445), applied by bessi_column_step to the step forcing BEFORE
+        ! the diurnal substeps. Under longwave_scheme = "cloud_proxy", and only
+        ! when the host prescribes no longwave, the daily downwelling flux
+        !     q_lw_down = eps*sigma*T_a^4
+        ! is resolved once from the daily forcing and passed on as if
+        ! prescribed (has_q_lw_down), so every substep reuses the daily cloud
+        ! proxy and every downstream site -- the snow energy solve, both
+        ! bare-ice paths, either seb_scheme -- takes it as given. Prescribed
+        ! longwave and the graybody scheme pass through unchanged.
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        type(chion_step_forcing_class) :: fc
+
+        fc = forc
+
+        if (c%longwave_scheme .ne. CHION_LONGWAVE_CLOUD_PROXY) return
+        if (forc%has_q_lw_down) return
+
+        fc%q_lw_down     = cloud_proxy_emissivity(c,forc)*c%sigma_sb*forc%air_temperature**4
+        fc%has_q_lw_down = .TRUE.
+
+        return
+
+    end function with_parameterized_longwave
 
     ! =====================================================================
     ! Resolved (exact-at-known-T) surface fluxes

@@ -146,7 +146,14 @@
     sigma_orog_crit           = 1000.0      ! [m]  Orographic roughness scale (Dang)
 
     ! ## Radiation ##
-    eps_air                   = 0.80        ! [1] Emissivity of air
+    eps_air                   = 0.80        ! [1] Emissivity of air (graybody longwave)
+    longwave_scheme           = "graybody"  ! Downwelling longwave if not prescribed: "graybody" | "cloud_proxy"
+    lw_emissivity_base                 = 0.624   ! [1]     Cloud proxy: emissivity at T0, clear sky
+    lw_emissivity_temperature_slope    = 0.0032  ! [K-1]   Cloud proxy: emissivity per K of T_air - T0
+    lw_emissivity_cloud_slope          = 0.613   ! [1]     Cloud proxy: emissivity per unit cloudiness
+    lw_clear_sky_transmissivity        = 0.85    ! [1]     Cloud proxy: clear-sky SW transmissivity at sea level
+    lw_clear_sky_transmissivity_per_km = 0.075   ! [km-1]  Cloud proxy: its increase with surface height
+    lw_night_cloud_fraction            = 0.389   ! [1]     Cloud proxy: cloudiness without a daily TOA
     eps_snow                  = 0.98        ! [1] Emissivity of snow
     eps_ice                   = 0.98        ! [1] Emissivity of bare ice (seb_scheme = "semix" only)
     sigma_sb                  = 5.670373e-8 ! [W m-2 K-4] Stefan-Boltzmann constant
@@ -178,6 +185,22 @@
 !   snow_age_days are scaled by (1-f), so S >= aging_snowfall_ref resets
 !   to alpha_dry and a trace of snow does almost nothing (D30). Chion.jl
 !   resets on any snowfall; legacy_chion builds do the same.
+!
+! longwave_scheme
+!   Chion.jl 03bb445, BESSI only, used when the host does not prescribe
+!   q_lw_down. "graybody": eps_air*sigma*T_air^4. "cloud_proxy":
+!   eps*sigma*T_air^4 with eps = clamp(lw_emissivity_base
+!   + lw_emissivity_temperature_slope*(T_air - T0)
+!   + lw_emissivity_cloud_slope*n, 0.4, 1.3), cloudiness
+!   n = clamp(1 - SWdn/(TOA*tau_clear), 0, 1), tau_clear =
+!   lw_clear_sky_transmissivity + lw_clear_sky_transmissivity_per_km*z/km
+!   (z = surface_height, NaN or negative -> 0). Daily-mean TOA from
+!   latitude, solar longitude and day of year (S0 = 1361 W m-2, fixed
+!   orbit), or the host's forc%toa_shortwave when set (D33). Below
+!   50 W m-2 of TOA (polar night), at dt < 0.75 d or without a latitude,
+!   n = lw_night_cloud_fraction. Resolved once per forcing step, before
+!   the diurnal substeps, which reuse it. Upstream default "cloud_proxy";
+!   chion keeps "graybody" until the Stage C default switch (C11).
 !
 ! low_density_densification
 !   Selects only the rho < 550 kg m-3 branch. The mid and high branches

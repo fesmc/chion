@@ -42,4 +42,8 @@ module chion
 
     use chion_forcing_monthly
 
+    ! Calendar helper for drivers and hosts without an orbital solar
+    ! longitude of their own: Chion.jl's calendar-day formula.
+    use snow_diurnal, only : calendar_solar_longitude_deg
+
 end module chion

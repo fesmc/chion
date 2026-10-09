@@ -168,6 +168,9 @@ contains
 
         fc%H_ice = forc%H_ice(icol)
 
+        fc%toa_shortwave     = forc%toa_shortwave(icol)
+        fc%has_toa_shortwave = forc%has_toa_shortwave(icol)
+
         return
 
     end subroutine chion_pack_step_forcing

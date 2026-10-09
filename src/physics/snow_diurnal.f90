@@ -46,6 +46,10 @@ module snow_diurnal
     ! Obliquity of the ecliptic (Chion.jl diurnal_shortwave.jl:5).
     real(wp), parameter, public :: DIURNAL_OBLIQUITY_DEG = 23.439291_wp   ! [deg]
 
+    ! Solar constant of the daily-mean top-of-atmosphere shortwave
+    ! (Chion.jl 03bb445 surface_fluxes.jl SOLAR_CONSTANT).
+    real(wp_acc), parameter, public :: DIURNAL_SOLAR_CONSTANT = 1361.0_wp_acc   ! [W m-2]
+
     ! Timestep window within which substepping is permitted
     ! (Chion.jl diurnal_shortwave.jl:111-112).
     real(wp), parameter, public :: DIURNAL_DT_DAYS_MIN = 0.75_wp   ! [d]
@@ -54,6 +58,8 @@ module snow_diurnal
     public :: solar_declination_deg
     public :: sunset_hour_angle
     public :: diurnal_daylight_integral
+    public :: daily_toa_shortwave
+    public :: calendar_solar_longitude_deg
     public :: diurnal_shortwave_interval_average
     public :: diurnal_shortwave_peak_flux
     public :: diurnal_temperature_amplitude
@@ -160,6 +166,75 @@ contains
         return
 
     end subroutine diurnal_daylight_integral
+
+    pure function daily_toa_shortwave(latitude_deg,solar_longitude_deg,day_of_year) result(toa)
+        ! Chion.jl/src/processes/surface_fluxes.jl:_daily_toa_shortwave
+        ! (03bb445), the daily-mean top-of-atmosphere shortwave of a fixed,
+        ! modern orbit:
+        !     TOA = S0*(1 + 0.033*cos(2*pi*doy/365))*max(I_day,0)/(2*pi)
+        ! with I_day the daylight integral of diurnal_daylight_integral. Only
+        ! the cloud-proxy longwave uses it, and only when the host supplies no
+        ! TOA of its own (docs/porting_notes.md D33).
+        !
+        ! The caller guarantees a finite latitude.
+
+        implicit none
+
+        real(wp), intent(IN) :: latitude_deg          ! [deg N]
+        real(wp), intent(IN) :: solar_longitude_deg   ! [deg]
+        real(wp), intent(IN) :: day_of_year           ! [d] fractional, 1-based
+        real(wp) :: toa                               ! [W m-2]
+
+        ! Local variables
+        real(wp)     :: dec_deg, h0
+        real(wp_acc) :: I_day, A, B, eccentricity
+
+        call diurnal_daylight_integral(latitude_deg,solar_longitude_deg, &
+                                       dec_deg,h0,I_day,A,B)
+
+        eccentricity = 1.0_wp_acc + 0.033_wp_acc &
+                       *cos(2.0_wp_acc*PI_ACC*real(day_of_year,wp_acc)/365.0_wp_acc)
+
+        toa = real(DIURNAL_SOLAR_CONSTANT*eccentricity*max(I_day,0.0_wp_acc) &
+                   /(2.0_wp_acc*PI_ACC),wp)
+
+        return
+
+    end function daily_toa_shortwave
+
+    pure function calendar_solar_longitude_deg(day_of_year) result(lon)
+        ! Chion.jl/src/forcing.jl:_solar_longitude_deg_from_calendar_day: the
+        ! solar longitude of a calendar day of year, from the low-precision
+        ! solar-position series (mean longitude, mean anomaly, equation of
+        ! centre), with day 1 = 1 January:
+        !     d = doy - 1
+        !     L = 280.46646 + 0.98564736 d,   g = 357.52911 + 0.98560028 d
+        !     lambda = mod(L + 1.914602 sin(g) + 0.019993 sin(2g), 360)
+        ! A host or driver that has no orbital solar longitude of its own
+        ! derives it here, so that chion and Chion.jl see the same season for
+        ! the same calendar day (the diurnal substeps, the SEMIX coszm, the
+        ! cloud-proxy TOA).
+
+        implicit none
+
+        real(wp), intent(IN) :: day_of_year   ! [d] fractional, 1-based
+        real(wp) :: lon                       ! [deg]
+
+        ! Local variables
+        real(wp_acc) :: d, mean_longitude, mean_anomaly, true_longitude
+
+        d              = real(day_of_year,wp_acc) - 1.0_wp_acc
+        mean_longitude = 280.46646_wp_acc + 0.98564736_wp_acc*d
+        mean_anomaly   = 357.52911_wp_acc + 0.98560028_wp_acc*d
+        true_longitude = mean_longitude &
+                         + 1.914602_wp_acc*sin(mean_anomaly*DEG2RAD) &
+                         + 0.019993_wp_acc*sin(2.0_wp_acc*mean_anomaly*DEG2RAD)
+
+        lon = real(modulo(true_longitude,360.0_wp_acc),wp)
+
+        return
+
+    end function calendar_solar_longitude_deg
 
     pure function diurnal_shortwave_interval_average(shortwave_daily_mean, &
                                                      latitude_deg,solar_longitude_deg, &

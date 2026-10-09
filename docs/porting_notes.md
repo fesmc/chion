@@ -567,6 +567,26 @@ bottom layer, whose `continuous_bottom_deplete` resets `t_srf` to `temperature(1
 does in accumulation; with the default `Ntot = 15` a bottom merge frees it instead.
 Harness: the fine-layer configurations run under `legacy_chion` and stay gated.
 
+### D33. Cloud-proxy longwave: optional host TOA
+**What:** Chion.jl's cloud-proxy longwave (`03bb445`, `longwave_scheme = "cloud_proxy"`,
+chion default `graybody` until C11) divides the daily shortwave by a top-of-atmosphere
+shortwave it computes itself: a fixed modern orbit (`S0 = 1361 W m-2`, obliquity
+23.439291 deg, eccentricity term `1 + 0.033 cos(2 pi doy/365)`) from latitude, solar
+longitude and day of year. chion adds an optional host field, `forc%toa_shortwave` with
+`forc%has_toa_shortwave` (packed into `chion_step_forcing_class`), that replaces it. The
+night limit (TOA <= 50 W m-2) and the sub-daily fallback apply to either TOA; the host's
+needs no latitude.
+
+**Why:** the proxy reads cloudiness off the ratio `SWD/TOA`. A host whose shortwave is a
+transmissivity times its own insolation (yelmox: `0.6*S_d` from orbital tables on a
+360-day year, paleo-capable) gets a biased ratio from a different TOA: present day the
+two calendars and orbits shift the ratio seasonally, and under paleo orbits or
+`const_insol` the bias is systematic. Passing the host's own TOA makes the ratio the
+host's transmissivity (review Q5; PLAN_dev_nils N9).
+
+**Impact:** none unless a host sets the flag; the harness does not, so it gates
+Chion.jl's internal TOA. The drivers set neither (`chion_column.x`, `chion_grid.x`).
+
 ### D34. Ice substrate: none on land, reset with the column, old restarts start at `min(t_srf, T0)`
 **What:** three chion-only rules around Chion.jl's thermal ice substrate (`03bb445`,
 `ice_substrate_layers`, chion default 0 until C11):

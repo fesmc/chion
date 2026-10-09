@@ -15,6 +15,10 @@ program test_wp7
     !         sensible values; substep_count returns only 1 or max_substeps
     !   (v)   the elevation-dependent diurnal T amplitude clamps at 0 and A_max,
     !         and a missing (NaN) surface height adds no excess (Chion.jl d0146e1)
+    !   (vi)  the daily-mean top-of-atmosphere shortwave of the cloud-proxy
+    !         longwave against closed-form insolation (equator at equinox, pole
+    !         at solstice, polar night), and the calendar solar longitude at
+    !         the equinoxes and solstices (Chion.jl 03bb445)
     !
     ! apply_accumulation itself is exercised by WP4's and WP8's tests, since it
     ! is mostly a driver for the layer-structure routines; what is tested here
@@ -56,6 +60,7 @@ program test_wp7
     call test_albedo_aging_rejuvenate(c,nfail)
     call test_densification(c,nfail)
     call test_diurnal(nfail)
+    call test_toa_calendar(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -1055,6 +1060,85 @@ contains
         return
 
     end subroutine test_diurnal
+
+    subroutine test_toa_calendar(nfail)
+        ! daily_toa_shortwave (Chion.jl surface_fluxes.jl _daily_toa_shortwave)
+        ! against the textbook daily-mean insolation Q = S0 E/pi*(h0 sin(phi)
+        ! sin(delta) + cos(phi) cos(delta) sin(h0)), E = 1 + 0.033 cos(2 pi
+        ! doy/365), in its two closed-form limits; and
+        ! calendar_solar_longitude_deg (Chion.jl forcing.jl) at the cardinal
+        ! points of the year.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        real(wp), parameter :: PI_WP = 3.14159265358979323846_wp
+        real(wp), parameter :: S0 = 1361.0_wp
+        real(wp) :: ecc, expected
+
+        write(*,"(a)") "--- (vi) daily TOA shortwave and calendar solar longitude ---"
+
+        ! Equator at an equinox: h0 = pi/2, sin(phi) = 0, so Q = S0 E/pi.
+        ecc      = 1.0_wp + 0.033_wp*cos(2.0_wp*PI_WP*80.0_wp/365.0_wp)
+        expected = S0*ecc/PI_WP
+        call check_val("TOA, equator at equinox = S0*E/pi", &
+                       daily_toa_shortwave(0.0_wp,0.0_wp,80.0_wp), expected, nfail)
+
+        ! North pole at the June solstice: polar day (h0 = pi), cos(phi) = 0,
+        ! so Q = S0 E sin(obliquity).
+        ecc      = 1.0_wp + 0.033_wp*cos(2.0_wp*PI_WP*172.0_wp/365.0_wp)
+        expected = S0*ecc*sin(DIURNAL_OBLIQUITY_DEG*PI_WP/180.0_wp)
+        call check_close_rel("TOA, pole at June solstice = S0*E*sin(obliquity)", &
+                             daily_toa_shortwave(90.0_wp,90.0_wp,172.0_wp), &
+                             expected, 1.0e-5_wp, nfail)
+
+        call check_val("TOA, polar night = 0", &
+                       daily_toa_shortwave(80.0_wp,270.0_wp,355.0_wp), 0.0_wp, nfail)
+
+        ! Calendar solar longitude: March equinox ~20 Mar (day 79.5), June
+        ! solstice ~21 Jun (day 172), September equinox ~23 Sep (day 266),
+        ! December solstice ~22 Dec (day 356), each within a day (~1 deg).
+        call check("solar longitude ~0 at the March equinox", &
+                   min(calendar_solar_longitude_deg(79.5_wp), &
+                       360.0_wp - calendar_solar_longitude_deg(79.5_wp)) .lt. 1.0_wp, nfail)
+        call check("solar longitude ~90 at the June solstice", &
+                   abs(calendar_solar_longitude_deg(172.0_wp) - 90.0_wp) .lt. 1.0_wp, nfail)
+        call check("solar longitude ~180 at the September equinox", &
+                   abs(calendar_solar_longitude_deg(266.0_wp) - 180.0_wp) .lt. 1.0_wp, nfail)
+        call check("solar longitude ~270 at the December solstice", &
+                   abs(calendar_solar_longitude_deg(356.0_wp) - 270.0_wp) .lt. 1.0_wp, nfail)
+        call check("solar longitude in [0,360)", &
+                   calendar_solar_longitude_deg(1.0_wp) .ge. 0.0_wp .and. &
+                   calendar_solar_longitude_deg(1.0_wp) .lt. 360.0_wp, nfail)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_toa_calendar
+
+    subroutine check_close_rel(label,value,expected,rtol,nfail)
+
+        implicit none
+
+        character(len=*), intent(IN)    :: label
+        real(wp),         intent(IN)    :: value
+        real(wp),         intent(IN)    :: expected
+        real(wp),         intent(IN)    :: rtol
+        integer,          intent(INOUT) :: nfail
+
+        if (abs(value-expected) .le. rtol*abs(expected)) then
+            write(*,"(a,a,a,g14.6)") "  ok   : ", trim(label), " = ", value
+        else
+            write(*,"(a,a,a,g14.6,a,g14.6)") "  FAIL : ", trim(label), &
+                                             " = ", value, " expected ", expected
+            nfail = nfail + 1
+        end if
+
+        return
+
+    end subroutine check_close_rel
 
     ! ======================================================================
     ! Check helpers (same style as tests/test_column_utils.f90)

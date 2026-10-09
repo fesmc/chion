@@ -91,7 +91,8 @@ module snow_bessi
                                    latent_heat_coeff_class, &
                                    diagnose_latent_heat_flux_coefficients, &
                                    surface_vapor_flux_class, &
-                                   apply_snow_surface_vapor_mass_flux
+                                   apply_snow_surface_vapor_mass_flux, &
+                                   with_parameterized_longwave
     use snow_melt,          only : apply_melt
     use snow_percolation,   only : apply_percolation
     use snow_refreezing,    only : apply_refreezing
@@ -1113,9 +1114,13 @@ contains
 
     end subroutine bessi_bare_ice_substrate_step
 
-    subroutine bessi_column_step(bsi,icol,forc,c)
+    subroutine bessi_column_step(bsi,icol,forc_in,c)
         ! Chion.jl column_step! (src/step.jl:113-157): the diurnal-shortwave
         ! substep wrapper around the core kernel.
+        !
+        ! The cloud-proxy longwave (longwave_scheme = "cloud_proxy", Chion.jl
+        ! 03bb445) is resolved first, once, from the DAILY forcing, and enters
+        ! the substeps as a prescribed downwelling flux.
         !
         ! When enabled and warranted, the day is tiled uniformly in hour angle
         ! over [-pi, pi] and the core is run once per interval with:
@@ -1138,7 +1143,7 @@ contains
 
         type(bessi_class),              intent(INOUT) :: bsi
         integer,                        intent(IN)    :: icol
-        type(chion_step_forcing_class), intent(IN)    :: forc
+        type(chion_step_forcing_class), intent(IN)    :: forc_in
         type(chion_const_class),        intent(IN)    :: c
 
         ! Local variables
@@ -1147,7 +1152,9 @@ contains
         real(wp) :: hour_angle_start, hour_angle_end, fraction
         real(wp) :: amplitude
 
-        type(chion_step_forcing_class) :: subforc
+        type(chion_step_forcing_class) :: forc, subforc
+
+        forc = with_parameterized_longwave(c,forc_in)
 
         if (bsi%par%diurnal_shortwave_substeps) then
 

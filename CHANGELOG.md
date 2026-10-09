@@ -46,7 +46,20 @@ tag is the port itself, summarised rather than enumerated.
   +7.7 %, refreezing -6.0 %, melt +0.6 %, final thickness -12.6 %, liquid water
   -40 %; runoff and refreezing within 2.5 % of the run without fine layers.
 
+- BESSI cloud-proxy longwave (Chion.jl `03bb445`): `&chion_const longwave_scheme =
+  "graybody" | "cloud_proxy"` (default `graybody` here; upstream `cloud_proxy`) and the
+  six `lw_*` coefficients; emissivity from air temperature and a shortwave cloudiness
+  proxy against a daily TOA, resolved once per step before the diurnal substeps.
+  Optional host field `forc%toa_shortwave` (`has_toa_shortwave`) replaces chion's
+  fixed-orbit TOA (D33). Default runs bit-identical.
+- `calendar_solar_longitude_deg(day_of_year)` (re-exported by `chion`): Chion.jl's
+  calendar-day solar longitude, for hosts and drivers without an orbital one.
+
 ### Fixed
+
+- `chion_column.x` and `chion_grid.x` derive the solar longitude with Chion.jl's
+  calendar formula; it was `360*(doy-1)/year_length`, i.e. 0 (the March equinox)
+  on 1 January. Affects only diurnal substeps, SEMIX `coszm` and the cloud proxy.
 
 - BESSI dynamic albedo: aging scaled by `dt_days` (Chion.jl `6d077c5`), so
   diurnal substeps no longer age the albedo once each (upstream defect 19).

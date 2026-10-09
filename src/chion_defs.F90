@@ -114,6 +114,13 @@ module chion_defs
     integer, parameter, public :: CHION_SEB_BESSI = 1
     integer, parameter, public :: CHION_SEB_SEMIX = 2
 
+    ! Downwelling longwave when the host does not prescribe it (Chion.jl
+    ! 03bb445 longwave_scheme): "graybody" eps_air*sigma*T_air^4, or
+    ! "cloud_proxy", an emissivity from air temperature and a shortwave
+    ! cloudiness proxy, resolved once per forcing step.
+    integer, parameter, public :: CHION_LONGWAVE_GRAYBODY    = 1
+    integer, parameter, public :: CHION_LONGWAVE_CLOUD_PROXY = 2
+
     ! Which saturation-specific-humidity parameterization the SEMIX surface
     ! scheme uses for the turbulent latent flux. SEMIX is CLIMBER-X's own
     ! q_sat_i/dqsat_dT_i; BESSI routes chion's ice saturation vapour pressure
@@ -310,7 +317,21 @@ module chion_defs
         ! Radiation. eps_ice is consulted ONLY by seb_scheme = semix, which
         ! carries SEMIX's snow/ice emissivity pair; the bessi scheme applies
         ! eps_snow to bare ice as well, as Chion.jl does.
-        real(wp) :: eps_air            ! [1] emissivity of air
+        real(wp) :: eps_air            ! [1] emissivity of air (graybody longwave)
+
+        ! Cloud-proxy downwelling longwave (CHION_LONGWAVE_CLOUD_PROXY,
+        ! Chion.jl 03bb445): eps = base + temperature_slope*(T_a - T0)
+        ! + cloud_slope*n, n = 1 - SWdn/(TOA*tau_clear(z)), tau_clear =
+        ! clear_sky_transmissivity + clear_sky_transmissivity_per_km*z/1000;
+        ! n = night_cloud_fraction without a daily-mean TOA.
+        integer  :: longwave_scheme                     ! CHION_LONGWAVE_*
+        real(wp) :: lw_emissivity_base                  ! [1]
+        real(wp) :: lw_emissivity_temperature_slope     ! [K-1]
+        real(wp) :: lw_emissivity_cloud_slope           ! [1]
+        real(wp) :: lw_clear_sky_transmissivity         ! [1] at sea level
+        real(wp) :: lw_clear_sky_transmissivity_per_km  ! [km-1]
+        real(wp) :: lw_night_cloud_fraction             ! [1]
+
         real(wp) :: eps_snow           ! [1] emissivity of snow
         real(wp) :: eps_ice            ! [1] emissivity of bare ice (semix SEB)
         real(wp) :: sigma_sb           ! [W m-2 K-4] Stefan-Boltzmann constant
@@ -380,6 +401,12 @@ module chion_defs
         ! land column (H_ice = 0, the forcing default) has none
         ! (docs/porting_notes.md D34). ITM still takes it as an argument.
         real(wp) :: H_ice = 0.0_wp      ! [m]
+
+        ! chion only: the host's daily-mean top-of-atmosphere shortwave. When
+        ! given, the cloud-proxy longwave divides by it instead of chion's
+        ! fixed-orbit TOA from latitude and season (docs/porting_notes.md D33).
+        real(wp) :: toa_shortwave = 0.0_wp       ! [W m-2]
+        logical  :: has_toa_shortwave = .FALSE.
     end type chion_step_forcing_class
 
     ! === Host-facing forcing =================================================
@@ -427,6 +454,11 @@ module chion_defs
         logical,  allocatable :: has_alb_ice_host(:)
 
         real(wp), allocatable :: latitude_deg(:)         ! [deg N]
+
+        ! Optional daily-mean top-of-atmosphere shortwave for the cloud-proxy
+        ! longwave (chion only, D33); unset, chion computes a fixed-orbit TOA.
+        real(wp), allocatable :: toa_shortwave(:)        ! [W m-2]
+        logical,  allocatable :: has_toa_shortwave(:)
 
         ! --- Ice-sheet fields (WP11; H_ice also BESSI since C3) ---------
         !
@@ -525,6 +557,7 @@ module chion_defs
     public :: chion_albedo_scheme_flag
     public :: chion_semix_snow_albedo_flag
     public :: chion_seb_scheme_flag
+    public :: chion_longwave_scheme_flag
     public :: chion_semix_qsat_flag
     public :: chion_fresh_snow_density_scheme_flag
     public :: chion_densify_scheme_flag
@@ -609,6 +642,18 @@ contains
         c%sigma_orog_crit   = 1000.0_wp
 
         c%eps_air  = 0.80_wp
+
+        ! Chion.jl 03bb445 coefficients (fitted to daily MAR longwave over
+        ! Greenland). Upstream defaults to the cloud proxy; chion keeps the
+        ! graybody until the Stage C default switch.
+        c%longwave_scheme                    = CHION_LONGWAVE_GRAYBODY
+        c%lw_emissivity_base                 = 0.624_wp
+        c%lw_emissivity_temperature_slope    = 0.0032_wp
+        c%lw_emissivity_cloud_slope          = 0.613_wp
+        c%lw_clear_sky_transmissivity        = 0.85_wp
+        c%lw_clear_sky_transmissivity_per_km = 0.075_wp
+        c%lw_night_cloud_fraction            = 0.389_wp
+
         c%eps_snow = 0.98_wp
         c%eps_ice  = 0.98_wp
         c%sigma_sb = 5.670373e-8_wp
@@ -660,6 +705,16 @@ contains
         write(*,"(a25,g14.6,a)") "aging_melting_timescale_days = ", c%aging_melting_timescale_days, "  [d]"
         write(*,"(a25,g14.6,a)") "aging_snowfall_ref = ", c%aging_snowfall_ref, "  [kg m-2]"
         write(*,"(a25,g14.6,a)") "eps_air  = ", c%eps_air,  "  [1]"
+        write(*,"(a25,i14)")     "longwave_scheme = ", c%longwave_scheme
+        write(*,"(a25,g14.6,a)") "lw_emissivity_base = ", c%lw_emissivity_base, "  [1]"
+        write(*,"(a25,g14.6,a)") "lw_emissivity_temperature_slope = ", &
+                                 c%lw_emissivity_temperature_slope, "  [K-1]"
+        write(*,"(a25,g14.6,a)") "lw_emissivity_cloud_slope = ", c%lw_emissivity_cloud_slope, "  [1]"
+        write(*,"(a25,g14.6,a)") "lw_clear_sky_transmissivity = ", &
+                                 c%lw_clear_sky_transmissivity, "  [1]"
+        write(*,"(a25,g14.6,a)") "lw_clear_sky_transmissivity_per_km = ", &
+                                 c%lw_clear_sky_transmissivity_per_km, "  [km-1]"
+        write(*,"(a25,g14.6,a)") "lw_night_cloud_fraction = ", c%lw_night_cloud_fraction, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_snow = ", c%eps_snow, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_ice  = ", c%eps_ice,  "  [1]"
         write(*,"(a25,g14.6,a)") "sigma_sb = ", c%sigma_sb, "  [W m-2 K-4]"
@@ -672,13 +727,28 @@ contains
 
     subroutine chion_const_validate(c)
         ! Constraints Chion.jl's SnowpackPhysicalConstants constructor checks
-        ! (src/constants.jl, 6d06af6): the aging timescales are positive, and
-        ! under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1. Plus chion's
-        ! aging_snowfall_ref > 0 (D30).
+        ! (src/constants.jl, 6d06af6, 03bb445): the aging timescales are
+        ! positive, under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1,
+        ! the clear-sky transmissivity is positive and the night cloud
+        ! fraction in [0,1]. Plus chion's aging_snowfall_ref > 0 (D30).
 
         implicit none
 
         type(chion_const_class), intent(IN) :: c
+
+        if (.not. c%lw_clear_sky_transmissivity .gt. 0.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: lw_clear_sky_transmissivity &
+                                 &must be positive."
+            write(io_unit_err,*) "lw_clear_sky_transmissivity = ", c%lw_clear_sky_transmissivity
+            stop "Program stopped."
+        end if
+
+        if (c%lw_night_cloud_fraction .lt. 0.0_wp .or. c%lw_night_cloud_fraction .gt. 1.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: lw_night_cloud_fraction &
+                                 &must be in [0,1]."
+            write(io_unit_err,*) "lw_night_cloud_fraction = ", c%lw_night_cloud_fraction
+            stop "Program stopped."
+        end if
 
         if (c%aging_cold_timescale_days .le. 0.0_wp .or. &
             c%aging_melting_timescale_days .le. 0.0_wp) then
@@ -758,6 +828,9 @@ contains
 
         allocate(forc%latitude_deg(ncol))
 
+        allocate(forc%toa_shortwave(ncol))
+        allocate(forc%has_toa_shortwave(ncol))
+
         allocate(forc%H_ice(ncol))
         allocate(forc%PDDs(ncol))
 
@@ -797,6 +870,9 @@ contains
         forc%has_alb_ice_host = .FALSE.
 
         forc%latitude_deg = 0.0_wp
+
+        forc%toa_shortwave     = 0.0_wp
+        forc%has_toa_shortwave = .FALSE.
 
         ! H_ice = 0 selects ITM's land albedo branch and gives BESSI no ice
         ! substrate; PDDs = 0 selects ITM's "desert" critical snow depth. A
@@ -848,6 +924,8 @@ contains
         if (allocated(forc%alb_ice_host))          deallocate(forc%alb_ice_host)
         if (allocated(forc%has_alb_ice_host))      deallocate(forc%has_alb_ice_host)
         if (allocated(forc%latitude_deg))          deallocate(forc%latitude_deg)
+        if (allocated(forc%toa_shortwave))         deallocate(forc%toa_shortwave)
+        if (allocated(forc%has_toa_shortwave))     deallocate(forc%has_toa_shortwave)
         if (allocated(forc%H_ice))                 deallocate(forc%H_ice)
         if (allocated(forc%PDDs))                  deallocate(forc%PDDs)
 
@@ -1043,6 +1121,30 @@ contains
         return
 
     end function chion_seb_scheme_flag
+
+    function chion_longwave_scheme_flag(name) result(flag)
+        ! Map a namelist string onto a downwelling-longwave scheme flag.
+
+        implicit none
+
+        character(len=*), intent(IN) :: name
+        integer :: flag
+
+        select case(trim(adjustl(name)))
+            case("graybody")
+                flag = CHION_LONGWAVE_GRAYBODY
+            case("cloud_proxy")
+                flag = CHION_LONGWAVE_CLOUD_PROXY
+            case DEFAULT
+                write(io_unit_err,*) "chion_longwave_scheme_flag:: Error: longwave scheme not recognized."
+                write(io_unit_err,*) "longwave_scheme should be one of: ['graybody','cloud_proxy']"
+                write(io_unit_err,*) "longwave_scheme = ", trim(name)
+                stop "Program stopped."
+        end select
+
+        return
+
+    end function chion_longwave_scheme_flag
 
     function chion_semix_qsat_flag(name) result(flag)
         ! Map a namelist string onto a saturation-humidity parameterization.

@@ -13,13 +13,13 @@ rather than left to a default, because most of the defaults disagree:
     stray variable in a future forcing file cannot make the two runs differ.
   * `wind_default` must match chion's ctrl:wind_default.
 
-DIURNAL SUBSTEPPING IS OFF, deliberately. Enabling it changes the albedo
-scheme rather than only the shortwave resolution -- snowfall brightening is
-non-linear under substepping (defect 21; aging scales with dt since dev_nils
-6d077c5, which fixed defect 19). It is also the only
-consumer of day_of_year / solar_longitude_deg, which the two drivers derive
-differently (chion_grid.f90 from modulo(time,365)+1, Chion.jl from a calendar
-axis). Comparing it would be comparing two known-divergent schemes.
+DAY OF YEAR AND SOLAR LONGITUDE agree by construction: Chion.jl derives them
+from the calendar axis (YYYY/MM/DD/HH), chion_grid.x as modulo(time,365)+1 and
+Chion.jl's calendar-day formula (calendar_solar_longitude_deg), which coincide
+on the harness' one-year axis starting 1 January 2000. They feed the
+cloud-proxy longwave's TOA and the diurnal substeps.
+
+DIURNAL SUBSTEPPING IS OFF in every configuration but its own.
 """
 
 using NCDatasets
@@ -168,12 +168,15 @@ dev_nils and chion to 2 d. `humidity = true` reads the forcing's RHZ and PS
 (see forcing.jl), matching chion's `rh_default` and sea-level pressure.
 `ice_substrate_layers` overrides the pin of `BESSI_SCHEME_PINS` (0), and
 `near_surface` the fine-layer thicknesses [m] (pinned to Inf, no limit).
+`overrides` replaces any other `BESSIModel` keyword last (pins and diurnal
+switches included), e.g. `(longwave_scheme=:cloud_proxy,)`.
 """
 function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
                          workdir::AbstractString, ntot::Int=15, years::Int=1,
                          albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS,
                          humidity::Bool=false, ice_substrate_layers::Int=0,
-                         near_surface::Union{Nothing,NTuple{4,Float64}}=nothing)
+                         near_surface::Union{Nothing,NTuple{4,Float64}}=nothing,
+                         overrides::NamedTuple=(;))
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -203,13 +206,13 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
            merge(BESSI_SCHEME_PINS, (; ice_substrate_layers))
     near_surface === nothing ||
         (pins = merge(pins, (; near_surface_layer_max_thicknesses_m=near_surface)))
+    settings = merge(pins, (diurnal_shortwave_substeps=false,
+                            diurnal_temperature_cycle=false), overrides)
     model = BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
-                       alpha_ice=0.3, alpha_wet=0.70, aging..., pins...,
+                       alpha_ice=0.3, alpha_wet=0.70, aging..., settings...,
                        densification=:bessi, fresh_snow_density=:constant,
                        mass_max=500.0, mass_split=300.0, mass_min=100.0,
-                       density_init=300.0, temperature_init=273.0,
-                       diurnal_shortwave_substeps=false,
-                       diurnal_temperature_cycle=false)
+                       density_init=300.0, temperature_init=273.0)
 
     sim = Simulation(model; forcing=loaded.forcing, years=years,
                      backend=:threads, write_netcdf=true,
@@ -269,6 +272,15 @@ Aging-albedo timescales, set explicitly on both sides: chion's `&chion_const`
 (via `aging_nml`) and Chion.jl's `BESSIModel` keywords. chion's defaults.
 """
 const AGING_PARAMS = (aging_cold_timescale_days=20.0, aging_melting_timescale_days=2.0)
+
+"""
+A `&chion_const` namelist group setting `kwargs` (strings quoted), for the
+configurations that switch one of chion's constants or scheme flags.
+"""
+const_nml(; kwargs...) =
+    "&chion_const\n" *
+    join(("    $(k) = " * (v isa AbstractString ? "\"$(v)\"" : string(v)) for (k, v) in pairs(kwargs)),
+         "\n") * "\n/\n"
 
 """The `&chion_const` group selecting the aging scheme with `AGING_PARAMS`."""
 aging_nml(p=AGING_PARAMS) =

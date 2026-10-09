@@ -46,7 +46,7 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 
 | target | reference | authority |
 |---|---|---|
-| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), and `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate |
+| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate, and `:dynamic` with the cloud-proxy longwave (`longwave_scheme = :cloud_proxy`, `03bb445`; chion's internal TOA) |
 | PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
 | ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 8 written fields (D27 reverted). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
 
@@ -266,9 +266,13 @@ split a layer, and `mass_base` was identically zero on both sides — so its
 
 Diurnal substepping is off in both models, deliberately: it changes the albedo
 scheme rather than only the shortwave resolution (upstream defect 21; defect 19,
-aging per substep, is fixed since dev_nils 6d077c5),
-and it is the only consumer of `day_of_year` / `solar_longitude_deg`, which the
-two drivers derive differently. Comparing it would compare two known-divergent
-schemes. The elevation-dependent temperature amplitude (Chion.jl `d0146e1`) is
-therefore covered by `test_wp7` only. Humidity forcing is uniform (`rh_default`; `chion_grid.x` has no
+aging per substep, is fixed since dev_nils 6d077c5). The elevation-dependent
+temperature amplitude (Chion.jl `d0146e1`) is therefore covered by `test_wp7`
+only.
+
+`day_of_year` and `solar_longitude_deg` (diurnal substeps, cloud-proxy TOA) agree
+by construction: Chion.jl derives both from the calendar axis, `chion_grid.x` the
+day as `modulo(time,365)+1` and the longitude with Chion.jl's calendar-day formula
+(`calendar_solar_longitude_deg`), identical on the one-year axis from 1 January
+2000. A multi-year forcing would part at the leap day. Humidity forcing is uniform (`rh_default`; `chion_grid.x` has no
 humidity reader) and absent from the first two configurations.

@@ -501,8 +501,11 @@ program chion_grid
                     stop "Program stopped."
             end select
 
+            ! Solar longitude from Chion.jl's calendar-day formula, with the
+            ! climatology's year stretched onto a 365-day calendar.
             chn%forc%day_of_year         = real(doy,wp)
-            chn%forc%solar_longitude_deg = 360.0_wp*(real(doy,wp) - 1.0_wp)/year_length
+            chn%forc%solar_longitude_deg = calendar_solar_longitude_deg( &
+                                    1.0_wp + (real(doy,wp) - 1.0_wp)*365.0_wp/year_length)
 
         else
 
@@ -526,8 +529,12 @@ program chion_grid
                 chn%forc%shortwave_down(i)  = swd(col_is(i),col_js(i))
             end do
 
+            ! Day of year on the file's 365-day axis and, from it, the solar
+            ! longitude with Chion.jl's calendar-day formula -- what Chion.jl
+            ! derives from the same time axis within a year starting 1 January
+            ! (validation/: identical for the harness forcing).
             chn%forc%day_of_year         = modulo(time,year_length) + 1.0_wp
-            chn%forc%solar_longitude_deg = 360.0_wp*(chn%forc%day_of_year - 1.0_wp)/year_length
+            chn%forc%solar_longitude_deg = calendar_solar_longitude_deg(chn%forc%day_of_year)
 
         end if
 
