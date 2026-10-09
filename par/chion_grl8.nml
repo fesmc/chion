@@ -59,6 +59,24 @@
 /
 
 ! ============================================================
+! &chion_const — library constants (sparse: overrides only)
+! ============================================================
+!
+! Greenland calibration of the thin-snow blend pair (WP19,
+! docs/steady_state_snowpack.md). Chion.jl's alpha_ice = 0.40 was calibrated
+! without chion's thin-snow albedo blend (D40). This driver spreads monthly MAR
+! snowfall over every day (trace snowfall on 98 % of ablation-zone melt days),
+! so the blend exposes the bare ice and 0.40 over-melts. Grid alpha_ice
+! 0.40-0.55 x swe_crit_albedo 5-40 kg m-2, GRL-16KM, 50 yr, vs MAR v3.11
+! (SMB 348 Gt/yr): 0.50 / 10 gives SMB 340, R^2 0.86 (0.40 / 10: 279, 0.77);
+! swe_crit_albedo moves SMB by less than 15 Gt/yr. Same at GRL-8KM.
+
+&chion_const
+    alpha_ice           = 0.50              ! [1] Bare ice albedo (library default 0.40)
+    swe_crit_albedo     = 10.0              ! [kg m-2] Column SWE of full snow cover
+/
+
+! ============================================================
 ! &bessi — layered snowpack model
 ! ============================================================
 

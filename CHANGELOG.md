@@ -64,6 +64,9 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- `par/chion_grl16.nml`, `chion_grl8.nml`: `alpha_ice = 0.50`, `swe_crit_albedo = 10`,
+  calibrated against MAR (grid 0.40-0.55 x 5-40 kg m-2): GRL-16KM SMB 279 -> 340 Gt/yr
+  (MAR 348), R² 0.77 -> 0.86; GRL-8KM 282 -> 343 (358). Library defaults unchanged.
 - BESSI performance (results bit-identical): dynamic OpenMP schedule of the column loop
   (chunks of 8), solar geometry once per column-day. GRL-16KM 50 yr, one exclusive node:
   1 thread 605 -> 548 s, 16 threads 69 -> 41 s (speedup 8.8x -> 13.5x); shared node
