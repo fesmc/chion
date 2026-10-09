@@ -64,6 +64,18 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- Defaults are Chion.jl `03bb445`'s calibrated GrIS set: `alpha_ice` 0.40, `seb_scheme =
+  turbulent_flux_scheme = "semix"` (2.5, 40), `longwave_scheme = "cloud_proxy"`,
+  `ice_substrate_layers` 5, fine near-surface layers (0.02, 0.05, 0.10, 0.30 m, with
+  chion's split below them, D32), 8 diurnal substeps with a 1 K cycle (amplitude max
+  1 K, so a larger amplitude needs `diurnal_temperature_amplitude_max`). Domain par files
+  drop their pre-C11 diurnal tuning. 10-yr `chion_column`: melt +27 %, runoff -4 %,
+  refreezing +78 %, `smb_ice` -36 -> 0 kg m-2, thickness -10 %, bulk density +17 %.
+  GRL-16KM vs MAR (50 yr, final year, Gt/yr): SMB 377 -> 448 (MAR 348), melt 374 -> 334
+  (518), runoff 329 -> 259 (349), refreezing 83 -> 113 (208), ablation area 15.5 ->
+  11.5 % (14.4 %); 16 threads 15.8 -> 67 s per 50 yr. Harness: new Chion.jl-defaults
+  configuration (green, 0.47 ulp); the single-option configurations pin BESSI's
+  original physics on both sides.
 - `seb_scheme` selects the longwave only (`bessi` | `semix`); new
   `turbulent_flux_scheme` (`bessi` | `semix` | `climberx`) selects the sensible and latent
   heat (Chion.jl `d0146e1`). CLIMBER-X SEMIX's aerodynamic exchange is

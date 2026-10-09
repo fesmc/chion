@@ -18,12 +18,15 @@ The reference is whichever Chion.jl the active environment develops; select
 another without editing code by pointing `CHION_VALIDATION_PROJECT` at an
 environment that develops it (e.g. one per reference commit, each made as
 above with `Pkg.develop(path=<Chion.jl worktree>)`). The log's header prints the
-reference's path and commit. Options a newer reference adds with defaults that
-differ from chion's physics are pinned to chion's choice when present
-(`BESSI_SCHEME_PINS` in `runners.jl`: `turbulent_flux_scheme = seb_scheme =
-:bessi`, `refreezing_correction = 1` since dev_nils `27113b6`; `longwave_scheme =
-:graybody`, `ice_substrate_layers = 0`, no fine near-surface layers since main
-`9ec6cc7`).
+reference's path and commit. Since C11 both models default to Chion.jl's
+calibrated `03bb445` set. Every configuration but the defaults one starts from
+BESSI's original surface physics, pinned on both sides, and switches one option
+on (`BESSI_SCHEME_PINS` for Chion.jl, `CHION_CONST_PINS`/`CHION_BESSI_PINS` for
+chion, in `runners.jl`: `turbulent_flux_scheme = seb_scheme = :bessi`,
+`refreezing_correction = 1`, `longwave_scheme = :graybody`, `ice_substrate_layers
+= 0`, no fine near-surface layers, diurnal off, `alpha_ice = 0.3`). The defaults
+configuration pins nothing: `BESSIModel(grid)` against chion's
+`input/chion_defaults.nml`.
 
 Requires three chion builds, all with `fpsafe=1`:
 
@@ -46,7 +49,7 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 
 | target | reference | authority |
 |---|---|---|
-| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate, and `:dynamic` with the cloud-proxy longwave (`longwave_scheme = :cloud_proxy`, `03bb445`; chion's internal TOA), `seb_scheme = :semix` with BESSI turbulence, Chion.jl's surface scheme `seb_scheme = turbulent_flux_scheme = :semix` (humidity on; alone and with the substrate), and diurnal substeps at Chion.jl's calibrated `03bb445` set (8 substeps, 1 K cycle) |
+| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate, and `:dynamic` with the cloud-proxy longwave (`longwave_scheme = :cloud_proxy`, `03bb445`; chion's internal TOA), `seb_scheme = :semix` with BESSI turbulence, Chion.jl's surface scheme `seb_scheme = turbulent_flux_scheme = :semix` (humidity on; alone and with the substrate), diurnal substeps at Chion.jl's calibrated `03bb445` set (8 substeps, 1 K cycle), and each model's own defaults (the calibrated set as a package; humidity on, `HI = 1000 m`, default columns plus `bare_ice`) |
 | PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
 | ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 8 written fields (D27 reverted). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
 
@@ -213,6 +216,14 @@ substrate (0.47 ulp; 6.2 K), under `legacy_chion` (Julia's 287.05 and bare-ice `
 D35/D38); diurnal substeps at the calibrated set (0.47 ulp; 330 column-days split into 8
 substeps, 240 unsplit polar-night days with shortwave on the D39 legacy path; 6.3 K from
 the daily run).
+
+**After C11 (defaults switched):** every configuration green. The single-option
+configurations, now pinned on both sides, are bit-identical to before. New: each
+model's own defaults (alpha_ice 0.40, cloud proxy, semix SEB and turbulence,
+substrate, fine layers with C4b reverted, 8 substeps with a 1 K cycle; D35, D38,
+D39 reverted), worst 0.47 ulp (`Tsrf`, `temperature`); coverage: layer 1 at its
+fine thickness on every layered step, bare ice below T0 over the substrate,
+11.1 K from the semix-turbulence substrate run.
 
 Reported, not gated:
 

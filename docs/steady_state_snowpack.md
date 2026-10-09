@@ -117,8 +117,16 @@ over-ablates it (lower zone −294 where MAR is −16); raised to near-melting
 (−1 °C, 272.15 K) the boost is confined to the warm margins and every elevation
 band improves at once — domain bias +68→+18, R² 0.74→**0.84**, net-ablating area
 12.4→15.5 % (MAR 14.4 %), lower zone +210→+29. This is one physically-motivated
-threshold moved to a sensible value, not a fit, so it is the GRL-16KM default in
+threshold moved to a sensible value, not a fit, so it was the GRL-16KM default in
 `par/chion_grl16.nml`. Residual: margins still ~15 % short of MAR (−640 vs −740).
+
+**Superseded (C11).** The sweep above is for the pre-C11 physics (BESSI longwave
+and turbulence, no substrate, no fine layers). Since C11 chion defaults to
+Chion.jl's calibrated `03bb445` set, whose diurnal part (8 substeps above −8 °C,
+±1 K cycle) was calibrated together with the rest against MAR, and the domain par
+files no longer override it. GRL-16KM, 50 yr, final year, vs MAR 348 Gt/yr SMB:
+defaults SMB 448, melt 334, runoff 259, refreezing 113 Gt/yr, R² 0.83, ablation
+area 11.5 %; with the −1 °C / 3-substep / no-cycle tuning on top SMB 485, R² 0.78.
 
 ## Performance and resolution
 
