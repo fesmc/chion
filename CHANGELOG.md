@@ -28,8 +28,9 @@ tag is the port itself, summarised rather than enumerated.
   schema, Chion.jl values). chion's own constants moved to `&chion_const` in
   `input/chion_defaults.nml` (sparse overrides). `seconds_per_day` removed
   (`phys_constants:sec_day`). Standalone output unchanged (D28).
-- `chion_get_surface`: outputs optional; parallel over active columns, no
-  full-array copies (cheap enough to call every step).
+- `chion_get_surface`: outputs optional; parallel over columns (including the
+  MV fill of inactive ones), no full-array copies, so it is cheap enough to
+  call every step.
 - `chion_update` snapshots (for `chion_get_smb`/`chion_get_surface_fluxes`)
   only active columns, in parallel (`chion_model_cum_active`); was a serial
   copy over all columns every step.

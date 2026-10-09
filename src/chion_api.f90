@@ -703,11 +703,21 @@ contains
         real(wp), optional, intent(OUT) :: t_srf(:)
         real(wp), optional, intent(OUT) :: albedo(:)
 
+        integer :: icol
+
         call check_surface_arg("t_srf", t_srf, chn%grd%ncol)
         call check_surface_arg("albedo",albedo,chn%grd%ncol)
 
-        if (present(t_srf))  t_srf  = MV
-        if (present(albedo)) albedo = MV
+        ! MV on the inactive columns, in parallel: a serial whole-array fill
+        ! dominated the cost of a per-step call on a large, mostly inactive grid.
+        !$omp parallel do default(shared) private(icol)
+        do icol = 1, chn%grd%ncol
+            if (.not. chn%grd%active(icol)) then
+                if (present(t_srf))  t_srf(icol)  = MV
+                if (present(albedo)) albedo(icol) = MV
+            end if
+        end do
+        !$omp end parallel do
 
         call chion_model_surface_active(chn%par,chn%grd,chn%bsi,chn%pdd,chn%itm, &
                                         t_srf=t_srf,albedo=albedo)
