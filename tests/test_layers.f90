@@ -21,20 +21,20 @@ program test_layers
 
     implicit none
 
-    ! Main-program variables are implicitly SAVE (F2008 5.3.16); stated
-    ! explicitly because ifx 2023.2 with -qopenmp otherwise hands the internal
-    ! procedures below (column_total, clear_column) a separate, all-zero copy of
-    ! the column arrays, at any -O level. Every conservation check then compared
-    ! 0 with 0, or failed. gfortran is unaffected.
-    save
-
     integer, parameter :: NMAX = 20
 
     type(chion_const_class) :: c
     integer  :: nfail
 
     ! Column state, sized generously; the "Ntot" in use is passed per test.
-    real(wp) :: mass(NMAX), mass_w(NMAX), density(NMAX), temperature(NMAX)
+    !
+    ! Main-program variables are implicitly SAVE (F2008 5.3.16). The attribute
+    ! is stated on the arrays because ifx 2023.2 with -qopenmp otherwise hands
+    ! the internal procedures below (column_total, clear_column, ...) a
+    ! separate, all-zero copy of them, at any -O level, so every conservation
+    ! check compared 0 with 0 or failed. A bare SAVE statement does not avoid
+    ! it; gfortran is unaffected.
+    real(wp), save :: mass(NMAX), mass_w(NMAX), density(NMAX), temperature(NMAX)
     integer  :: n
 
     real(wp_acc) :: mass_base, smb_ice, runoff
