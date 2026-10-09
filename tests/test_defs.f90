@@ -91,6 +91,7 @@ program test_defs
     call check_val("max_lwc_albedo",  c%max_lwc_albedo, 0.10_wp,        nfail)
     call check_val("aging_cold_timescale_days",    c%aging_cold_timescale_days,    20.0_wp, nfail)
     call check_val("aging_melting_timescale_days", c%aging_melting_timescale_days,  2.0_wp, nfail)
+    call check_val("aging_snowfall_ref",           c%aging_snowfall_ref,           10.0_wp, nfail)
     call check_val("eps_air",         c%eps_air,        0.80_wp,        nfail)
     call check_val("eps_snow",        c%eps_snow,       0.98_wp,        nfail)
     call check_val("sigma_sb",        c%sigma_sb,       5.670373e-8_wp, nfail)

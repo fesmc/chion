@@ -515,6 +515,21 @@ bare column, whose `alpha_ice` is clamped up to `alpha_wet`) is restored only by
 refresh. Reverted under `legacy_chion` (`ALBEDO_AGING_BINARY_REFRESH`), so the harness'
 aging configuration stays gated. To raise with Chion.jl (PLAN_dev_nils N5).
 
+### D31. Mass-weighted mean of two layers is `x1 + w2*(x2 - x1)`
+**What:** `snow_layers:mass_weighted_mean` (surface and bottom merges, density and
+temperature) computes `x1 + w2*(x2 - x1)`, `w2 = m2/(m1 + m2)`, instead of Chion.jl's
+`(m1*x1 + m2*x2)/(m1 + m2)`. Not reverted under `legacy_chion`.
+
+**Why:** the sum-then-divide form does not return `x` for `x1 = x2 = x`: merging two
+melting layers at `T0` can give `T0 - 1 ulp`. The aging albedo picks its timescale with
+`T_top >= T0`, so a merge decided between 2 d and 20 d by round-off. In the harness'
+`:aging` configuration chion landed below `T0` and Chion.jl did not (the dp masses
+differ at ~1e-14), and one column diverged by up to 926 ulp. The new form is exact for
+equal values and weights only the difference, so it is also better conditioned.
+
+**Impact:** round-off only (last bits of merged density and temperature); default
+results are not bit-identical to before. Reported upstream.
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was
@@ -658,6 +673,13 @@ equals `d(snowpack_swe)` exactly.
 
 Collected across batch 1. Severity: **A** = wrong results, **B** = latent/conditional,
 **C** = cosmetic or doc-only.
+
+### Mass-weighted mean of equal values is not exact (D31)
+
+**(B)** `_mass_weighted_mean` (`layer_structure.jl`) evaluates `(m1*x1 + m2*x2)/(m1+m2)`,
+so two layers at `T0` can merge to `T0 - 1 ulp`, and the `:aging` albedo's `T >= T0`
+timescale test then depends on round-off. Suggest `x1 + m2/(m1+m2)*(x2 - x1)`, as chion
+now does.
 
 ### The BESSI mass-closure identity (WP8)
 

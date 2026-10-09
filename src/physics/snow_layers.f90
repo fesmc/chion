@@ -96,8 +96,12 @@ contains
         ! Chion.jl _mass_weighted_mean: mass-weighted mean of two layer
         ! properties, returning zero when the combined mass is non-positive.
         !
-        ! Evaluated in wp_acc: this is a sum-then-divide over two layers whose
-        ! masses can differ by orders of magnitude just after a split.
+        ! Written as x1 + w2*(x2 - x1), w2 = m2/(m1 + m2), not Chion.jl's
+        ! (m1*x1 + m2*x2)/(m1 + m2) (docs/porting_notes.md D31): equal values
+        ! mix to exactly that value (two layers at T0 stay at T0, not T0 - 1
+        ! ulp), and only the difference is weighted, so it is better
+        ! conditioned. Evaluated in wp_acc, since the two masses can differ by
+        ! orders of magnitude just after a split.
 
         implicit none
 
@@ -106,13 +110,13 @@ contains
         real(wp) :: xbar
 
         ! Local variables
-        real(wp_acc) :: total_mass
+        real(wp_acc) :: total_mass, w2
 
         total_mass = real(m1,wp_acc) + real(m2,wp_acc)
 
         if (total_mass .gt. 0.0_wp_acc) then
-            xbar = real((real(m1,wp_acc)*real(x1,wp_acc) &
-                       + real(m2,wp_acc)*real(x2,wp_acc)) / total_mass, wp)
+            w2   = real(m2,wp_acc)/total_mass
+            xbar = real(real(x1,wp_acc) + w2*(real(x2,wp_acc) - real(x1,wp_acc)), wp)
         else
             xbar = 0.0_wp
         end if

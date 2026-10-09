@@ -206,6 +206,19 @@ program test_layers
     call merge_surface_layer(mass,mass_w,density,temperature,n,mass_split,mass_min,c)
     call check("no merge when surface >= mass_min", n .eq. 2, nfail)
 
+    ! Two layers at T0 merge to exactly T0 (D31). With these masses the
+    ! sum-then-divide form gives T0 - 1 ulp at dp, which flips the aging
+    ! albedo's T >= T0 timescale test.
+    call clear_column()
+    n = 2
+    mass(1) = 94.2237843373378_wp ; mass(2) = 305.6260503473118_wp
+    density(1) = 350.0_wp ; density(2) = 350.0_wp
+    temperature(1:2) = c%T0
+    call merge_surface_layer(mass,mass_w,density,temperature,n,mass_split,mass_min,c)
+    call check("full merge of two layers at T0 is exactly T0", &
+               n .eq. 1 .and. temperature(1) .eq. c%T0, nfail)
+    call check("full merge of two equal densities is exact", density(1) .eq. 350.0_wp, nfail)
+
     ! =====================================================================
     ! merge_bottom_layer: ordinary branch
     ! =====================================================================

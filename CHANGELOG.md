@@ -32,6 +32,8 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- Layer merges mix density and temperature as `x1 + w2*(x2 - x1)`: equal
+  values stay exact (two layers at T0 stay at T0). Round-off-level change (D31).
 - Shared physical constants (`rho_i`, `rho_w`, `ci`, `cw`, `Lm`, `grav`, `T0`)
   come from fesm-utils `phys_const_class`: `chion_init(..., cnst=)` takes the
   host's record, otherwise chion loads `phys_const_file` (now the `phys_const`
