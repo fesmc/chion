@@ -51,7 +51,8 @@ $(objdir)/snow_vapor.o: $(physdir)/snow_vapor.f90 \
 # surface-merge loops inside apply_snow_surface_vapor_mass_flux.
 $(objdir)/snow_surface_fluxes.o: $(physdir)/snow_surface_fluxes.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_layers.o $(objdir)/snow_vapor.o
+						  	$(objdir)/snow_layers.o $(objdir)/snow_vapor.o \
+						  	$(objdir)/snow_seb_semix.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 # snow_seb_semix reuses snow_vapor's ice vapour-pressure helpers for the
@@ -138,12 +139,13 @@ $(objdir)/chion_api.o: $(srcdir)/chion_api.f90 \
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/chion_io.o: $(srcdir)/chion_io.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/chion_api.o \
+						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o $(objdir)/chion_api.o \
 						  	$(objdir)/snow_diagnostics.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/chion.o: $(srcdir)/chion.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o $(objdir)/chion_api.o \
+						  	$(objdir)/chion_io.o \
 						  	$(objdir)/snow_bessi.o $(objdir)/snow_pdd.o $(objdir)/snow_itm.o \
 						  	$(objdir)/snow_diagnostics.o $(objdir)/chion_forcing_monthly.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
