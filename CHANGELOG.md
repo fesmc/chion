@@ -12,6 +12,10 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Added
 
+- BESSI `albedo_scheme = "aging"` (Chion.jl `6d06af6`): snowfall resets to
+  `alpha_dry`, exponential relaxation to `alpha_wet` (`aging_cold_timescale_days`
+  20 d, `aging_melting_timescale_days` 2 d); `snow_age_days` in output and
+  restart. Default scheme unchanged.
 - `chion_get_surface_flux_totals`: cumulative melt/runoff/refrz/subl [kg m-2],
   so a host aggregating over many steps differences two calls.
 

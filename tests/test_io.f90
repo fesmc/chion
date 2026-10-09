@@ -54,6 +54,9 @@ program test_io
     integer, parameter :: NCOL_TEST = 3
     integer, parameter :: NSTEP_1   = 24     ! steps before the restart
     integer, parameter :: NSTEP_2   = 12     ! steps after it
+    ! The aging round trip restarts during the first rain spell, while snow
+    ! is aging (set_forcing); at NSTEP_1 it is snowing and every age is 0.
+    integer, parameter :: NSTEP_1_AGING = 5
     real(wp), parameter :: DT_TEST  = 1.0_wp
 
     character(len=512) :: mode
@@ -80,7 +83,8 @@ program test_io
             write(*,"(a)") "=========================================================="
 
             call test_restart_roundtrip("bessi",nfail)
-            call test_restart_roundtrip("bessi",nfail,albedo_scheme="aging")
+            call test_restart_roundtrip("bessi",nfail,albedo_scheme="aging", &
+                                        n_restart=NSTEP_1_AGING)
             call test_restart_roundtrip("pdd",  nfail)
             call test_restart_roundtrip("itm",  nfail)
 
@@ -112,19 +116,23 @@ contains
     ! (a) Restart round-trip
     ! =====================================================================
 
-    subroutine test_restart_roundtrip(model,nfail,albedo_scheme)
+    subroutine test_restart_roundtrip(model,nfail,albedo_scheme,n_restart)
 
         implicit none
 
         character(len=*), intent(IN)    :: model
         integer,          intent(INOUT) :: nfail
         character(len=*), optional, intent(IN) :: albedo_scheme
+        integer,          optional, intent(IN) :: n_restart ! steps before the restart; default NSTEP_1
 
         ! Local variables
         type(chion_class) :: chn1, chn2
         real(wp) :: time_rst
         real(wp) :: smb1(NCOL_TEST), smb2(NCOL_TEST)
-        integer  :: k
+        integer  :: k, n1
+
+        n1 = NSTEP_1
+        if (present(n_restart)) n1 = n_restart
 
         write(*,*)
         if (present(albedo_scheme)) then
@@ -140,7 +148,7 @@ contains
         call chion_init(chn1,par_a,NCOL_TEST)
         call chion_init_state(chn1)
 
-        do k = 1, NSTEP_1
+        do k = 1, n1
             call set_forcing(chn1,k)
             call chion_update(chn1,DT_TEST)
         end do
@@ -151,14 +159,14 @@ contains
 
         call chion_get_smb(chn1,smb1)
 
-        call chion_restart_write(chn1,file_rst,real(NSTEP_1,wp)*DT_TEST)
+        call chion_restart_write(chn1,file_rst,real(n1,wp)*DT_TEST)
 
         ! --- Fresh object, restart read -------------------------------
         call chion_init(chn2,par_a,NCOL_TEST)
         call chion_init_state(chn2)
         call chion_restart_read(chn2,file_rst,time_rst)
 
-        call check_val("restart time recovered",time_rst,real(NSTEP_1,wp)*DT_TEST,nfail)
+        call check_val("restart time recovered",time_rst,real(n1,wp)*DT_TEST,nfail)
         call check("dt_last recovered exactly",chn2%dt_last .eq. chn1%dt_last,nfail)
         call check_eq_acc("smb_cum_prev",chn2%smb_cum_prev,chn1%smb_cum_prev,nfail)
         call check("active mask recovered", &
@@ -181,7 +189,7 @@ contains
                    all(smb2 .eq. smb1),nfail)
 
         ! --- Continue both, identical forcing -------------------------
-        do k = NSTEP_1+1, NSTEP_1+NSTEP_2
+        do k = n1+1, n1+NSTEP_2
             call set_forcing(chn1,k)
             call set_forcing(chn2,k)
             call chion_update(chn1,DT_TEST)
