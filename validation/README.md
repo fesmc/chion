@@ -35,7 +35,7 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 
 | target | reference | authority |
 |---|---|---|
-| BESSI | Chion.jl | authoritative — tight tolerances |
+| BESSI | Chion.jl | authoritative — tight tolerances; two configurations: `albedo = :dynamic` and `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`) |
 | PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
 | ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 8 written fields (D27 reverted). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
 
@@ -117,7 +117,9 @@ claim: it asserts the layer *structure* is identical, not merely similar.
 ### Measured (365 daily steps, 4 columns)
 
 Worst field, port-fidelity gate (dp+legacy vs Chion.jl): **0.47 ulp**
-(`temperature`, `density`). `N` is exactly 0 — the layer counts agree at every
+(`temperature`, `density`); the `:aging` configuration also 0.47 ulp (`Tsrf`),
+`snow_age_days` exact. Before D31 one `:aging` column diverged: a merge of two
+layers at `T0` gave `T0 - 1 ulp` in chion, flipping the `T >= T0` timescale test. `N` is exactly 0 — the layer counts agree at every
 step of every column. ITM agrees with smbpal to 1.1e-07 relative at sp and
 5.1e-15 at dp. PDD vs Chion.jl (dp, 60 monthly steps): worst 0.37 ulp
 (`simple`) and 0.41 ulp (`pism`). ITM vs Chion.jl (dp+legacy, 1095 daily steps):
@@ -147,6 +149,7 @@ column actually reached and asserts it:
 | `melting` | energy solve, melt, percolation, refreezing | 9 layers, melt 547, refreeze 232, runoff 678 |
 | `bare_recover` | ablation to bare ice, early-return bare path, recovery | N→0 then back to 2, melt 10139 |
 | `ntot_capacity` | `Ntot` capacity, bottom merge, depth cap | N=15, base export 8350 kg m⁻² |
+| BESSI `:aging` | snow ages; relaxes below `alpha_dry`; ages on a melting surface (`tau_melt`) | asserted |
 | PDD monthly | `simple` and `pism` (Calov–Greve) integrals | 60 steps at dt=30 d each |
 | ITM `ice_ablation` | ice background; melts out, then bare-ice melt; rain refreezing | asserted |
 | ITM `ice_accum_cap` | `H_snow_max` cap, excess to ice | asserted |
