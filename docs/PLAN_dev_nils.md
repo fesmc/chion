@@ -118,6 +118,20 @@ Verify: `tests/test_io.f90`; yelmox build unaffected (names it reads unchanged).
 
 **WP16 — Docs.** `PLAN.md` header (new reference commit), `porting_notes.md` (new D-entries for WP2/5/9–11; D22/D24/D27 updates; upstream-defect status: 19, 20, 11, 24?, 26 closed), `pdd_defects.md`, CHANGELOG, `validation/README.md`. Draft the upstream issue list from §1c for Nils.
 
+### Stage C — chion-originated, coordinated with Nils
+
+**WP17 — Thin-snow albedo in BESSI (PLAN ONLY; design open, Q-T1..T7).**
+*Problem* (yelmox GRL-8KM, MAR forcing, `model=bessi`): the host spreads monthly precipitation over every day, and its smooth snow fraction gives trace snowfall even at +2 to +5 °C. BESSI treats any surface layer (`mass(1) > TOL_EMPTY_LAYER`) as full snow cover. `albedo_update` step 2 clamps the stored albedo into `[alpha_wet, alpha_dry]`, so a bare column (`alpha_ice`) jumps to ≥ 0.70 on the first trace of snow (`snow_albedo.f90:151-225`, bare test in `snow_bessi.f90:629-633, 822`). `alpha_ice` is almost never seen: a sweep of 0.2/0.3/0.4 gives identical melt (478 Gt/yr). With a near-step snow fraction (`sf_a=5`), melt is 818 vs 670 Gt/yr. Under ssp585 BESSI gives −0.149 m SLE by 2300 vs ITM's −0.344, and the ablation area does not grow. The upstream `:aging` scheme makes this worse: any snowfall > 0 resets the albedo to `alpha_dry`.
+*Precedent:* ITM blends `alb_bg + min(H_snow/H_crit,1)·(alb_snow − alb_bg)` (`snow_itm.f90:calc_albedo_surface`). CLIMBER-X SEMIX blends `f_snow = tanh(h_snow/(c_fsnow·z0m_ice))·f_snow_orog` against `alb_bg` (`climber-x/src/smb/smb_surface_par.f90:108-129`). chion's SEMIX port left that blend out on purpose (`semix_port_scope.md` §"3. snow-cover-fraction blend"). Chion.jl `dev_nils` has nothing equivalent: bare is a hard switch at `EPS_EMPTY_LAYER` in all schemes (`albedo.jl`). Raise with Nils (N5).
+*Sketch* (to be fixed by the answers below):
+`alpha_eff = f·alpha_snow + (1−f)·alb_ice_use`, with `f = f(column SWE or depth)` and `f(0)=0`, `f→1`. `alpha_snow` stays the prognostic snow albedo (aging/refresh memory, unblended). `alpha_eff` feeds the SEB and is written as `albedo`. The bare-ice branch is unchanged: f→0 makes the switch continuous.
+*Files:* `snow_albedo.f90` (blend function, applied after each scheme), `snow_albedo_semix.f90` (if SEMIX uses its own f_snow), `snow_bessi.f90` (store `albedo_snow` and `albedo`; SEB uses `albedo`), `chion_defs.F90` + nml (parameter), `chion_io.f90` (restart field `albedo_snow`; output).
+*Verification:*
+(i) Unit tests: f(0)=0, monotone, f(deep)=1 to round-off; alpha_eff continuous across the bare transition; blend off gives the old step bit-identical.
+(ii) Chion.jl gate unchanged: the blend is off under `legacy_chion` (or the parameter sets it off in the harness) until Chion.jl adopts it.
+(iii) yelmox GRL-8KM at the default host `sf_a`: an `alpha_ice` 0.2/0.3/0.4 sweep must give clearly different melt, with a spread comparable to the `sf_a=5` case (818 vs 670 Gt/yr). Check runoff against MAR (645 Gt/yr reference) and the ablation-area growth under ssp585.
+*Ordering:* after WP6 (needs `:aging`) and WP2 (bare-ice runoff); independent of Stage B. Do not implement before T1–T7 are answered.
+
 Order rationale: harness first so every physics WP has a gate; Stage A changes are small and mostly bit-id; Stage B's three temperature-physics changes cannot be gated individually against one upstream commit (upstream has no switches), so WP9–11 go green together at WP11.
 
 ## 3. yelmox impact
@@ -146,4 +160,15 @@ Order rationale: harness first so every physics WP has a gate; Stage A changes a
 - **N1** `max_lwc`: 0.05 (`385d452`) or 0.1 (restored inside `5b4fe49`)? chion keeps 0.1 meanwhile.
 - **N2** Gas constant: please use 8.31446261815324 (already `DEFAULT_UNIVERSAL_GAS_CONSTANT` in `constants.jl`) instead of the literal 8.314 in `densification.jl:10,151,174`.
 - **N3** `:semix` turbulence (now BESSI's default) is no longer CLIMBER-X SEMIX (§1c.1). Intended as a new scheme?
+- **N5** Thin-snow albedo (WP17): BESSI has no partial snow cover, so `alpha_ice` is almost never seen under trace snowfall, and `:aging` resets to `alpha_dry` on any snowfall. Would Chion.jl adopt the same blend (T1–T7), so the two stay comparable?
 - **N4** Bugs in §1c: SEMIX albedo (1c.2), ITM D27 (1c.3), bare-column prescribed albedo (1c.4), rain double count (1c.5), NaN diurnal amplitude (1c.6), ITM output long_names (1c.7), stale tests/docs (1c.8), gravity 9.81 (1c.9).
+
+## 6. Open questions — WP17 thin-snow albedo
+
+- **T1 Blend function:** ITM-style linear `min(1, SWE/SWE_crit)`, or SEMIX-style `tanh(h/(c·z0))`? Recommended: one function for all schemes; SEMIX gets its own CLIMBER-X form only if exact SEMIX fidelity matters.
+- **T2 Variable:** column SWE `sum(mass+mass_w)` [kg m-2] (density-independent, matches ITM's mm w.e.), surface-layer mass only, or snow depth [m] (SEMIX)? Whole-column SWE treats thin firn over ice as snow; surface-layer mass reacts only to fresh snow.
+- **T3 Parameter name/default:** e.g. `swe_crit_albedo` [kg m-2], default 10 (ITM's `H_snow_crit_desert`; ITM goes up to 100 with PDDs)? Default on or off? On changes default BESSI results vs Chion.jl, so `legacy_chion` must turn it off.
+- **T4 Schemes:** dynamic and aging yes; constant yes (also hard-switches today); SEMIX: chion's blend or CLIMBER-X's f_snow (incl. `f_snow_orog`, which needs `z_sur_std`); prescribed: no — a prescribed albedo is already the total surface albedo.
+- **T5 State:** keep the prognostic snow albedo (`albedo_snow`, aging/refresh memory) separate from the effective `albedo`, which needs a new restart field? Or blend in place, which is simpler but makes aging start from a blended value?
+- **T6 `:aging` reset:** separately require a minimum snowfall for the `alpha_dry` reset (e.g. the existing `1−exp(−dm/3)` refresh scale), or rely on the blend alone?
+- **T7 Background albedo:** `alb_ice_use` (`alpha_ice` or the host's `alb_ice_host`) everywhere, including tundra/land columns with `H_ice=0`? ITM uses a land/forest background there.
