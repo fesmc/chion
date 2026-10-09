@@ -38,6 +38,8 @@ tag is the port itself, summarised rather than enumerated.
   be sparse or absent, like `&bessi` and `&pdd` (needed to share smbpal's `&itm`
   group in yelmox).
 - Build: `libchion.a` is a file target; objects depend on `libfesmutils.a`.
+- Build: `fpsafe=1` (value-safe `-O2`, `libchion/*-fpsafe`) for the acceptance
+  tests and validation/; make creates every flavour's build directories.
 
 ## [v0.1.0] — 2026-07-24
 

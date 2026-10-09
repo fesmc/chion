@@ -14,13 +14,22 @@ First run only:
 julia --project=validation -e 'using Pkg; Pkg.develop(path=joinpath(homedir(),"models","Chion.jl")); Pkg.instantiate()'
 ```
 
-Requires three chion builds:
+Requires three chion builds, all with `fpsafe=1`:
 
 ```sh
-make all                                  # libchion/bin
-make all precision=dp                     # libchion/bin-dp
-make all precision=dp legacy_chion=1      # libchion/bin-dp-legacy
+make all fpsafe=1                                  # libchion/bin-fpsafe
+make all fpsafe=1 precision=dp                     # libchion/bin-dp-fpsafe
+make all fpsafe=1 precision=dp legacy_chion=1      # libchion/bin-dp-legacy-fpsafe
 ```
+
+`fpsafe=1` compiles with value-safe optimization (`-O2 -fp-model precise` for
+ifx/ifort, `-O2` for gfortran) instead of the machine fragment's flags, in its
+own directories, so the production `-Ofast` objects are untouched. The gates
+resolve fractions of a Float32 ulp and `test_itm.x` checks sp to one ulp; ifx
+`-Ofast` (Levante) reorders and contracts arithmetic enough to fail those
+checks, which would measure the compiler rather than the port. The acceptance
+tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
+(`libchion.a` for yelmox, `chion_grid.x` runs) keeps the machine's flags.
 
 ## What it runs
 

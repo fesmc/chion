@@ -156,8 +156,7 @@ function run_itm_check()
     for prec in (:dp, :sp)
         exe = joinpath(CHION_ROOT, bindir(prec), "test_itm.x")
         if !isfile(exe)
-            println("  FAIL : $exe not built (make itm" *
-                    (prec === :dp ? " precision=dp" : "") * ")")
+            println("  FAIL : $exe not built ($(make_cmd("itm", prec)))")
             nfail += 1
             continue
         end

@@ -3,16 +3,13 @@
 # every level and silently excludes it.
 /Makefile
 
-# Build products. The precision=dp build gets its own suffixed directories so
-# it can coexist with the sp build (config/Makefile: psuffix).
+# Build products. Every flavour other than the production sp build
+# (precision=dp, legacy_chion=1, fpsafe=1) gets its own suffixed directories,
+# created by make (config/Makefile: psuffix).
 libchion/include/*
 libchion/bin/*
-libchion/include-dp/
-libchion/bin-dp/
-libchion/include-dp-legacy/
-libchion/bin-dp-legacy/
-libchion/include-legacy/
-libchion/bin-legacy/
+libchion/include-*/
+libchion/bin-*/
 !libchion/include/.gitkeep
 !libchion/bin/.gitkeep
 *.o

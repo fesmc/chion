@@ -41,11 +41,20 @@ eps_of(precision::Symbol) = Float64(precision === :dp ? eps(Float64) : eps(Float
 Build variants. `legacy` reverts chion's deliberate physics corrections to
 Chion.jl's values so port fidelity can still be measured -- see
 src/chion_defs.F90 and README.md.
+
+Every variant is an `fpsafe=1` build (value-safe -O2, no fast-math): the gates
+resolve fractions of a Float32 ulp, which a machine's -Ofast does not preserve.
 """
 function bindir(precision::Symbol; legacy::Bool=false)
     d = precision === :dp ? "libchion/bin-dp" : "libchion/bin"
-    return legacy ? d * "-legacy" : d
+    legacy && (d *= "-legacy")
+    return d * "-fpsafe"
 end
+
+"""The `make` call that builds `target` into `bindir(precision; legacy)`."""
+make_cmd(target::AbstractString, precision::Symbol; legacy::Bool=false) =
+    "make $target fpsafe=1" * (precision === :dp ? " precision=dp" : "") *
+    (legacy ? " legacy_chion=1" : "")
 
 """
     run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra)
@@ -127,9 +136,7 @@ $(nml_extra)
     end
 
     exe = joinpath(CHION_ROOT, bindir(precision; legacy=legacy), "chion_grid.x")
-    isfile(exe) || error("$exe not built. Run: make grid" *
-                         (precision === :dp ? " precision=dp" : "") *
-                         (legacy ? " legacy_chion=1" : ""))
+    isfile(exe) || error("$exe not built. Run: " * make_cmd("grid", precision; legacy=legacy))
     logfile = joinpath(workdir, "chion_$(model)_$(tag).log")
     open(logfile, "w") do log
         run(pipeline(Cmd(`$exe $(basename(nml))`; dir=workdir); stdout=log, stderr=log))

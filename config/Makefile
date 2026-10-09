@@ -6,6 +6,7 @@ debug        ?= 0
 openmp       ?= 1
 precision    ?= sp
 legacy_chion ?= 0
+fpsafe       ?= 0
 
 # legacy_chion=1 reverts chion's deliberate physics corrections to Chion.jl's
 # values, so validation/ can prove the port is faithful without every upstream
@@ -32,6 +33,19 @@ endif
 
 ifeq ($(legacy_chion), 1)
 	psuffix := $(psuffix)-legacy
+endif
+
+# fpsafe=1 builds with value-safe optimization (-O2, no fast-math) instead of
+# the machine fragment's DFLAGS_NODEBUG, in its own directories, so it never
+# overwrites the production objects. The acceptance tests and validation/ use
+# it: they check results to one ulp, which value-unsafe optimization (ifx
+# -Ofast on Levante) does not preserve, and ifx -Ofast miscompiles
+# tests/test_layers.f90. Production builds (yelmox, chion_grid runs) keep the
+# machine's flags.
+ifeq ($(fpsafe), 1)
+	psuffix := $(psuffix)-fpsafe
+else ifneq ($(fpsafe), 0)
+$(error fpsafe must be 0 or 1, got '$(fpsafe)')
 endif
 
 # PATH options
@@ -81,6 +95,19 @@ include config/common.mk
 # Remove this override to restore yelmo's flag set.
 DFLAGS_DEBUG = -w -g -ggdb -ffpe-trap=invalid,zero,overflow -fbacktrace -fcheck=all
 
+# Value-safe optimization per compiler (fpsafe=1): the compiler fragments' own
+# portable defaults, which the machine fragments override with -Ofast.
+DFLAGS_FPSAFE_gfortran = -O2
+DFLAGS_FPSAFE_ifx      = -O2 -fp-model precise
+DFLAGS_FPSAFE_ifort    = -O2 -fp-model precise
+
+ifeq ($(fpsafe), 1)
+    DFLAGS_NODEBUG := $(DFLAGS_FPSAFE_$(COMPILER))
+    ifeq ($(DFLAGS_NODEBUG),)
+        $(error fpsafe=1: no value-safe flags for COMPILER='$(COMPILER)')
+    endif
+endif
+
 # Determine whether to use normal flags or debugging flags
 DFLAGS = $(DFLAGS_NODEBUG)
 ifeq ($(debug), 1)
@@ -120,6 +147,14 @@ include config/Makefile_chion.mk
 
 check-hash:
 	./check_githash > git_chion.txt
+
+# Each build flavour (precision, legacy_chion, fpsafe) has its own object and
+# binary directories, created on demand. Order-only prerequisites: a directory's
+# mtime changes whenever a file in it does, so it must not trigger rebuilds.
+$(objdir) $(bindir):
+	mkdir -p $@
+
+$(chion_base) $(chion_physics) $(chion_core) $(driver_objs): | $(objdir)
 
 # chion objects embed fesm-utils types: rebuild them when libfesmutils.a
 # changes, or objects keep a stale type layout (fesmc/FastHydrology#10).
@@ -235,10 +270,14 @@ itm : chion-static
 		@echo "    test_itm.x is ready."
 
 # All acceptance tests
-tests : defs utils layers energy water surface seb wp7 bessi pdd diagnostics itm api io monthly
+test_targets = defs utils layers energy water surface seb wp7 bessi pdd diagnostics itm api io monthly
+tests : $(test_targets)
 
 # Driver executables
-drivers : column grid
+driver_targets = column grid
+drivers : $(driver_targets)
+
+$(test_targets) $(driver_targets) domain : | $(bindir)
 
 all : tests drivers
 
@@ -251,9 +290,15 @@ usage:
 	@echo " make defs         : compiles test_defs.x, the chion_defs acceptance test."
 	@echo " make utils        : compiles test_column_utils.x, the snow_column_utils test."
 	@echo " make tests        : compiles all acceptance tests."
+	@echo " make drivers      : compiles chion_column.x and chion_grid.x."
+	@echo " make all          : tests + drivers."
 	@echo " make clean        : cleans object files"
 	@echo ""
 	@echo " Options: debug=1 (bounds/traps), debug=2 (profiling), openmp=0 (serial; omp is default)"
+	@echo "          precision=dp (libchion/*-dp), legacy_chion=1 (*-legacy; validation only)"
+	@echo "          fpsafe=1 (*-fpsafe): value-safe -O2 instead of the machine's -Ofast."
+	@echo "          Use it for the acceptance tests and validation/:"
+	@echo "            make all fpsafe=1 [precision=dp [legacy_chion=1]]"
 	@echo ""
 
 clean:

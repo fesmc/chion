@@ -26,3 +26,6 @@ albedo (`albedo_scheme = constant | dynamic | prescribed | semix`), where the
 
 `make` builds `libchion.a` (OpenMP by default; `make openmp=0` for serial).
 `make tests` builds the acceptance tests, `make grid` the gridded driver.
+Build and run the tests with `fpsafe=1` (value-safe `-O2` in
+`libchion/*-fpsafe`; a machine's `-Ofast` breaks their one-ulp checks); see
+`make usage`.
