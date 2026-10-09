@@ -21,7 +21,9 @@ above with `Pkg.develop(path=<Chion.jl worktree>)`). The log's header prints the
 reference's path and commit. Options a newer reference adds with defaults that
 differ from chion's physics are pinned to chion's choice when present
 (`BESSI_SCHEME_PINS` in `runners.jl`: `turbulent_flux_scheme = seb_scheme =
-:bessi`, `refreezing_correction = 1` since dev_nils `27113b6`).
+:bessi`, `refreezing_correction = 1` since dev_nils `27113b6`; `longwave_scheme =
+:graybody`, `ice_substrate_layers = 0`, no fine near-surface layers since main
+`9ec6cc7`).
 
 Requires three chion builds, all with `fpsafe=1`:
 
@@ -158,6 +160,20 @@ did not split the two models at `27113b6`: chion reproduced it, so it was gated
 rather than reported. Both sides fix it since Chion.jl `03bb445` / chion C1
 (the diagnostic is the change applied); `tests/test_bessi.f90` test 1c asserts
 closure with the surface layer exhausted every step.
+
+**Re-pointed to main `9ec6cc7` (= `03bb445`, C0), before C1/C2:** run with the
+pins `seb_scheme = turbulent_flux_scheme = :bessi`, `longwave_scheme =
+:graybody`, `ice_substrate_layers = 0`, `near_surface_layer_max_thicknesses_m
+= Inf`, diurnal off, `alpha_ice = 0.3`, `alpha_wet = 0.70`. PDD (both methods)
+and ITM green. BESSI red in every configuration (16 + 16 + 18 fields), as
+expected from the unswitchable Robin surface boundary: `Tsrf`, `temperature`,
+`density`, `bulk_density`, `albedo` from record 1 (`Tsrf` 2.2 K, `temperature`
+21 K, `albedo` 0.40 absolute), `thickness` record 2, `mass`/`wet_mass` record
+5, melt-season fields from record 127 (`melt` 3.4e-03, `runoff` 6.8e-03,
+`refreezing` 0.26, `mass_w` 0.68 relative), `N` from record 140–153; with
+humidity on also `sublimation` 2.1e-02 and `latent_heat_flux_sum` 1.2e-02 from
+record 1. The same runner against `27113b6` still passes every gate (the
+`03bb445` pins are feature-detected and absent there).
 
 Reported, not gated:
 
