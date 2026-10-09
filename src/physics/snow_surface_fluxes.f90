@@ -42,7 +42,7 @@ module snow_surface_fluxes
     ! Vapour-pressure parameterizations and the BESSI latent flux built from
     ! them. Extracted to snow_vapor so that snow_seb_semix can share them
     ! without a circular dependency on this module.
-    use snow_vapor, only : latent_vapor_flux
+    use snow_vapor, only : latent_vapor_flux, vapor_mass_flux, surface_vapor_latent_heat
 
     ! SEMIX aerodynamic surface scheme, selected by c%seb_scheme. It supplies
     ! the exact-at-known-T turbulent fluxes here, as it supplies the linearized
@@ -155,7 +155,9 @@ contains
         ! is snow or bare ice, for the emissivity (ebal's mask_snow). Both are
         ! arguments rather than inferred from each other -- a snow column can be
         ! arbitrarily thin without ceasing to be snow. The BESSI scheme ignores
-        ! both.
+        ! the depth; whether the surface is snow selects the latent heat of its
+        ! vapour exchange: the phase's at surface_temperature on snow, Lv + Lm
+        ! on bare ice, which stays solid at T0 (surface_fluxes.jl:110-116).
         !
         ! Julia carries a dt_seconds argument here purely to spell zero() in
         ! the right type; it is never used numerically. Dropped (cleanup:
@@ -172,6 +174,7 @@ contains
 
         ! Local variables
         logical                    :: uses_semix_seb
+        real(wp)                   :: L_vap
         type(semix_exchange_class) :: sx
 
         uses_semix_seb = (c%seb_scheme .eq. CHION_SEB_SEMIX)
@@ -217,8 +220,13 @@ contains
             ! third case of the BESSI selection too.
             flx%latent = semix_latent_heat_flux(sx)
         else if (forc%has_relative_humidity) then
+            if (has_snow) then
+                L_vap = surface_vapor_latent_heat(surface_temperature,c)
+            else
+                L_vap = c%Lv + c%Lm
+            end if
             flx%latent = latent_vapor_flux(surface_temperature,c,forc%air_temperature, &
-                                           forc%relative_humidity,forc%air_pressure)
+                                           forc%relative_humidity,forc%air_pressure,L_vap)
         else
             flx%latent = 0.0_wp
         end if
@@ -299,7 +307,8 @@ contains
             q_lh = semix_latent_heat_flux(sx)
         else if (forc%has_relative_humidity) then
             q_lh = latent_vapor_flux(surface_temperature,c,forc%air_temperature, &
-                                     forc%relative_humidity,forc%air_pressure)
+                                     forc%relative_humidity,forc%air_pressure, &
+                                     surface_vapor_latent_heat(surface_temperature,c))
         else
             q_lh = 0.0_wp
         end if
@@ -418,8 +427,14 @@ contains
         ! linearization about T^n -- trap 2 again, deliberate.
         !
         ! Two branches, on the NEW surface temperature:
-        !   Ts <  T0  solid exchange:  vapor = Q*dt/(Lv+Lm), applied to mass(1)
-        !   Ts >= T0  liquid exchange: vapor = Q*dt/Lv,      applied to mass_w(1)
+        !   Ts <  T0  solid exchange,  applied to mass(1)
+        !   Ts >= T0  liquid exchange, applied to mass_w(1)
+        ! The vapour MASS (surface_fluxes.jl:294-309, dev_nils d0146e1):
+        !   parameterized BESSI turbulence: vapor = E*dt, E the vapour-mass
+        !       flux from the humidity gradient (vapor_mass_flux), independent
+        !       of the latent heat; the energy flux Q = L(Ts)*E carries it
+        !   prescribed q_lh: vapor = q_lh*dt/L(Ts), Lv+Lm below T0, Lv at it,
+        !       so the prescribed flux controls its own mass exchange
         ! Both take max(...,0) on the updated layer value, so a sublimation
         ! demand larger than the available surface mass is silently truncated
         ! and the vapor_mass returned is NOT reduced to match. Preserved as-is.
@@ -427,9 +442,10 @@ contains
         ! Only the solid branch can empty the surface layer, so only it runs
         ! the depleted-surface removal and surface-merge loops.
         !
-        ! seb_scheme = semix splits those two roles apart. The RESERVOIR choice
-        ! (solid mass(1) against liquid mass_w(1)) still turns on T0, but the
-        ! LATENT HEAT used to convert the flux into mass no longer does: SEMIX
+        ! seb_scheme = semix (CLIMBER-X, not Julia's :semix turbulence) converts
+        ! its flux, prescribed or not, with a fixed latent heat. The RESERVOIR
+        ! choice (solid mass(1) against liquid mass_w(1)) still turns on T0, but
+        ! the LATENT HEAT used to convert the flux into mass no longer does: SEMIX
         ! builds f_lh with the latent heat of sublimation at every temperature
         ! (smb_ebal.f90:107), so converting with Lv above the melting point
         ! would overstate the mass by (Lv+Lm)/Lv. Bare ice already uses
@@ -476,13 +492,15 @@ contains
 
         if (c%seb_scheme .eq. CHION_SEB_SEMIX) then
             L_exchange = c%Lv + c%Lm
-        else if (surface_temperature .lt. c%T0) then
-            L_exchange = c%Lv + c%Lm
+            vapor      = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(L_exchange,wp_acc)
+        else if (forc%has_q_lh) then
+            L_exchange = surface_vapor_latent_heat(surface_temperature,c)
+            vapor      = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(L_exchange,wp_acc)
         else
-            L_exchange = c%Lv
+            vapor = real(vapor_mass_flux(surface_temperature,c,forc%air_temperature, &
+                                         forc%relative_humidity,forc%air_pressure),wp_acc) &
+                    *real(dt_seconds,wp_acc)
         end if
-
-        vapor = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(L_exchange,wp_acc)
 
         vflux%vapor_mass       = real(vapor,wp)
         vflux%sublimation_mass = max(-vflux%vapor_mass,0.0_wp)

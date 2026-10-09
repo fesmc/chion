@@ -9,13 +9,20 @@ and the two readers are configured to agree field for field (see runners.jl).
 WHAT IS DELIBERATELY ABSENT FROM THE FILE
 -----------------------------------------
 Only TT, SF, RF, SWD, LAT, SH and mask are written (plus ITM's HI and PDDA in
-the ITM file). `load_forcing_file` picks up
+the ITM file, and RHZ and PS in the humidity-on BESSI file, see below).
+`load_forcing_file` picks up
 LWD / SHF / LHF / RHZ by their default names whenever they are present, while
 `chion_grid.x` reads none of them, so writing any of those would silently hand
 Chion.jl forcing that chion never sees. Omitting RHZ additionally keeps humidity
 forcing off, which is required for the BESSI mass-closure identity to hold at
 all -- with humidity on, the vapour diagnostic is unclosed by ~105 kg m-2
 against 192 kg m-2 reported (upstream Chion.jl defect 1).
+
+The humidity-on BESSI configuration (WP11) gets a file of its own carrying RHZ
+and PS, both uniform: chion_grid.x has no humidity or pressure reader, only
+`rh_default` and the sea-level pressure it fills in (DEF_SEA_LEVEL_AIR_PRESSURE),
+so the file carries exactly those values for Chion.jl to read -- PS also
+overrides Chion.jl's barometric pressure from SH, which chion does not apply.
 
 The snow/rain split is computed HERE and written as two separate variables, so
 neither model applies a partition rule of its own.
@@ -25,6 +32,9 @@ using NCDatasets
 using Dates
 
 const YEAR_LENGTH = 365.0
+
+"""chion_grid.x's air pressure (chion_defs DEF_SEA_LEVEL_AIR_PRESSURE) [Pa]."""
+const SEA_LEVEL_PRESSURE = 101325.0
 
 """
 One independent column of the BESSI comparison. Each scenario is a column of a
@@ -108,9 +118,11 @@ air_temperature(s::Scenario, day) = s.t2m_mean + s.t2m_amp * seasonal(day)
 shortwave(s::Scenario, day) = max(s.sw_mean + s.sw_amp * seasonal(day), 0.0)
 
 """
-    write_forcing(path, scenarios; nstep, dt_days, t_snow_max)
+    write_forcing(path, scenarios; nstep, dt_days, t_snow_max, geometry,
+                  relative_humidity)
 
-Write the shared forcing file.
+Write the shared forcing file. With `relative_humidity` [1] given, uniform RHZ
+and PS (`SEA_LEVEL_PRESSURE`) are added for the humidity-on configuration.
 
 The time axis is written in two forms, because the two readers accept different
 ones and neither accepts both: a CF numeric axis for `chion_grid.x`, and
@@ -120,7 +132,8 @@ the write site for why the CF axis alone is not enough.
 """
 function write_forcing(path::AbstractString, scenarios::Vector{Scenario};
                        nstep::Int, dt_days::Float64=1.0, t_snow_max::Float64=273.15,
-                       geometry::Union{Nothing,Vector{Geometry}}=nothing)
+                       geometry::Union{Nothing,Vector{Geometry}}=nothing,
+                       relative_humidity::Union{Nothing,Float64}=nothing)
     ncol = length(scenarios)
     nx, ny = ncol, 1
 
@@ -185,11 +198,15 @@ function write_forcing(path::AbstractString, scenarios::Vector{Scenario};
             vv.attrib["long_name"] = "Calendar $nm, for Chion.jl's _read_time_values"
         end
 
+        humid = relative_humidity === nothing ? () :
+            (("RHZ", fill(relative_humidity, size(TT)), "1", "Relative humidity"),
+             ("PS", fill(SEA_LEVEL_PRESSURE, size(TT)), "Pa", "Air pressure"))
         for (name, data, units, long) in (
                 ("TT", TT, "K", "Air temperature"),
                 ("SF", SF, "kg m-2 s-1", "Snowfall rate"),
                 ("RF", RF, "kg m-2 s-1", "Rainfall rate"),
-                ("SWD", SWD, "W m-2", "Downward shortwave radiation"))
+                ("SWD", SWD, "W m-2", "Downward shortwave radiation"),
+                humid...)
             # Declared ("x","y","time") in Julia order so the file carries
             # (time,y,x) in C order -- the layout chion_grid.x reads.
             vv = defVar(ds, name, Float64, ("x", "y", "time"))

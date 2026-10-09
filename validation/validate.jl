@@ -240,6 +240,50 @@ function run_bessi_aging(fbessi::AbstractString)
 end
 
 """
+Relative humidity of the humidity-on BESSI configuration [1]: dry enough that
+every column sublimates and evaporates, with the latent flux a few W m-2.
+"""
+const RH_HUMID = 0.7
+
+"""
+BESSI with humidity on (WP11): the default configuration's columns with uniform
+RHZ and sea-level pressure, so the parameterized turbulent latent flux, its
+phase-dependent latent heat (Lv at a melting surface, Lv+Lm below T0 and on
+bare ice) and the gradient-based vapour mass (Chion.jl d0146e1) are exercised.
+Gated like the default configuration: dp+legacy, every BESSI field.
+"""
+function run_bessi_humid(nstep::Int)
+    fh = joinpath(WORKDIR, "forcing_bessi_rh.nc")
+    write_forcing(fh, BESSI_SCENARIOS; nstep=nstep, dt_days=1.0,
+                  relative_humidity=RH_HUMID)
+    jl = run_julia_bessi(; forcing=fh, outfile="julia_bessi_rh.nc", workdir=WORKDIR,
+                         ntot=15, years=1, humidity=true)
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fh,
+                   outfile="chion_bessi_rh_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0, rh_default=RH_HUMID)
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, humidity on: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity (humidity on, rh = $(RH_HUMID))")
+
+    subl, lhf = NCDataset(ch) do dc
+        (read_canonical(dc, "sublimation")[1], read_canonical(dc, "latent_heat_flux_sum")[1])
+    end
+    names = [s.name for s in BESSI_SCENARIOS]
+    final(a, name) = a[end, 1, findfirst(==(name), names)]
+    checks = [("humid: the melting column sublimates",
+               final(subl, "melting") > 0),
+              ("humid: latent heat flux is non-zero",
+               any(x -> x != 0, skipmissing(lhf)))]
+    println()
+    println("--- coverage assertions (humidity on) ---")
+    for (label, ok) in checks
+        println(ok ? "  ok   : $label" : "  FAIL : $label")
+        ok || (nfail += 1)
+    end
+    return nfail
+end
+
+"""
 ITM against Chion.jl's ITMModel (ported from chion, 29eb867): dp+legacy, so
 chion's tsrf uses the daily melt_net as Chion.jl does (D27), and all eight
 written fields are gated.
@@ -340,6 +384,7 @@ function main()
     nfail += check_coverage(cov)
 
     nfail += run_bessi_aging(fbessi)
+    nfail += run_bessi_humid(nstep)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

@@ -73,7 +73,8 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
                    model::AbstractString="bessi", dt_out::Float64=1.0,
                    dt::Float64=-1.0, nml_extra::AbstractString="",
                    legacy::Bool=false, pdd_method::AbstractString="simple",
-                   name_hice::AbstractString="None", name_pdds::AbstractString="None")
+                   name_hice::AbstractString="None", name_pdds::AbstractString="None",
+                   rh_default::Float64=0.0)
     mkpath(workdir)
     link = joinpath(workdir, "input")
     islink(link) || ispath(link) || symlink(joinpath(CHION_ROOT, "input"), link)
@@ -85,7 +86,7 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
 &ctrl
     forcing_source      = "file"
     dust_dep_default    = 0.0
-    rh_default          = 0.0
+    rh_default          = $(rh_default)
     file_forcing        = "$(abspath(forcing))"
     file_out            = "$(outfile)"
     name_x              = "x"
@@ -152,18 +153,20 @@ $(nml_extra)
 end
 
 """
-    run_julia_bessi(; forcing, outfile, workdir, ntot, albedo, vars)
+    run_julia_bessi(; forcing, outfile, workdir, ntot, albedo, vars, humidity)
 
 Run Chion.jl's BESSI on the same file. `netcdf_variables` is the explicit 18-var
 list: requesting `latent_heat_flux` would flip the run into monthly-aggregation
 mode (`_uses_monthly_output`), which writes one record per month instead of one
 per step and would not be comparable. With `albedo = :aging` the timescales are
 passed explicitly (`AGING_PARAMS`): 12407a3 defaults the melting one to 5 d,
-dev_nils and chion to 2 d.
+dev_nils and chion to 2 d. `humidity = true` reads the forcing's RHZ and PS
+(see forcing.jl), matching chion's `rh_default` and sea-level pressure.
 """
 function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
                          workdir::AbstractString, ntot::Int=15, years::Int=1,
-                         albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS)
+                         albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS,
+                         humidity::Bool=false)
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -175,7 +178,8 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
         rainfall_name="RF", shortwave_name="SWD",
         wind_speed_name=nothing,
         q_lw_down_name=nothing, q_sh_name=nothing, q_lh_name=nothing,
-        relative_humidity_name=nothing, air_pressure_name=nothing,
+        relative_humidity_name=humidity ? "RHZ" : nothing,
+        air_pressure_name=humidity ? "PS" : nothing,
         prescribed_albedo_name=nothing,
         surface_height_name="SH", latitude_name="LAT",
         mask_name="mask", mask_threshold=0.0,

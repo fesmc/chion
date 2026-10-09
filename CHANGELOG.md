@@ -40,6 +40,11 @@ tag is the port itself, summarised rather than enumerated.
   temperature-dependent (Chion.jl `49990e6`), replacing `Ki*(rho/1000)^1.88`;
   `Ki` removed from `&chion_const`. Changes default BESSI results (K +14% at
   500, +23% at 917 kg m-3).
+- BESSI turbulent latent heat (Chion.jl `d0146e1`): `Lv` at a melting snow
+  surface, `Lv+Lm` below `T0` and on bare ice; the parameterized vapour mass is
+  the humidity-gradient mass flux, independent of the latent heat (prescribed
+  `q_lh` still converts with the phase's `L`). Changes default BESSI results
+  when humidity forcing is on (latent flux ~12% smaller at melting surfaces).
 - Layer merges mix density and temperature as `x1 + w2*(x2 - x1)`: equal
   values stay exact (two layers at T0 stay at T0). Round-off-level change (D31).
 - Shared physical constants (`rho_i`, `rho_w`, `ci`, `cw`, `Lm`, `grav`, `T0`)

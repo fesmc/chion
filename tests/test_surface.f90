@@ -11,10 +11,10 @@ program test_surface
     !   * bare-ice energy-balance closure and the vapor_mass sign convention
     !   * diagnose_latent_heat_flux_coefficients in all three branches,
     !     including snowfall beating rainfall
-    !
-    ! apply_snow_surface_vapor_mass_flux is NOT exercised here: it calls
-    ! snow_layers (WP4), which does not exist yet. See the WP4 INTEGRATION
-    ! POINT markers in src/physics/snow_surface_fluxes.f90.
+    !   * phase-dependent latent heat and the gradient-based vapour mass
+    !     (Chion.jl d0146e1): L = Lv+Lm below T0, Lv at it, Lv+Lm on bare
+    !     ice; apply_snow_surface_vapor_mass_flux applies E*dt in both the
+    !     solid and the liquid branch, and q_lh*dt/L(Ts) when prescribed
 
     use chion_defs,          only : wp, wp_acc, chion_const_class, &
                                     chion_step_forcing_class, chion_const_init, &
@@ -40,7 +40,7 @@ program test_surface
     real(wp), parameter :: H_NONE = 0.0_wp
     real(wp), parameter :: H_DEEP = 1.0_wp
 
-    real(wp) :: Tn, q_exact, q_lin, dt_seconds, q_net, expected
+    real(wp) :: Tn, q_exact, q_lin, dt_seconds, q_net, expected, E0
     real(wp) :: f_sh_semix
     integer  :: nfail
 
@@ -110,7 +110,8 @@ program test_surface
 
     Tn = 265.0_wp
 
-    q_exact = latent_vapor_flux(Tn,c,270.0_wp,0.75_wp,DEF_SEA_LEVEL_AIR_PRESSURE)
+    q_exact = latent_vapor_flux(Tn,c,270.0_wp,0.75_wp,DEF_SEA_LEVEL_AIR_PRESSURE, &
+                                surface_vapor_latent_heat(Tn,c))
     lin     = latent_vapor_flux_linearized(Tn,c,270.0_wp,0.75_wp,DEF_SEA_LEVEL_AIR_PRESSURE)
     q_lin   = lin%constant - lin%linear*Tn
 
@@ -123,8 +124,44 @@ program test_surface
     ! Away from T^n the two DO differ -- this is trap 2, and it is deliberate.
     call check("linearized and exact differ away from T^n (trap 2 preserved)", &
                abs((lin%constant - lin%linear*(Tn+5.0_wp)) &
-                   - latent_vapor_flux(Tn+5.0_wp,c,270.0_wp,0.75_wp,DEF_SEA_LEVEL_AIR_PRESSURE)) &
+                   - latent_vapor_flux(Tn+5.0_wp,c,270.0_wp,0.75_wp,DEF_SEA_LEVEL_AIR_PRESSURE, &
+                                       surface_vapor_latent_heat(Tn+5.0_wp,c))) &
                .gt. 1.0e-4_wp, nfail)
+
+    ! === Phase-dependent latent heat, gradient vapour mass ===============
+    write(*,*)
+    write(*,"(a)") "--- phase-dependent latent heat (Chion.jl d0146e1) ---"
+
+    call check_close("L below T0 = Lv + Lm", surface_vapor_latent_heat(c%T0 - 0.01_wp,c), &
+                     c%Lv + c%Lm, 1.0e-6_wp, nfail)
+    call check_close("L at T0 = Lv", surface_vapor_latent_heat(c%T0,c), c%Lv, 1.0e-6_wp, nfail)
+
+    E0 = vapor_mass_flux(c%T0,c,270.0_wp,0.75_wp,DEF_SEA_LEVEL_AIR_PRESSURE)
+    call check("E(T0) < 0 in subsaturated cold air (evaporation)", E0 .lt. 0.0_wp, nfail)
+    call check_close("Q(T0) = Lv*E(T0)", &
+                     latent_vapor_flux(c%T0,c,270.0_wp,0.75_wp,DEF_SEA_LEVEL_AIR_PRESSURE,c%Lv), &
+                     c%Lv*E0, 1.0e-5_wp, nfail)
+
+    lin   = latent_vapor_flux_linearized(c%T0,c,270.0_wp,0.75_wp,DEF_SEA_LEVEL_AIR_PRESSURE)
+    q_lin = lin%constant - lin%linear*c%T0
+    call check_close("linearized at T0 carries Lv: Q_lin(T0) = Lv*E(T0)", &
+                     q_lin, c%Lv*E0, 1.0e-5_wp, nfail)
+
+    call forcing_init(forc)
+    forc%air_temperature       = 270.0_wp
+    forc%has_relative_humidity = .TRUE.
+    forc%relative_humidity     = 0.75_wp
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,H_NONE,.TRUE.)
+    call check_close("melting snow surface: Q = Lv*E(T0)", nsw%latent, c%Lv*E0, &
+                     1.0e-5_wp, nfail)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,H_NONE,.FALSE.)
+    call check_close("bare ice at T0 stays solid: Q = (Lv+Lm)*E(T0)", nsw%latent, &
+                     (c%Lv + c%Lm)*E0, 1.0e-5_wp, nfail)
+    abl = bare_ice_ablation_mass(c,forc,86400.0_wp)
+    call check_close("bare ice vapour mass = E(T0)*dt", abl%vapor_mass, E0*86400.0_wp, &
+                     1.0e-5_wp, nfail)
+
+    call test_snow_vapor_mass(nfail)
 
     ! === has_* flag branches ============================================
     write(*,*)
@@ -168,7 +205,8 @@ program test_surface
     nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_NONE,.TRUE.)
     call check_close("has_relative_humidity -> BESSI vapor flux", &
                      nsw%latent, &
-                     latent_vapor_flux(265.0_wp,c,268.0_wp,0.75_wp,forc%air_pressure), &
+                     latent_vapor_flux(265.0_wp,c,268.0_wp,0.75_wp,forc%air_pressure, &
+                                       c%Lv + c%Lm), &
                      1.0e-5_wp, nfail)
 
     ! has_q_lh takes precedence over has_relative_humidity.
@@ -448,10 +486,6 @@ program test_surface
     ! === Summary ========================================================
     write(*,*)
     write(*,"(a)") "=========================================================="
-    write(*,"(a)") " NOTE: apply_snow_surface_vapor_mass_flux is NOT tested."
-    write(*,"(a)") "       It depends on snow_layers (WP4), which does not"
-    write(*,"(a)") "       exist yet. See the WP4 INTEGRATION POINT markers."
-    write(*,"(a)") "=========================================================="
     if (nfail .eq. 0) then
         write(*,"(a)") " WP5 (surface fluxes): ALL CHECKS PASSED"
         write(*,"(a)") "=========================================================="
@@ -462,6 +496,79 @@ program test_surface
     end if
 
 contains
+
+    subroutine test_snow_vapor_mass(nfail)
+        ! apply_snow_surface_vapor_mass_flux with humidity on, one step on a
+        ! two-layer column, in each reservoir. The applied mass equals the
+        ! reported vapor_mass (nothing is clipped here), and for the
+        ! parameterized BESSI turbulence it is E(Ts)*dt whatever the phase:
+        ! at T0 the old Q/Lv conversion of an (Lv+Lm)-weighted flux would
+        ! have moved (Lv+Lm)/Lv = 1.13 times as much water.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_step_forcing_class) :: fv
+        type(surface_vapor_flux_class) :: vflux
+        real(wp)     :: mass(4), mass_w(4), density(4), temperature(4)
+        real(wp)     :: t_srf, albedo, dt, E
+        real(wp_acc) :: runoff
+        integer      :: n
+
+        dt = 86400.0_wp
+
+        call forcing_init(fv)
+        fv%air_temperature       = 268.0_wp
+        fv%has_relative_humidity = .TRUE.
+        fv%relative_humidity     = 0.5_wp
+
+        ! Solid branch: surface below T0, sublimation from mass(1).
+        mass = 0.0_wp; mass_w = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        n = 2
+        mass(1:2) = 200.0_wp; density(1:2) = 350.0_wp; temperature(1:2) = 265.0_wp
+        t_srf = 265.0_wp; albedo = 0.8_wp; runoff = 0.0_wp_acc
+
+        E = vapor_mass_flux(265.0_wp,c,fv%air_temperature,fv%relative_humidity, &
+                            fv%air_pressure)
+        call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n,runoff, &
+                                                t_srf,albedo,c,fv,dt,300.0_wp,100.0_wp,vflux)
+        call check_close("solid: vapor_mass = E(Ts)*dt", vflux%vapor_mass, E*dt, 1.0e-5_wp, nfail)
+        call check_close("solid: mass(1) changed by vapor_mass", mass(1) - 200.0_wp, &
+                         vflux%vapor_mass, 1.0e-3_wp, nfail)
+        call check_close("solid: latent flux = (Lv+Lm)*E(Ts)", vflux%latent_heat_flux, &
+                         (c%Lv + c%Lm)*E, 1.0e-5_wp, nfail)
+
+        ! Liquid branch: surface at T0, evaporation from mass_w(1).
+        mass = 0.0_wp; mass_w = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        n = 2
+        mass(1:2) = 200.0_wp; density(1:2) = 350.0_wp; temperature(1:2) = c%T0
+        mass_w(1) = 5.0_wp
+        t_srf = c%T0; runoff = 0.0_wp_acc
+
+        E = vapor_mass_flux(c%T0,c,fv%air_temperature,fv%relative_humidity,fv%air_pressure)
+        call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n,runoff, &
+                                                t_srf,albedo,c,fv,dt,300.0_wp,100.0_wp,vflux)
+        call check_close("liquid: vapor_mass = E(T0)*dt (not Q*dt/Lv)", vflux%vapor_mass, &
+                         E*dt, 1.0e-5_wp, nfail)
+        call check_close("liquid: mass_w(1) changed by vapor_mass", mass_w(1) - 5.0_wp, &
+                         vflux%vapor_mass, 1.0e-4_wp, nfail)
+        call check_close("liquid: latent flux = Lv*E(T0)", vflux%latent_heat_flux, &
+                         c%Lv*E, 1.0e-5_wp, nfail)
+
+        ! Prescribed q_lh at T0: the flux controls its mass, q_lh*dt/Lv.
+        fv%has_q_lh = .TRUE.
+        fv%q_lh     = -20.0_wp
+        mass_w(1) = 5.0_wp
+        call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n,runoff, &
+                                                t_srf,albedo,c,fv,dt,300.0_wp,100.0_wp,vflux)
+        call check_close("prescribed q_lh at T0: vapor_mass = q_lh*dt/Lv", vflux%vapor_mass, &
+                         -20.0_wp*dt/c%Lv, 1.0e-5_wp, nfail)
+
+        return
+
+    end subroutine test_snow_vapor_mass
 
     subroutine forcing_init(forc)
         ! Neutral per-column forcing: nothing prescribed, no precipitation,

@@ -59,7 +59,9 @@ program test_bessi
     !     humidity forcing off (has_relative_humidity = .FALSE., has_q_lh =
     !     .FALSE.), which makes the latent flux identically zero. A separate
     !     non-asserting probe reports the residual WITH humidity on, which is
-    !     a direct measurement of defect 1.
+    !     a direct measurement of defect 1. The identity itself does hold with
+    !     humidity on wherever the demand never exceeds the surface layer;
+    !     test 1b asserts it on a cold, snow-rich column that sublimates.
     !
     ! Measured behaviour of the residual (gfortran -O2, wp = sp): the RELATIVE
     ! residual saturates rather than growing with run length --
@@ -92,6 +94,7 @@ program test_bessi
     write(*,*)
 
     call test_mass_closure(nfail)
+    call test_mass_closure_humid(nfail)
     call test_cold_dry_column(nfail)
     call test_bare_and_recover(nfail)
     call test_capacity(nfail)
@@ -353,6 +356,78 @@ contains
         return
 
     end subroutine test_mass_closure
+
+    ! =====================================================================
+    ! Test 1b -- mass closure with humidity on (parameterized vapour mass)
+    ! =====================================================================
+
+    subroutine test_mass_closure_humid(nfail)
+        ! The vapour mass of the parameterized BESSI turbulence is the
+        ! humidity-gradient mass flux E*dt (Chion.jl d0146e1), applied to the
+        ! surface layer and accumulated in vapor_mass. On a column that stays
+        ! below T0 and keeps a surface layer far heavier than a day's
+        ! sublimation, nothing is clipped (defect 1 cannot fire) and the
+        ! closure identity must hold to the same 1e-6 as with humidity off.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)              :: bsi
+        type(chion_const_class)        :: c
+        type(chion_step_forcing_class) :: forc
+        integer      :: iyr, iday
+        real(wp)     :: dt_seconds, doy
+        real(wp_acc) :: precip
+
+        write(*,"(a)") "--- 1b. mass closure with humidity on (cold, no clipping) ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+
+        precip = 0.0_wp_acc
+        do iyr = 1, 3
+            do iday = 1, NDAY_YEAR
+                doy = real(iday,wp)
+                call neutral_forcing(forc)
+                forc%air_temperature = 255.0_wp - 8.0_wp*cos(2.0_wp*PI_WP*(doy - 15.0_wp) &
+                                                             /real(NDAY_YEAR,wp))
+                forc%dt_days         = 1.0_wp
+                forc%snowfall_rate   = 3.0e-5_wp
+                forc%shortwave_down  = max(200.0_wp*cos(2.0_wp*PI_WP*(doy - 197.0_wp) &
+                                                        /real(NDAY_YEAR,wp)),0.0_wp)
+                forc%wind_speed      = 5.0_wp
+                forc%relative_humidity     = 0.5_wp
+                forc%has_relative_humidity = .TRUE.
+
+                dt_seconds = forc%dt_days*real(sec_day,wp)
+                precip = precip + real(forc%snowfall_rate*dt_seconds,wp_acc)
+
+                call bessi_column_step(bsi,1,forc,c)
+            end do
+        end do
+
+        write(*,"(a,g16.8)") "         precip accepted [kg m-2] = ", precip
+        write(*,"(a,g16.8)") "         vapor_mass      [kg m-2] = ", bsi%now%vapor_mass(1)
+        write(*,"(a,g16.8)") "         sublimation     [kg m-2] = ", bsi%now%sublimation(1)
+
+        call check("vapour exchange is exercised (sublimation > 1 kg m-2)", &
+                   bsi%now%sublimation(1) .gt. 1.0_wp_acc, nfail)
+        call check("column never melted (solid exchange only)", &
+                   bsi%now%melt(1) .eq. 0.0_wp_acc, nfail)
+        call check_close("closure with humidity on", &
+                         closure_lhs(bsi,1),precip,1.0e-6_wp_acc,nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_mass_closure_humid
 
     ! =====================================================================
     ! Test 2 -- cold dry column

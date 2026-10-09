@@ -35,7 +35,9 @@ module snow_vapor
     public :: air_vapor_pressure
     public :: ice_saturation_vapor_pressure
     public :: ice_saturation_vapor_pressure_derivative
-    public :: latent_exchange_coefficient
+    public :: vapor_exchange_coefficient
+    public :: surface_vapor_latent_heat
+    public :: vapor_mass_flux
     public :: latent_vapor_flux
     public :: latent_vapor_flux_linearized
 
@@ -163,26 +165,55 @@ contains
 
     end function ice_saturation_vapor_pressure_derivative
 
-    pure function latent_exchange_coefficient(c) result(D_lf)
-        ! Chion.jl/src/processes/energy_flux.jl:43-44:
-        !     D_lf = latent_heat_flux_ratio * D_sh/cp_air * 0.622 * (Lv + Lm)
-        ! The 0.622 is the dry-air/water-vapor molar mass ratio, hard-coded.
+    pure function vapor_exchange_coefficient(c) result(D_v)
+        ! Chion.jl/src/processes/energy_flux.jl:62-63 (dev_nils d0146e1):
+        !     D_v = latent_heat_flux_ratio * D_sh/cp_air * 0.622
+        ! the bulk vapour-MASS transfer coefficient; divided by the air
+        ! pressure it turns a vapour-pressure difference into a mass flux. The
+        ! 0.622 is the dry-air/water-vapor molar mass ratio, hard-coded.
+        !
+        ! It no longer carries a latent heat: the energy flux multiplies the
+        ! mass flux by the phase's latent heat (surface_vapor_latent_heat),
+        ! while the vapour mass is the mass flux itself.
 
         implicit none
 
         type(chion_const_class), intent(IN) :: c
-        real(wp) :: D_lf
+        real(wp) :: D_v                 ! [kg m-2 s-1 (Pa/Pa)]
 
-        D_lf = c%latent_heat_flux_ratio*c%D_sh/c%cp_air*0.622_wp*(c%Lv + c%Lm)
+        D_v = c%latent_heat_flux_ratio*c%D_sh/c%cp_air*0.622_wp
 
         return
 
-    end function latent_exchange_coefficient
+    end function vapor_exchange_coefficient
 
-    pure function latent_vapor_flux(surface_temperature,c,air_temperature, &
-                                    relative_humidity,air_pressure) result(q_lh)
-        ! EXACT turbulent latent heat flux at a known surface temperature.
-        ! Chion.jl/src/processes/energy_flux.jl:73-78.
+    pure function surface_vapor_latent_heat(surface_temperature,c) result(L)
+        ! Chion.jl/src/processes/energy_flux.jl:67-68 (d0146e1): vapour
+        ! exchange with a subfreezing (solid) surface is sublimation/deposition
+        ! and carries Lv + Lm; at the melting point it is evaporation/
+        ! condensation of surface water and carries Lv.
+
+        implicit none
+
+        real(wp),                intent(IN) :: surface_temperature   ! [K]
+        type(chion_const_class), intent(IN) :: c
+        real(wp) :: L                                                ! [J kg-1]
+
+        if (surface_temperature .lt. c%T0) then
+            L = c%Lv + c%Lm
+        else
+            L = c%Lv
+        end if
+
+        return
+
+    end function surface_vapor_latent_heat
+
+    pure function vapor_mass_flux(surface_temperature,c,air_temperature, &
+                                  relative_humidity,air_pressure) result(E)
+        ! BESSI turbulent vapour-mass flux from the vapour-pressure gradient,
+        !     E = D_v/p * (e_a - e_s(T_s)),
+        ! Chion.jl/src/processes/energy_flux.jl:97-102 (d0146e1).
         !
         ! Positive = flux into the surface (deposition).
 
@@ -193,16 +224,43 @@ contains
         real(wp),                intent(IN) :: air_temperature       ! [K]
         real(wp),                intent(IN) :: relative_humidity     ! [1] or [%]
         real(wp),                intent(IN) :: air_pressure          ! [Pa]
-        real(wp) :: q_lh                                             ! [W m-2]
+        real(wp) :: E                                                ! [kg m-2 s-1]
 
         ! Local variables
         real(wp) :: exchange, ea, es
 
-        exchange = latent_exchange_coefficient(c)/safe_positive(air_pressure)
+        exchange = vapor_exchange_coefficient(c)/safe_positive(air_pressure)
         ea       = air_vapor_pressure(air_temperature,relative_humidity,c%T0)
         es       = ice_saturation_vapor_pressure(surface_temperature,c%T0)
 
-        q_lh = exchange*(ea - es)
+        E = exchange*(ea - es)
+
+        return
+
+    end function vapor_mass_flux
+
+    pure function latent_vapor_flux(surface_temperature,c,air_temperature, &
+                                    relative_humidity,air_pressure,latent_heat) result(q_lh)
+        ! EXACT turbulent latent heat flux at a known surface temperature,
+        ! Chion.jl/src/processes/energy_flux.jl:104-107: the vapour-mass flux
+        ! times the latent heat of the exchange. Julia defaults latent_heat to
+        ! surface_vapor_latent_heat(surface_temperature); here every caller
+        ! passes it, since bare ice (solid at T0) uses Lv + Lm.
+        !
+        ! Positive = flux into the surface (deposition).
+
+        implicit none
+
+        real(wp),                intent(IN) :: surface_temperature   ! [K]
+        type(chion_const_class), intent(IN) :: c
+        real(wp),                intent(IN) :: air_temperature       ! [K]
+        real(wp),                intent(IN) :: relative_humidity     ! [1] or [%]
+        real(wp),                intent(IN) :: air_pressure          ! [Pa]
+        real(wp),                intent(IN) :: latent_heat           ! [J kg-1]
+        real(wp) :: q_lh                                             ! [W m-2]
+
+        q_lh = latent_heat*vapor_mass_flux(surface_temperature,c,air_temperature, &
+                                           relative_humidity,air_pressure)
 
         return
 
@@ -212,8 +270,9 @@ contains
                                                relative_humidity,air_pressure) result(coef)
         ! Latent heat flux linearized about surface_temperature = T^n:
         !     Q(T) = coef%constant - coef%linear*T
-        ! Chion.jl/src/processes/energy_flux.jl:80-88, which returns
-        ! (constant, linear) in that order.
+        ! Chion.jl/src/processes/energy_flux.jl:109-119, which returns
+        ! (constant, linear) in that order. The latent heat is that of the
+        ! phase at T^n (surface_vapor_latent_heat), held fixed over the step.
         !
         ! At T = T^n this reproduces latent_vapor_flux exactly; away from T^n
         ! it does not, and that is the deliberate inconsistency of trap 2
@@ -229,15 +288,16 @@ contains
         type(latent_vapor_flux_lin_class) :: coef
 
         ! Local variables
-        real(wp) :: exchange, ea, es, des_dT
+        real(wp) :: exchange, ea, es, des_dT, latent_heat
 
-        exchange = latent_exchange_coefficient(c)/safe_positive(air_pressure)
-        ea       = air_vapor_pressure(air_temperature,relative_humidity,c%T0)
-        es       = ice_saturation_vapor_pressure(surface_temperature,c%T0)
-        des_dT   = ice_saturation_vapor_pressure_derivative(surface_temperature,c%T0,es)
+        exchange    = vapor_exchange_coefficient(c)/safe_positive(air_pressure)
+        ea          = air_vapor_pressure(air_temperature,relative_humidity,c%T0)
+        es          = ice_saturation_vapor_pressure(surface_temperature,c%T0)
+        des_dT      = ice_saturation_vapor_pressure_derivative(surface_temperature,c%T0,es)
+        latent_heat = surface_vapor_latent_heat(surface_temperature,c)
 
-        coef%linear   = exchange*des_dT
-        coef%constant = exchange*(ea - es + des_dT*surface_temperature)
+        coef%linear   = latent_heat*exchange*des_dT
+        coef%constant = latent_heat*exchange*(ea - es + des_dT*surface_temperature)
 
         return
 
