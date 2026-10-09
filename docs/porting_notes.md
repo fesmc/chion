@@ -318,7 +318,9 @@ is ice-facing (`snow_to_ice - ice_melt`); refreezing is capacity-limited by the
 snow remaining after melt (`min(f*H_snow, snow_melt)`); refrozen mass becomes
 superimposed ice and leaves the melt-able reservoir; and the reservoir is capped
 at the new `H_snow_max` parameter (default 5000 kg m-2, matching smbpal/ITM),
-with the excess converted to ice. Reported upstream as Chion.jl issue #19.
+with the excess converted to ice. Reported upstream as Chion.jl issue #19;
+**adopted upstream** in Chion.jl `ce6a68d` (same budget, `H_snow_max`,
+`pdd_method`, `erfc`), so PDD is again gated against Chion.jl (WP3).
 
 **Why:** Chion.jl's PDD credits `smb_ice` with `d(snowpack_swe)`, making it a
 whole-column mass change despite its own metadata calling it "Net mass forcing
@@ -331,8 +333,9 @@ capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
 - **The full three-reservoir closure now holds:**
   `snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)`.
   Correction C2 below records that this identity *cannot* hold — that was true
-  of Chion.jl's convention and is no longer true of chion's. It is now the WP16
-  gate for PDD, measured at 2.3e-15 relative in dp and 3.8e-07 in sp.
+  of Chion.jl's old convention and is no longer true of either. WP16 gates it
+  alongside the Chion.jl comparison, measured at 2.3e-15 relative in dp and
+  3.8e-07 in sp.
 - `chion_get_smb`'s PDD special case (D13, `smb_ice - snowpack_swe`) is deleted.
   All three models now share one definition of the ice-facing flux, and the
   sp round-off that case carried is gone with it.
@@ -362,11 +365,8 @@ have ungated 15 of BESSI's 18 fields.
 the correction's effect separately as chion-dp vs chion-dp-legacy. **Not a
 production setting** — it selects physics believed to be wrong.
 
-D23 is deliberately NOT covered by the switch: reproducing Chion.jl's PDD
-convention would mean maintaining a second copy of the PDD core, which is
-upstream defect 13 (three diverged copies) reintroduced on purpose. PDD is
-gated on its own mass closure instead, which is a stronger property than
-agreement with a reference that cannot satisfy it.
+D23 is not covered by the switch, and no longer needs to be: Chion.jl adopted
+the same PDD budget (`ce6a68d`), so the plain dp build is gated against it.
 
 ### D25. Gravity is unified onto standard gravity
 **What:** `DENSIFY_GRAVITY` is `DEF_GRAVITY = 9.80665 m s-2`. Chion.jl carries `9.81` in

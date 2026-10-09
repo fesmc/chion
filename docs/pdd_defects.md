@@ -14,13 +14,17 @@ fixed upstream.
 > becomes superimposed ice and leaves the melt-able reservoir, and the reservoir is capped at
 > `H_snow_max`. See `docs/porting_notes.md` D23 and Chion.jl issue #19.
 >
-> Every defect below still describes **Chion.jl** accurately — that is what the file is for.
-> The per-defect *chion status* is in the summary table and repeated at the head of each
-> resolved section. All twelve remain open upstream.
+> Every defect below describes **Chion.jl as it was at the port base** (`a9ec154`). Chion.jl
+> `ce6a68d` (on `dev_nils`) rewrote its PDD to chion's D23 budget, with `H_snow_max`, an
+> explicit `pdd_method` and `erfc`; the *upstream* column records what that closed, checked
+> against `dev_nils:src/processes/pdd.jl`. Only D9 and D11 remain open upstream. The
+> per-defect *chion status* is in the summary table and repeated at the head of each resolved
+> section.
 >
 > One consequence worth stating up front: the identity D2 shows cannot hold,
 > `d(smb_ice) + d(runoff) + d(snowpack_swe) == snowfall + rainfall`, **now holds exactly in
-> chion** and is the WP16 gate for PDD.
+> chion** and is gated in WP16, together with field-by-field agreement with Chion.jl for both
+> `pdd_method`s.
 
 Sources compared, line numbers as of `Chion.jl@main`:
 
@@ -37,20 +41,21 @@ Summary:
 
 | id | severity | one line | upstream | chion status |
 |---|---|---|---|---|
-| D1 | A | refreezing has no cold-content and no capacity limit | [#12](https://github.com/fesmc/Chion.jl/issues/12) | **fixed** — capacity limited by `H_snow` (D23) |
-| D2 | A | `smb_ice` is credited with the snowpack, so it is not "net mass forcing to the ice sheet" | [#19](https://github.com/fesmc/Chion.jl/issues/19) | **fixed** — `smb_ice` is ice-facing (D23) |
-| D3 | A | `snowpack_swe` is uncapped, un-aged, un-densified and never becomes ice | [#14](https://github.com/fesmc/Chion.jl/issues/14) | **fixed** — capped at `H_snow_max`, excess → ice (D23) |
-| D4 | A | PDD flavour is selected implicitly by timestep length | — | fixed — explicit `pdd_method` (P1) |
-| D5 | B | two entry points apply different physics | [#17](https://github.com/fesmc/Chion.jl/issues/17) | fixed — one kernel (P4) |
-| D6 | A | refrozen mass re-enters the melt-able snow reservoir; the reservoir is never exhausted | [#13](https://github.com/fesmc/Chion.jl/issues/13) | **fixed** — refrozen mass becomes ice (D23) |
-| D7 | B | the six-line core exists in three copies that have already diverged | [#17](https://github.com/fesmc/Chion.jl/issues/17) | fixed — one kernel (P4) |
-| D8 | B | the active-column mask is ignored, and the GPU call sites are `MethodError`s | [#11](https://github.com/fesmc/Chion.jl/issues/11) | fixed — mask honoured (P5) |
-| D9 | C | no `melt` / `refreezing` diagnostics, unlike `BESSIState` | — | partly — optional per-step diagnostics on the kernel (P8) |
-| D10 | C | `273.15` and `86400.0` hard-coded rather than taken from the constants struct | [#17](https://github.com/fesmc/Chion.jl/issues/17) | fixed — from `chion_const_class` (P3) |
-| D11 | C | one global `temperature_sigma`; smbpal uses three, by surface type | [#17](https://github.com/fesmc/Chion.jl/issues/17) | open — still one `sigma` |
-| D12 | C | Abramowitz–Stegun `_normal_cdf` polynomial instead of `erfc` | — | fixed — `erfc` form (P2) |
+| D1 | A | refreezing has no cold-content and no capacity limit | [#12](https://github.com/fesmc/Chion.jl/issues/12); capacity limit **closed** in `ce6a68d` (no cold content, as chion) | **fixed** — capacity limited by `H_snow` (D23) |
+| D2 | A | `smb_ice` is credited with the snowpack, so it is not "net mass forcing to the ice sheet" | [#19](https://github.com/fesmc/Chion.jl/issues/19); **closed** in `ce6a68d` | **fixed** — `smb_ice` is ice-facing (D23) |
+| D3 | A | `snowpack_swe` is uncapped, un-aged, un-densified and never becomes ice | [#14](https://github.com/fesmc/Chion.jl/issues/14); **closed** in `ce6a68d` (`H_snow_max`) | **fixed** — capped at `H_snow_max`, excess → ice (D23) |
+| D4 | A | PDD flavour is selected implicitly by timestep length | **closed** in `ce6a68d` (`pdd_method`, default `:simple`) | fixed — explicit `pdd_method` (P1), default `simple` |
+| D5 | B | two entry points apply different physics | [#17](https://github.com/fesmc/Chion.jl/issues/17); **closed** — both entry points call `_pdd_step_arrays!` | fixed — one kernel (P4) |
+| D6 | A | refrozen mass re-enters the melt-able snow reservoir; the reservoir is never exhausted | [#13](https://github.com/fesmc/Chion.jl/issues/13); **closed** in `ce6a68d` | **fixed** — refrozen mass becomes ice (D23) |
+| D7 | B | the six-line core exists in three copies that have already diverged | [#17](https://github.com/fesmc/Chion.jl/issues/17); **closed** — one `_pdd_apply_column!` | fixed — one kernel (P4) |
+| D8 | B | the active-column mask is ignored, and the GPU call sites are `MethodError`s | [#11](https://github.com/fesmc/Chion.jl/issues/11); **closed** — runtime passes active indices (`6fca5d7`), KernelAbstractions kernel | fixed — mask honoured (P5) |
+| D9 | C | no `melt` / `refreezing` diagnostics, unlike `BESSIState` | open — `PDDState` still has none | partly — optional per-step diagnostics on the kernel (P8) |
+| D10 | C | `273.15` and `86400.0` hard-coded rather than taken from the constants struct | [#17](https://github.com/fesmc/Chion.jl/issues/17); **closed** — `c.T0`, `c.seconds_per_day` | fixed — from `chion_const_class` (P3) |
+| D11 | C | one global `temperature_sigma`; smbpal uses three, by surface type | [#17](https://github.com/fesmc/Chion.jl/issues/17); open | open — still one `sigma` |
+| D12 | C | Abramowitz–Stegun `_normal_cdf` polynomial instead of `erfc` | **closed** in `ce6a68d` | fixed — `erfc` form (P2) |
 
-All twelve remain open **upstream**; the status column is chion's port only.
+Upstream status as of Chion.jl `dev_nils` (`27113b6`; `pdd.jl` unchanged since `12407a3`).
+Since chion and Chion.jl now run the same PDD, validation/ gates them field by field (WP3).
 
 One defect was also found **in smbpal**, running the other way — see S1 at the end.
 

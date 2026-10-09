@@ -1199,9 +1199,9 @@ contains
         ! The &pdd block. One nml_read per parameter, in the declaration order
         ! of pdd_par_class (snow_pdd.f90:56-66).
         !
-        ! pdd_method arrives as a string and replaces Chion.jl's implicit
-        ! "27 <= dt_days <= 32" monthly trigger. See the defaults file for why
-        ! the default is "pism" and not "simple".
+        ! pdd_method arrives as a string and replaces Chion.jl's former
+        ! implicit "27 <= dt_days <= 32" monthly trigger. The default is
+        ! "simple", as in Chion.jl; see the defaults file.
         !
         ! Belongs in snow_pdd.f90; see the note on bessi_par_load.
 

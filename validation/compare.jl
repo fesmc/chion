@@ -256,11 +256,10 @@ End-to-end mass closure for chion's PDD, read straight off the output file.
 
     snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)
 
-This REPLACES the Chion.jl comparison as PDD's gate. chion's PDD deliberately
-implements a different budget from Chion.jl's (docs/porting_notes.md D23,
-Chion.jl issue #19), so agreement with Chion.jl is no longer the property worth
-asserting -- and Chion.jl's own PDD cannot satisfy this identity, because it
-credits `smb_ice` with `d(snowpack_swe)` as well and therefore counts the
+Gated alongside the Chion.jl comparison. It does not depend on the reference,
+so it also holds the sp build to account. The identity is the point of chion's
+budget (docs/porting_notes.md D23, which Chion.jl adopted in ce6a68d): the old
+upstream PDD credited `smb_ice` with `d(snowpack_swe)` as well, counting the
 reservoir twice.
 
 Ice melt cancels between `smb_ice` (negative) and `runoff` (positive), which is

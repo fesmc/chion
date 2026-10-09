@@ -40,6 +40,9 @@ tag is the port itself, summarised rather than enumerated.
 - Build: `libchion.a` is a file target; objects depend on `libfesmutils.a`.
 - Build: `fpsafe=1` (value-safe `-O2`, `libchion/*-fpsafe`) for the acceptance
   tests and validation/; make creates every flavour's build directories.
+- PDD: default `pdd_method = "simple"` (was `"pism"`), matching Chion.jl;
+  set `"pism"` explicitly for monthly steps or smbpal-like melt. validation/
+  gates PDD against Chion.jl for both methods.
 
 ## [v0.1.0] — 2026-07-24
 

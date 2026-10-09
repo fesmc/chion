@@ -238,10 +238,10 @@
 ! &pdd — bulk positive-degree-day model (Chion.jl PDDModel)
 ! ============================================================
 !
-! No layers, no energy balance. Read docs/PLAN.md section 3.2 and
-! docs/pdd_defects.md before changing anything here: Chion.jl's PDD is
-! known not to be fully working, and several of its behaviours are
-! reproduced deliberately rather than fixed.
+! No layers, no energy balance. A capped one-layer snow reservoir with an
+! ice-facing smb_ice (docs/porting_notes.md D23); Chion.jl adopted the
+! same budget (ce6a68d), and validation/ gates the two against each other.
+! docs/pdd_defects.md records the defects this budget fixed.
 
 &pdd
     ddf_snow            = 3.0               ! [kg m-2 K-1 d-1] Degree-day factor for snow
@@ -249,36 +249,30 @@
     refreezing_fraction = 0.6               ! [1] Fraction of SNOW melt that refreezes
     temperature_sigma   = 5.0               ! [K] Std dev of unresolved temperature variability
     H_snow_max          = 5000.0            ! [kg m-2] Snowpack cap; the excess is converted to ice
-    pdd_method          = "pism"            ! PDD integral: "simple" | "pism"
+    pdd_method          = "simple"          ! PDD integral: "simple" | "pism"
 /
 
 ! Notes on &pdd
 !
-! pdd_method — DEFAULT DIVERGES FROM Chion.jl, deliberately.
+! pdd_method — same default as Chion.jl (PDDModel pdd_method=:simple).
 !   "simple"  max(T-T0,0)*dt. Ignores sub-step temperature variability
 !             entirely, so it produces no melt at all below freezing.
+!             Appropriate when dt resolves the temperature cycle (daily).
 !   "pism"    the Calov–Greve expectation integral
 !             dt*(sigma*phi(z) + Tbar*Phi(z)), z = Tbar/sigma.
+!             Use it for monthly steps, or wherever sub-step variability
+!             matters: at daily dt the simple form loses 1.25 kg m-2 d-1
+!             of melt at -5 C and 5.98 at 0 C, concentrated at the
+!             equilibrium line. smbpal always uses the integral, so a host
+!             replacing smbpal sets pdd_method = "pism" explicitly.
 !
-!   Chion.jl selects between these IMPLICITLY on the timestep length
-!   (27 <= dt_days <= 32 picks the integral) — a change of physics
-!   triggered by a timestep, which chion replaces with this explicit
-!   parameter (docs/pdd_defects.md D4).
-!
-!   chion defaults to "pism" rather than reproducing Chion.jl's daily
-!   behaviour, per docs/PLAN.md section 3.1b item 5. The simple form
-!   loses 1.25 kg m-2 d-1 of melt at -5 C and 5.98 kg m-2 d-1 at 0 C,
-!   and that loss is concentrated exactly at the equilibrium line where
-!   the ice-sheet response is most sensitive. smbpal, which is the
-!   scheme actually in production use in yelmox, always uses the
-!   integral. Set pdd_method = "simple" to recover Chion.jl's daily
-!   path for a line-by-line comparison.
+!   The choice is explicit in both models; Chion.jl formerly selected it
+!   implicitly from the timestep length (docs/pdd_defects.md D4).
 !
 ! refreezing_fraction
-!   Applied to snow melt with NO cold-content and NO capacity limit
-!   (upstream defect 5), and the refrozen mass re-enters the meltable
-!   reservoir (defect 6). smbpal instead caps refreezing at
-!   min(melt_snow, acc*f_refrz_max). Reproduced, not fixed.
+!   refrozen = min(refreezing_fraction*H_snow, snow_melt), with H_snow the
+!   snow left after melt; the refrozen mass becomes superimposed ice and
+!   leaves the reservoir (D23). No cold-content limit (pdd_defects.md D1).
 
 
 ! ============================================================

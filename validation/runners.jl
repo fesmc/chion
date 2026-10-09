@@ -57,9 +57,12 @@ make_cmd(target::AbstractString, precision::Symbol; legacy::Bool=false) =
     (legacy ? " legacy_chion=1" : "")
 
 """
-    run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra)
+    run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra,
+              legacy, pdd_method)
 
 Write a namelist and run `chion_grid.x` in `workdir`. Returns the output path.
+The namelist and log are named after `outfile`, so runs sharing a `workdir`
+keep their own.
 
 `chion_grid.x` writes to its current working directory and requires
 `input/chion_defaults.nml` to be reachable from there, so the run directory gets
@@ -69,13 +72,13 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
                    outfile::AbstractString, workdir::AbstractString,
                    model::AbstractString="bessi", dt_out::Float64=1.0,
                    dt::Float64=-1.0, nml_extra::AbstractString="",
-                   legacy::Bool=false)
+                   legacy::Bool=false, pdd_method::AbstractString="simple")
     mkpath(workdir)
     link = joinpath(workdir, "input")
     islink(link) || ispath(link) || symlink(joinpath(CHION_ROOT, "input"), link)
 
-    tag = string(precision, legacy ? "_legacy" : "")
-    nml = joinpath(workdir, "chion_$(model)_$(tag).nml")
+    tag = splitext(basename(outfile))[1]
+    nml = joinpath(workdir, "$(tag).nml")
     open(nml, "w") do io
         print(io, """
 &ctrl
@@ -125,11 +128,12 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
 /
 
 &pdd
-    pdd_method          = "pism"
+    pdd_method          = "$(pdd_method)"
     ddf_snow            = 3.0
     ddf_ice             = 8.0
     refreezing_fraction = 0.6
     temperature_sigma   = 5.0
+    H_snow_max          = 5000.0
 /
 $(nml_extra)
 """)
@@ -137,7 +141,7 @@ $(nml_extra)
 
     exe = joinpath(CHION_ROOT, bindir(precision; legacy=legacy), "chion_grid.x")
     isfile(exe) || error("$exe not built. Run: " * make_cmd("grid", precision; legacy=legacy))
-    logfile = joinpath(workdir, "chion_$(model)_$(tag).log")
+    logfile = joinpath(workdir, "$(tag).log")
     open(logfile, "w") do log
         run(pipeline(Cmd(`$exe $(basename(nml))`; dir=workdir); stdout=log, stderr=log))
     end
@@ -192,9 +196,13 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
     return out
 end
 
-"""Run Chion.jl's PDD. The explicit var list keeps it in per-step output mode."""
+"""
+Run Chion.jl's PDD. The explicit var list keeps it in per-step output mode.
+Every parameter is passed explicitly, matching `run_chion`'s `&pdd` group.
+"""
 function run_julia_pdd(; forcing::AbstractString, outfile::AbstractString,
-                       workdir::AbstractString, years::Int=1)
+                       workdir::AbstractString, years::Int=1,
+                       pdd_method::Symbol=:simple)
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -216,7 +224,8 @@ function run_julia_pdd(; forcing::AbstractString, outfile::AbstractString,
     )
 
     model = PDDModel(loaded.grid; ddf_snow=3.0, ddf_ice=8.0,
-                     refreezing_fraction=0.6, temperature_sigma=5.0)
+                     refreezing_fraction=0.6, temperature_sigma=5.0,
+                     H_snow_max=5000.0, pdd_method=pdd_method)
 
     sim = Simulation(model; forcing=loaded.forcing, years=years,
                      backend=:threads, write_netcdf=true,

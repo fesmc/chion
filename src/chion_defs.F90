@@ -152,12 +152,8 @@ module chion_defs
     !   * DENSIFY_GRAVITY -> 9.81, Chion.jl's second gravity constant
     !     (docs/porting_notes.md D25).
     !
-    ! Deliberately NOT covered: the PDD smb_ice convention (Chion.jl issue #19,
-    ! D23). Chion.jl's PDD is not authoritative (docs/PLAN.md section 3.2), so
-    ! reproducing its convention would mean maintaining a second PDD core --
-    ! which is upstream defect 13 (three diverged copies) reintroduced on
-    ! purpose. PDD is compared to Chion.jl as a REPORTED diagnostic instead,
-    ! and gated on its own mass-closure identity.
+    ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
+    ! the plain build is gated against Chion.jl for PDD.
 #ifdef CHION_LEGACY
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = 8.314_wp_acc
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc

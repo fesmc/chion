@@ -234,42 +234,50 @@ function main()
            "BESSI legacy constants: R, g vs Chion.jl's 8.314, 9.81 (reported)")
 
     # =================================================================
-    # PDD -- Chion.jl for STRUCTURE only. Monthly steps exercise the
-    # PISM/Calov-Greve expectation integral.
+    # PDD -- Chion.jl is authoritative since it adopted chion's budget
+    # (D23; Chion.jl ce6a68d). Both integrals, on monthly steps: `pism` is
+    # the Calov-Greve expectation integral, `simple` the clipped mean.
     # =================================================================
     nmonth = QUICK ? 12 : 60
-    println("\n[2/3] PDD: $nmonth monthly steps (dt = 30 d, PISM branch)")
+    println("\n[2/3] PDD: $nmonth monthly steps (dt = 30 d), pdd_method = simple and pism")
     fpdd = joinpath(WORKDIR, "forcing_pdd.nc")
     write_forcing(fpdd, BESSI_SCENARIOS; nstep=nmonth, dt_days=30.0)
 
-    jl_pdd = run_julia_pdd(; forcing=fpdd, outfile="julia_pdd.nc",
-                           workdir=WORKDIR, years=1)
+    for method in (:simple, :pism)
+        jl_pdd = run_julia_pdd(; forcing=fpdd, outfile="julia_pdd_$(method).nc",
+                               workdir=WORKDIR, years=1, pdd_method=method)
 
-    # PDD is NOT gated against Chion.jl. chion implements a different snowpack
-    # budget on purpose (D23 / Chion.jl issue #19), so agreement with Chion.jl
-    # is no longer the property worth asserting. It is gated on its own
-    # mass-closure identity instead -- which is strictly stronger, and which
-    # Chion.jl's PDD cannot satisfy at all.
-    for prec in (:dp, :sp)
-        ch = run_chion(; precision=prec, forcing=fpdd,
-                       outfile="chion_pdd_$(prec).nc", workdir=WORKDIR,
-                       model="pdd", dt_out=30.0, dt=30.0)
-        report(compare_files(ch, jl_pdd, PDD_VARS; eps_wp=eps_of(prec)),
-               "PDD, chion $prec vs Chion.jl (REPORTED, not gated -- " *
-               "different budget by design)")
+        # PORT FIDELITY (gated) at dp. No legacy build is needed: none of
+        # chion's deliberate corrections touches PDD.
+        for prec in (:dp, :sp)
+            ch = run_chion(; precision=prec, forcing=fpdd,
+                           outfile="chion_pdd_$(method)_$(prec).nc", workdir=WORKDIR,
+                           model="pdd", dt_out=30.0, dt=30.0,
+                           pdd_method=string(method))
+            d = compare_files(ch, jl_pdd, PDD_VARS; eps_wp=eps_of(prec))
+            if prec === :dp
+                report(d, "PDD port fidelity ($method): chion dp vs Chion.jl")
+                nfail += gate(d, "PDD port fidelity ($method)")
+            else
+                report(d, "PDD ($method): chion sp vs Chion.jl (reported)")
+            end
 
-        res, inp = pdd_closure(ch, fpdd)
-        tol = prec === :dp ? 1.0e-9 : 4.0 * eps(Float32)
-        println()
-        println("--- gate: PDD mass closure, precision=$prec ---")
-        @printf("  d(swe)+d(smb_ice)+d(runoff) - (snowfall+rainfall)\n")
-        @printf("    worst column: residual = %.4E on input %.4E  -> rel %.3E\n",
-                res, inp, res / max(inp, 1.0))
-        if res / max(inp, 1.0) <= tol
-            @printf("  ok   : mass closes to %.1E relative\n", tol)
-        else
-            @printf("  FAIL : mass closure exceeds %.1E relative\n", tol)
-            nfail += 1
+            # The full three-reservoir closure, read off chion's output. It
+            # does not depend on the reference, so it stays gated in both
+            # precisions.
+            res, inp = pdd_closure(ch, fpdd)
+            tol = prec === :dp ? 1.0e-9 : 4.0 * eps(Float32)
+            println()
+            println("--- gate: PDD mass closure ($method), precision=$prec ---")
+            @printf("  d(swe)+d(smb_ice)+d(runoff) - (snowfall+rainfall)\n")
+            @printf("    worst column: residual = %.4E on input %.4E  -> rel %.3E\n",
+                    res, inp, res / max(inp, 1.0))
+            if res / max(inp, 1.0) <= tol
+                @printf("  ok   : mass closes to %.1E relative\n", tol)
+            else
+                @printf("  FAIL : mass closure exceeds %.1E relative\n", tol)
+                nfail += 1
+            end
         end
     end
 

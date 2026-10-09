@@ -36,7 +36,7 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 | target | reference | authority |
 |---|---|---|
 | BESSI | Chion.jl | authoritative — tight tolerances |
-| PDD | its own mass closure | chion's PDD deliberately implements a different budget from Chion.jl's (D23); the Chion.jl comparison is reported, not gated |
+| PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
 | ITM | smbpal | no Chion.jl ITM exists; runs `test_itm.x`, not a reimplementation |
 
 One forcing file drives both models per target, so a difference is attributable
@@ -66,15 +66,14 @@ becomes a gate failure, and the only way to stay green is to stop testing those
 fields — the harness would weaken exactly as the port improved. The gas-constant
 fix alone (D22) would have ungated 15 of BESSI's 18 fields.
 
-PDD is not covered by the switch, on purpose: reproducing Chion.jl's budget
-would mean a second copy of the PDD core, which is upstream defect 13 (three
-diverged copies) reintroduced deliberately. PDD is gated on the full closure
+PDD needs no switch: Chion.jl `ce6a68d` adopted chion's budget (D23), so the
+plain dp build is gated against Chion.jl, once per `pdd_method` (`simple`,
+`pism`), with every `&pdd` parameter, including `H_snow_max`, set explicitly on
+both sides. chion's output is also gated on the full closure
 
     snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)
 
-which is a stronger property than agreeing with a reference that cannot satisfy
-it at all — Chion.jl credits `smb_ice` with `d(snowpack_swe)` as well, so it
-counts the reservoir twice. Measured: 2.3e-15 relative at dp, 3.8e-07 at sp.
+at dp and sp, since it does not depend on the reference.
 
 ## Why chion is built at more than one precision
 
@@ -145,7 +144,7 @@ column actually reached and asserts it:
 | `melting` | energy solve, melt, percolation, refreezing | 9 layers, melt 547, refreeze 232, runoff 678 |
 | `bare_recover` | ablation to bare ice, early-return bare path, recovery | N→0 then back to 2, melt 10139 |
 | `ntot_capacity` | `Ntot` capacity, bottom merge, depth cap | N=15, base export 8350 kg m⁻² |
-| PDD monthly | PISM/Calov–Greve expectation integral | 60 steps at dt=30 d |
+| PDD monthly | `simple` and `pism` (Calov–Greve) integrals | 60 steps at dt=30 d each |
 
 This caught two real weaknesses: three of the four columns originally never
 split a layer, and `mass_base` was identically zero on both sides — so its
