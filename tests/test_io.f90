@@ -9,12 +9,15 @@ program test_io
     !       are BIT-IDENTICAL, field by field. The fields are enumerated
     !       explicitly rather than sampled: a restart that misses one field is
     !       a silently wrong answer, and the only way to catch a missing field
-    !       is to name every field.
+    !       is to name every field. BESSI also with its ice substrate
+    !       (ice_temperature); a restart written without one loads into a run
+    !       with one, the substrate starting at min(t_srf, T0) (D34).
     !
-    !   (b) A restart is REFUSED when the model or Ntot do not match. Both are
-    !       fatal by design, so they are exercised by re-running this
-    !       executable as a child process and checking what it printed --
-    !       there is no way to catch a `stop` in-process.
+    !   (b) A restart is REFUSED when the model, Ntot or the number of ice
+    !       substrate layers do not match. All are fatal by design, so they
+    !       are exercised by re-running this executable as a child process
+    !       and checking what it printed -- there is no way to catch a `stop`
+    !       in-process.
     !
     !   (c) chion_get_smb IMMEDIATELY AFTER A RESTART equals what it would have
     !       been without restarting. This is exactly what smb_cum_prev and
@@ -74,6 +77,9 @@ program test_io
         case("mismatch-ntot")
             call run_mismatch("ntot")
 
+        case("mismatch-ice")
+            call run_mismatch("ice")
+
         case DEFAULT
 
             nfail = 0
@@ -85,8 +91,11 @@ program test_io
             call test_restart_roundtrip("bessi",nfail)
             call test_restart_roundtrip("bessi",nfail,albedo_scheme="aging", &
                                         n_restart=NSTEP_1_AGING)
+            call test_restart_roundtrip("bessi",nfail,n_ice=5)
             call test_restart_roundtrip("pdd",  nfail)
             call test_restart_roundtrip("itm",  nfail)
+
+            call test_restart_ice_from_old(nfail)
 
             call test_restart_refused(nfail)
 
@@ -116,7 +125,7 @@ contains
     ! (a) Restart round-trip
     ! =====================================================================
 
-    subroutine test_restart_roundtrip(model,nfail,albedo_scheme,n_restart)
+    subroutine test_restart_roundtrip(model,nfail,albedo_scheme,n_restart,n_ice)
 
         implicit none
 
@@ -124,6 +133,7 @@ contains
         integer,          intent(INOUT) :: nfail
         character(len=*), optional, intent(IN) :: albedo_scheme
         integer,          optional, intent(IN) :: n_restart ! steps before the restart; default NSTEP_1
+        integer,          optional, intent(IN) :: n_ice     ! BESSI ice substrate layers; default 0
 
         ! Local variables
         type(chion_class) :: chn1, chn2
@@ -139,6 +149,10 @@ contains
             write(*,"(a)") "--- (a) restart round-trip, model = "//trim(model)// &
                            ", albedo_scheme = "//trim(albedo_scheme)//" ---"
             call write_par(par_a,model,albedo_scheme=albedo_scheme)
+        else if (present(n_ice)) then
+            write(*,"(a)") "--- (a) restart round-trip, model = "//trim(model)// &
+                           ", ice_substrate_layers = "//trim(itoa(n_ice))//" ---"
+            call write_par(par_a,model,n_ice=n_ice)
         else
             write(*,"(a)") "--- (a) restart round-trip, model = "//trim(model)//" ---"
             call write_par(par_a,model)
@@ -156,6 +170,17 @@ contains
         ! Deactivate one column before writing, so that the active mask and a
         ! reset column are part of what the restart has to reproduce.
         call set_active_one_off(chn1)
+
+        ! The substrate must have left its initial state, and the reset
+        ! column's substrate must be back at it (D34).
+        if (present(n_ice)) then
+            call check("substrate: ice_temperature evolved before the restart", &
+                       any(chn1%bsi%now%ice_temperature(:,1:NCOL_TEST-1) &
+                           .ne. chn1%bsi%par%temperature_init),nfail)
+            call check("substrate: reset column back to temperature_init", &
+                       all(chn1%bsi%now%ice_temperature(:,NCOL_TEST) &
+                           .eq. chn1%bsi%par%temperature_init),nfail)
+        end if
 
         call chion_get_smb(chn1,smb1)
 
@@ -233,6 +258,7 @@ contains
                 call check_eq_r2 ("mass_w",              b%bsi%now%mass_w,              a%bsi%now%mass_w,              nfail)
                 call check_eq_r2 ("density",             b%bsi%now%density,             a%bsi%now%density,             nfail)
                 call check_eq_r2 ("temperature",         b%bsi%now%temperature,         a%bsi%now%temperature,         nfail)
+                call check_eq_r2 ("ice_temperature",     b%bsi%now%ice_temperature,     a%bsi%now%ice_temperature,     nfail)
                 call check_eq_acc("mass_base",           b%bsi%now%mass_base,           a%bsi%now%mass_base,           nfail)
                 call check_eq_acc("smb_ice",             b%bsi%now%smb_ice,             a%bsi%now%smb_ice,             nfail)
                 call check_eq_acc("runoff",              b%bsi%now%runoff,              a%bsi%now%runoff,              nfail)
@@ -280,6 +306,66 @@ contains
     end subroutine compare_state
 
     ! =====================================================================
+    ! (a') A restart without the ice substrate, read into a run with one
+    ! =====================================================================
+
+    subroutine test_restart_ice_from_old(nfail)
+        ! Review Q8 / D34: a restart written without ice_temperature (no
+        ! substrate, or before the substrate existed) loads into a run with
+        ! one, every substrate layer starting at min(t_srf, T0). Everything
+        ! else is read as usual.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_class) :: chn1, chn2
+        real(wp) :: time_rst
+        integer  :: k, i
+        logical  :: ok
+
+        write(*,*)
+        write(*,"(a)") "--- (a') restart without ice substrate into ice_substrate_layers = 5 ---"
+
+        call write_par(par_a,"bessi")
+        call chion_init(chn1,par_a,NCOL_TEST)
+        call chion_init_state(chn1)
+        do k = 1, NSTEP_1
+            call set_forcing(chn1,k)
+            call chion_update(chn1,DT_TEST)
+        end do
+        call chion_restart_write(chn1,file_rst,real(NSTEP_1,wp)*DT_TEST)
+
+        call write_par(par_b,"bessi",n_ice=5)
+        call chion_init(chn2,par_b,NCOL_TEST)
+        call chion_init_state(chn2)
+        call chion_restart_read(chn2,file_rst,time_rst)
+
+        call check("t_srf below T0 somewhere (the cap is exercised)", &
+                   any(chn1%bsi%now%t_srf .lt. chn1%c%T0),nfail)
+
+        ok = .TRUE.
+        do i = 1, NCOL_TEST
+            if (any(chn2%bsi%now%ice_temperature(:,i) .ne. &
+                    min(chn2%bsi%now%t_srf(i),chn2%c%T0))) ok = .FALSE.
+        end do
+        call check("ice_temperature initialised to min(t_srf, T0) per column",ok,nfail)
+        call check_eq_r2("temperature read as usual",chn2%bsi%now%temperature, &
+                         chn1%bsi%now%temperature,nfail)
+
+        ! It then steps on like any substrate run.
+        call set_forcing(chn2,NSTEP_1+1)
+        call chion_update(chn2,DT_TEST)
+
+        call chion_end(chn1)
+        call chion_end(chn2)
+
+        return
+
+    end subroutine test_restart_ice_from_old
+
+    ! =====================================================================
     ! (b) Mismatched restarts are refused
     ! =====================================================================
 
@@ -298,15 +384,17 @@ contains
 
         call check_child("mismatch-model","restart file model does not match",nfail)
         call check_child("mismatch-ntot", "restart file Ntot does not match", nfail)
+        call check_child("mismatch-ice",  "restart file ice substrate layers do not match", nfail)
 
         return
 
     end subroutine test_restart_refused
 
     subroutine run_mismatch(kind)
-        ! Child mode. Writes a BESSI/Ntot=15 restart, then tries to load it
-        ! into a deliberately mismatched configuration. chion_restart_read is
-        ! expected to abort; reaching the end of this routine is the failure.
+        ! Child mode. Writes a BESSI/Ntot=15 restart (with 5 ice substrate
+        ! layers for "ice"), then tries to load it into a deliberately
+        ! mismatched configuration. chion_restart_read is expected to abort;
+        ! reaching the end of this routine is the failure.
 
         implicit none
 
@@ -317,7 +405,11 @@ contains
         real(wp) :: time_rst
         integer  :: k
 
-        call write_par(par_a,"bessi")
+        if (trim(kind) .eq. "ice") then
+            call write_par(par_a,"bessi",n_ice=5)
+        else
+            call write_par(par_a,"bessi")
+        end if
 
         call chion_init(chn,par_a,NCOL_TEST)
         call chion_init_state(chn)
@@ -333,6 +425,8 @@ contains
                 call write_par(par_b,"pdd")
             case("ntot")
                 call write_par(par_b,"bessi",Ntot=10)
+            case("ice")
+                call write_par(par_b,"bessi",n_ice=3)
         end select
 
         call chion_init(chn,par_b,NCOL_TEST)
@@ -699,7 +793,7 @@ contains
     ! Fixtures
     ! =====================================================================
 
-    subroutine write_par(filename,model,Ntot,albedo_scheme)
+    subroutine write_par(filename,model,Ntot,albedo_scheme,n_ice)
         ! A minimal, SPARSE parameter file. Everything not named here comes
         ! from input/chion_defaults.nml, which is exactly the property WP13
         ! built (chion_api.f90 header), so the test does not have to restate
@@ -711,6 +805,7 @@ contains
         character(len=*),  intent(IN) :: model
         integer, optional, intent(IN) :: Ntot
         character(len=*), optional, intent(IN) :: albedo_scheme
+        integer, optional, intent(IN) :: n_ice
 
         ! Local variables
         integer :: io
@@ -724,9 +819,10 @@ contains
         write(io,"(a)") "    restart          = ""None"""
         write(io,"(a)") "/"
 
-        if (present(Ntot)) then
+        if (present(Ntot) .or. present(n_ice)) then
             write(io,"(a)")       "&bessi"
-            write(io,"(a,i0)")    "    Ntot         = ", Ntot
+            if (present(Ntot))  write(io,"(a,i0)") "    Ntot         = ", Ntot
+            if (present(n_ice)) write(io,"(a,i0)") "    ice_substrate_layers = ", n_ice
             write(io,"(a)")       "/"
         end if
 

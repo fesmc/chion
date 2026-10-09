@@ -43,7 +43,7 @@
     trans_a             = 0.768            ! [1]   JJA fit intercept
     trans_b             = 6.99e-5          ! [m-1] JJA fit elevation term
     trans_c             = -0.376           ! [1]   JJA fit cloud term
-    H_ice_default       = 1000.0           ! [m]  ice thickness on every column (ITM)
+    H_ice_default       = 1000.0           ! [m]  ice thickness on every column (ITM; BESSI ice substrate)
 /
 
 ! ============================================================

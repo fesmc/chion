@@ -26,6 +26,13 @@ tag is the port itself, summarised rather than enumerated.
   [K km-1], `_reference_height` [m], `_max` [K]; neutral defaults (bit-identical).
   `surface_height` is now packed into the step forcing; a missing (NaN) height
   adds no excess.
+- BESSI thermal ice substrate (Chion.jl `03bb445`): `&bessi ice_substrate_layers`
+  (0 = none, the default here; upstream 5) and `ice_substrate_top_thickness`
+  (0.05 m, doubling downward), insulated base, one implicit solve with the snow;
+  bare ice carries cold content and must warm to T0 before melting. Only where
+  `H_ice > 0` (now packed into the step forcing for BESSI); reset with the
+  column; restart field `ice_temperature`, older restarts start at
+  `min(t_srf, T0)` (D34). Default runs bit-identical.
 
 ### Fixed
 

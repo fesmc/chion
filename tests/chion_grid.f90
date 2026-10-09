@@ -77,7 +77,7 @@ program chion_grid
     !       trans_a        = 0.46          ! tau = trans_a + trans_b*z_srf (+ trans_c*tcc)
     !       trans_b        = 6.0e-5        ! [m-1]
     !       trans_c        = 0.0           ! [1] cloud term, used by transmissivity_seasonal
-    !       H_ice_default  = 1000.0        ! [m] ice thickness set on every column (ITM)
+    !       H_ice_default  = 1000.0        ! [m] ice thickness set on every column (ITM; BESSI ice substrate)
     !   /
 
     use chion
@@ -334,7 +334,8 @@ program chion_grid
         chn%forc%latitude_deg(i)   = lat2D(col_is(i),col_js(i))
         chn%forc%surface_height(i) = zs2D(col_is(i),col_js(i))
     end do
-    ! ITM ice thickness and annual PDDs: from the file here; the domain
+    ! Ice thickness (ITM; BESSI's ice substrate) and annual PDDs (ITM):
+    ! from the file here (name_hice = "None" gives 0, land); the domain
     ! source sets them below (H_ice_default, PDDs from the climatology).
     if (.not. is_domain) then
         do i = 1, ncol
@@ -408,7 +409,7 @@ program chion_grid
         export_year = 0.0_wp
         mass_prev   = chion_column_mass(chn)     ! cold start: 0
 
-        ! ITM ice thickness (BESSI and PDD ignore it). Annual PDDs is set once,
+        ! Ice thickness (ITM; BESSI's ice substrate; PDD ignores it). Annual PDDs is set once,
         ! from the repeating climatology, below.
         chn%forc%H_ice = H_ice_default
         call domain_set_annual_pdds(chn, md, t2m_c, chn%c%T0, dt_use)

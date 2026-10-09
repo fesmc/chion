@@ -25,6 +25,11 @@ program test_energy
     !      step; two layers of contrasting conductivity carry the analytic
     !      series-resistance steady flux.
     !  10. Calonne et al. (2019) conductivity against hand-computed values.
+    !  12. Thermal ice substrate (Chion.jl 03bb445): a zero-size substrate is
+    !      bit-identical to none; an isothermal column over the substrate is
+    !      preserved; snow + substrate conserve energy with the insulated base
+    !      at the bottom of the substrate; the steady flux profile runs through
+    !      the substrate; bare ice cools below T0 under a negative balance.
 
     use chion_defs,   only : wp, wp_acc, chion_const_class, chion_step_forcing_class, &
                              chion_const_init, CHION_SEB_BESSI, CHION_SEB_SEMIX
@@ -58,6 +63,7 @@ program test_energy
     call test_interface_conductance(nfail)
     call test_conductivity_calonne(nfail)
     call test_two_layer_diffusion(nfail)
+    call test_ice_substrate(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -1075,6 +1081,208 @@ contains
         return
 
     end subroutine test_two_layer_diffusion
+
+    ! =====================================================================
+    ! 12. Thermal ice substrate
+    ! =====================================================================
+
+    subroutine test_ice_substrate(nfail)
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        integer,  parameter :: n = 3, n_ice = 5
+        real(wp), parameter :: h0 = 0.05_wp
+
+        type(chion_const_class)        :: c
+        type(chion_step_forcing_class) :: forc
+        type(snow_energy_result_class) :: res, res_ref
+
+        real(wp)     :: mass(Ntot), density(Ntot), temperature(Ntot), t_ref(Ntot), t_old(Ntot)
+        real(wp)     :: ice_t(n_ice), ice_old(n_ice), no_ice(0)
+        real(wp)     :: row_m(n+n_ice), row_rho(n+n_ice), row_t(n+n_ice)
+        real(wp)     :: t_srf, t_srf_ref, dt, F, G_face, drop, drop_expect, worst
+        real(wp_acc) :: de, de_ice, m_tot, m_above
+        integer      :: k, step
+
+        write(*,*)
+        write(*,"(a)") "--- Thermal ice substrate ---"
+
+        call chion_const_init(c)
+
+        ! --- (a) zero-size substrate == no substrate, bit for bit ---------
+        call quiet_forcing(forc)
+        forc%has_q_lw_down = .FALSE.
+        forc%has_q_sw_net  = .FALSE.
+        forc%has_q_sh      = .FALSE.
+        forc%air_temperature = 263.15_wp
+        forc%shortwave_down  = 150.0_wp
+
+        call snow_column(mass,density,temperature)
+        t_ref     = temperature
+        t_srf     = 257.0_wp
+        t_srf_ref = t_srf
+        dt        = 3600.0_wp
+
+        call snow_energy_flux(mass,density,t_ref,t_srf_ref,n,c,forc,0.75_wp, &
+                              0.0_wp,0.0_wp,dt,res_ref)
+        call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,0.75_wp, &
+                              0.0_wp,0.0_wp,dt,res,no_ice,h0)
+
+        call check("zero-size substrate: temperatures bit-identical to none", &
+                   all(temperature(1:n) .eq. t_ref(1:n)), nfail)
+        call check("zero-size substrate: Ts and heating bit-identical to none", &
+                   t_srf .eq. t_srf_ref .and. res%heating .eq. res_ref%heating, nfail)
+
+        ! --- (b) isothermal column over the substrate is preserved --------
+        ! No surface flux at all (quiet forcing, longwave off): an isothermal
+        ! snow + ice column is a steady state of the insulated system.
+        call quiet_forcing(forc)
+        c%eps_air  = 0.0_wp
+        c%eps_snow = 0.0_wp
+
+        call snow_column(mass,density,temperature)
+        temperature(1:n) = 255.0_wp
+        ice_t = 255.0_wp
+        t_srf = 255.0_wp
+
+        do step = 1, 30
+            call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,0.0_wp, &
+                                  0.0_wp,0.0_wp,86400.0_wp,res,ice_t,h0)
+        end do
+
+        call check("isothermal snow + substrate preserved (1e-4 K)", &
+                   maxval(abs(temperature(1:n) - 255.0_wp)) .lt. 1.0e-4_wp .and. &
+                   maxval(abs(ice_t - 255.0_wp)) .lt. 1.0e-4_wp, nfail)
+
+        ! --- (c) energy conservation, insulated base below the substrate --
+        ! A constant surface flux F into a cold, non-uniform column over a
+        ! day: every joule stays in the snow + substrate, sum m ci dT == F dt.
+        ! F is small because the top snow cell is a poor conductor (Ts - T1 =
+        ! F/Gs, Gs ~ 1 W m-2 K-1), and the run must not melt. The tolerance
+        ! is set by sp storage of ~250 K in 1.4 t m-2 of ice (ulp*m*ci ~ 25 J
+        ! per substrate layer against F dt = 432 kJ).
+        F = 5.0_wp
+        forc%q_sh = F
+
+        call snow_column(mass,density,temperature)
+        do k = 1, n_ice
+            ice_t(k) = 250.0_wp - 2.0_wp*real(k,wp)
+        end do
+        t_old   = temperature
+        ice_old = ice_t
+        t_srf   = temperature(1)
+        dt      = 86400.0_wp
+
+        call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,0.0_wp, &
+                              0.0_wp,0.0_wp,dt,res,ice_t,h0)
+
+        de_ice = 0.0_wp_acc
+        do k = 1, n_ice
+            de_ice = de_ice + real(c%rho_i*h0*2.0_wp**(k-1),wp_acc)*real(c%ci,wp_acc) &
+                              *(real(ice_t(k),wp_acc) - real(ice_old(k),wp_acc))
+        end do
+        de = de_ice
+        do k = 1, n
+            de = de + real(mass(k),wp_acc)*real(c%ci,wp_acc) &
+                      *(real(temperature(k),wp_acc) - real(t_old(k),wp_acc))
+        end do
+
+        call check("substrate: no melt", .not. res%needs_melt, nfail)
+        call check("substrate gained energy (the snow base conducts into it)", &
+                   de_ice .gt. 0.0_wp_acc, nfail)
+        call check_rel("snow + substrate: sum m ci dT == F dt (insulated base)", &
+                       de, real(F,wp_acc)*real(dt,wp_acc), 5.0e-4_wp_acc, nfail)
+
+        ! --- (d) steady flux profile through the substrate ----------------
+        ! As test 3: under a constant F the column warms uniformly and the
+        ! flux crossing row interface k carries the heating of all rows
+        ! below it, q_k = F*(1 - M_k/M_tot), down to zero at the insulated
+        ! base of the substrate.
+        F = 0.3_wp
+        forc%q_sh = F
+
+        call snow_column(mass,density,temperature)
+        temperature(1:n) = 230.0_wp
+        ice_t = 230.0_wp
+        t_srf = 230.0_wp
+
+        do step = 1, 2000
+            call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,0.0_wp, &
+                                  0.0_wp,0.0_wp,86400.0_wp,res,ice_t,h0)
+        end do
+
+        do k = 1, n
+            row_m(k) = mass(k) ; row_rho(k) = density(k) ; row_t(k) = temperature(k)
+        end do
+        do k = 1, n_ice
+            row_m(n+k) = c%rho_i*h0*2.0_wp**(k-1) ; row_rho(n+k) = c%rho_i ; row_t(n+k) = ice_t(k)
+        end do
+
+        m_tot = 0.0_wp_acc
+        do k = 1, n+n_ice
+            m_tot = m_tot + real(row_m(k),wp_acc)
+        end do
+
+        worst   = 0.0_wp
+        m_above = 0.0_wp_acc
+        do k = 1, n+n_ice-1
+            m_above     = m_above + real(row_m(k),wp_acc)
+            G_face      = interface_conductance(conductivity(row_rho(k),row_t(k),c), &
+                                                row_m(k)/row_rho(k), &
+                                                conductivity(row_rho(k+1),row_t(k+1),c), &
+                                                row_m(k+1)/row_rho(k+1))
+            drop        = row_t(k) - row_t(k+1)
+            drop_expect = F*real(1.0_wp_acc - m_above/m_tot,wp)/G_face
+            worst       = max(worst,abs(drop - drop_expect)/abs(drop_expect))
+        end do
+
+        call check("steady drops through snow and substrate match the flux profile (1e-2 rel)", &
+                   worst .lt. 1.0e-2_wp, nfail)
+        write(*,"(a,g14.6)") "         worst relative deviation = ", worst
+
+        ! --- (e) bare ice cools below T0 under a negative balance ---------
+        ! Chion.jl test_case_api "Public energy solve couples the ice
+        ! substrate on bare ice": no snow, ice at T0, only longwave emission.
+        call chion_const_init(c)
+        call quiet_forcing(forc)
+        forc%air_temperature = 250.0_wp
+
+        ice_t = c%T0
+        t_srf = c%T0
+
+        call snow_energy_flux(mass,density,temperature,t_srf,0,c,forc,0.0_wp, &
+                              0.0_wp,0.0_wp,86400.0_wp,res,ice_t,h0)
+
+        call check("bare substrate: no melt under emission only", .not. res%needs_melt, nfail)
+        call check("bare substrate: Ts < T0", t_srf .lt. c%T0, nfail)
+        call check("bare substrate: top ice layer cooled below T0", ice_t(1) .lt. c%T0, nfail)
+
+        return
+
+    end subroutine test_ice_substrate
+
+    subroutine snow_column(mass,density,temperature)
+        ! Three snow layers of contrasting mass and density, cold and
+        ! stratified, for the substrate tests.
+
+        implicit none
+
+        real(wp), intent(OUT) :: mass(:), density(:), temperature(:)
+
+        mass        = 0.0_wp
+        density     = 0.0_wp
+        temperature = 0.0_wp
+
+        mass(1:3)        = [60.0_wp, 150.0_wp, 300.0_wp]
+        density(1:3)     = [300.0_wp, 420.0_wp, 600.0_wp]
+        temperature(1:3) = [256.0_wp, 254.0_wp, 252.0_wp]
+
+        return
+
+    end subroutine snow_column
 
     ! =====================================================================
     ! Helpers

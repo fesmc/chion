@@ -7,6 +7,7 @@ module snow_bessi
     !   src/runtime.jl:98-175    column reset      -> bessi_reset_columns
     !   src/step.jl:159-407      column_step_core! -> bessi_column_step_core
     !   src/step.jl:75-157       column_step!      -> bessi_column_step
+    !   src/step.jl _step_bare_ice_substrate! (9ec6cc7) -> bessi_bare_ice_substrate_step
     !   src/domain.jl:59-64      _validate_mass_partition -> bessi_par_validate
     !
     ! This module contains NO physics of its own. Every physical operation is
@@ -22,7 +23,9 @@ module snow_bessi
     !   3  fresh snow onto a column that started bare -> temperature(1) = T_air
     !   4  prescribed albedo, if any, applied BEFORE the bare-surface test
     !   5  no surface snow -> bare-ice ablation, accumulate diagnostics, RETURN
-    !      (percolation and refreezing are skipped ENTIRELY -- trap, see below)
+    !      (percolation and refreezing are skipped ENTIRELY -- trap, see below);
+    !      with an ice substrate, the substrate energy solve instead of the
+    !      surface held at T0 (bessi_bare_ice_substrate_step)
     !   6  albedo update (prescribed | semix | aging | dynamic-or-constant)
     !   7  HTESSEL only: snapshot mass_w(1:n) BEFORE the energy solve
     !   8  accumulation_rate -> densification
@@ -64,6 +67,7 @@ module snow_bessi
                            TOL_TINY, TOL_EMPTY_LAYER, &
                            DEF_NTOT, DEF_MASS_MAX, DEF_MASS_SPLIT, DEF_MASS_MIN, &
                            DEF_DENSITY_INIT, DEF_TEMPERATURE_INIT, &
+                           DEF_ICE_SUBSTRATE_LAYERS, DEF_ICE_SUBSTRATE_TOP_THICKNESS, &
                            CHION_ALBEDO_PRESCRIBED, CHION_ALBEDO_SEMIX, &
                            CHION_ALBEDO_AGING, &
                            CHION_DENSIFY_HTESSEL, &
@@ -79,6 +83,7 @@ module snow_bessi
     use snow_densify,       only : densify_column, apply_htessel_liquid_water_compaction
     use snow_energy,        only : snow_energy_flux, snow_energy_result_class
     use snow_surface_fluxes,only : bare_ice_ablation_class, bare_ice_ablation_mass, &
+                                   resolved_turbulent_latent_heat_flux, &
                                    latent_heat_coeff_class, &
                                    diagnose_latent_heat_flux_coefficients, &
                                    surface_vapor_flux_class, &
@@ -113,6 +118,12 @@ module snow_bessi
         real(wp) :: density_init          ! [kg m-3] density of an inactive layer
         real(wp) :: temperature_init      ! [K] temperature of an inactive layer
 
+        ! Thermal ice substrate (Chion.jl 03bb445): layers below the snow/firn
+        ! column, top thickness doubling downward; 0 = none (bare ice held at
+        ! T0). Only under ice: a column with H_ice = 0 has none (D34).
+        integer  :: ice_substrate_layers          ! [1] n_ice >= 0
+        real(wp) :: ice_substrate_top_thickness   ! [m] top layer, > 0
+
         logical  :: diurnal_shortwave_substeps            ! [1] enable substepping
         real(wp) :: diurnal_shortwave_threshold           ! [W m-2] peak-minus-mean excess
         integer  :: diurnal_shortwave_max_substeps        ! [1] 1..24
@@ -136,6 +147,11 @@ module snow_bessi
         real(wp), allocatable :: mass_w(:,:)       ! (Ntot,ncol) [kg m-2] liquid
         real(wp), allocatable :: density(:,:)      ! (Ntot,ncol) [kg m-3]
         real(wp), allocatable :: temperature(:,:)  ! (Ntot,ncol) [K]
+
+        ! Thermal ice substrate, top layer first. Extent 0 without one. A land
+        ! column (H_ice = 0) never touches its slice.
+        integer               :: n_ice
+        real(wp), allocatable :: ice_temperature(:,:)  ! (n_ice,ncol) [K]
 
         ! Cumulative accumulators -- MUST be wp_acc. docs/PLAN.md section 3.1.
         real(wp_acc), allocatable :: mass_base(:)             ! [kg m-2]
@@ -217,6 +233,9 @@ contains
         par%density_init     = DEF_DENSITY_INIT
         par%temperature_init = DEF_TEMPERATURE_INIT
 
+        par%ice_substrate_layers        = DEF_ICE_SUBSTRATE_LAYERS
+        par%ice_substrate_top_thickness = DEF_ICE_SUBSTRATE_TOP_THICKNESS
+
         par%diurnal_shortwave_substeps            = .FALSE.
         par%diurnal_shortwave_threshold           = 0.0_wp
         par%diurnal_shortwave_max_substeps        = 3
@@ -235,7 +254,8 @@ contains
 
     subroutine bessi_par_validate(par)
         ! Chion.jl _validate_mass_partition (src/domain.jl:59-64) plus the six
-        ! diurnal guards in the BESSIModel constructor (src/models.jl:48-51, 97-101 at 27113b6).
+        ! diurnal guards in the BESSIModel constructor (src/models.jl:48-51, 97-101 at 27113b6)
+        ! and the two ice-substrate guards (src/models.jl:114-115 at 9ec6cc7).
         !
         ! The mass partition is not merely cosmetic:
         !   mass_split < mass_max   -- otherwise the split loop cannot converge
@@ -279,6 +299,20 @@ contains
             write(io_unit_err,*) "bessi_par_validate:: Error: mass_split/mass_max must be at least 0.5."
             write(io_unit_err,*) "mass_split, mass_max, ratio = ", &
                                  par%mass_split, par%mass_max, par%mass_split/par%mass_max
+            stop "Program stopped."
+        end if
+
+        if (par%ice_substrate_layers .lt. 0) then
+            write(io_unit_err,*) "bessi_par_validate:: Error: &
+                                 &ice_substrate_layers must be non-negative."
+            write(io_unit_err,*) "ice_substrate_layers = ", par%ice_substrate_layers
+            stop "Program stopped."
+        end if
+
+        if (.not. (par%ice_substrate_top_thickness .gt. 0.0_wp)) then
+            write(io_unit_err,*) "bessi_par_validate:: Error: &
+                                 &ice_substrate_top_thickness must be positive."
+            write(io_unit_err,*) "ice_substrate_top_thickness = ", par%ice_substrate_top_thickness
             stop "Program stopped."
         end if
 
@@ -352,14 +386,16 @@ contains
             stop "Program stopped."
         end if
 
-        bsi%now%ncol = ncol
-        bsi%now%Ntot = bsi%par%Ntot
+        bsi%now%ncol  = ncol
+        bsi%now%Ntot  = bsi%par%Ntot
+        bsi%now%n_ice = bsi%par%ice_substrate_layers
 
         allocate(bsi%now%n_lay(ncol))
         allocate(bsi%now%mass(bsi%par%Ntot,ncol))
         allocate(bsi%now%mass_w(bsi%par%Ntot,ncol))
         allocate(bsi%now%density(bsi%par%Ntot,ncol))
         allocate(bsi%now%temperature(bsi%par%Ntot,ncol))
+        allocate(bsi%now%ice_temperature(bsi%now%n_ice,ncol))
 
         allocate(bsi%now%mass_base(ncol))
         allocate(bsi%now%smb_ice(ncol))
@@ -396,6 +432,7 @@ contains
         if (allocated(bsi%now%mass_w))      deallocate(bsi%now%mass_w)
         if (allocated(bsi%now%density))     deallocate(bsi%now%density)
         if (allocated(bsi%now%temperature)) deallocate(bsi%now%temperature)
+        if (allocated(bsi%now%ice_temperature)) deallocate(bsi%now%ice_temperature)
 
         if (allocated(bsi%now%mass_base))            deallocate(bsi%now%mass_base)
         if (allocated(bsi%now%smb_ice))              deallocate(bsi%now%smb_ice)
@@ -417,8 +454,9 @@ contains
         if (allocated(bsi%now%bulk_density)) deallocate(bsi%now%bulk_density)
         if (allocated(bsi%now%liquid_water)) deallocate(bsi%now%liquid_water)
 
-        bsi%now%ncol = 0
-        bsi%now%Ntot = 0
+        bsi%now%ncol  = 0
+        bsi%now%Ntot  = 0
+        bsi%now%n_ice = 0
 
         return
 
@@ -438,7 +476,8 @@ contains
         ! there.
         !
         ! t_srf starts at T0 and the albedo at alpha_dry -- note NOT alpha_ice,
-        ! even though the column is bare. The first step overwrites both.
+        ! even though the column is bare. The first step overwrites both. The
+        ! ice substrate starts at temperature_init (Chion.jl state.jl).
 
         implicit none
 
@@ -450,6 +489,8 @@ contains
         bsi%now%mass_w      = 0.0_wp
         bsi%now%density     = bsi%par%density_init
         bsi%now%temperature = bsi%par%temperature_init
+
+        bsi%now%ice_temperature = bsi%par%temperature_init
 
         bsi%now%mass_base            = 0.0_wp_acc
         bsi%now%smb_ice              = 0.0_wp_acc
@@ -485,6 +526,11 @@ contains
         ! They are pure diagnostics recomputed by summarize_domain_state, so a
         ! deactivated column keeps its last values until something recomputes
         ! them. Preserved rather than "fixed".
+        !
+        ! The ice substrate IS reset, to temperature_init as at a cold start
+        ! (chion deviation, docs/porting_notes.md D34): Chion.jl's reset kernel
+        ! leaves ice_temperature stale, so a re-activated column would start
+        ! on the ice of its previous life (reported upstream, N8).
 
         implicit none
 
@@ -510,6 +556,8 @@ contains
             bsi%now%mass_w(:,icol)      = 0.0_wp
             bsi%now%density(:,icol)     = bsi%par%density_init
             bsi%now%temperature(:,icol) = bsi%par%temperature_init
+
+            bsi%now%ice_temperature(:,icol) = bsi%par%temperature_init
 
             bsi%now%mass_base(icol)            = 0.0_wp_acc
             bsi%now%smb_ice(icol)              = 0.0_wp_acc
@@ -563,6 +611,7 @@ contains
         logical  :: has_surface_snow, has_liquid_water
         logical  :: uses_htessel
         integer  :: n_liquid_water_before_energy
+        integer  :: n_ice
         real(wp_acc) :: melted, ice_melt, routed_runoff, refrozen_mass
 
         type(bare_ice_ablation_class)  :: bare_ice_fluxes
@@ -590,6 +639,12 @@ contains
             stop "Program stopped."
         end if
 
+        ! Ice substrate rows of this column, set before the associate below
+        ! takes its slice: none on land (H_ice = 0), a chion deviation (D34);
+        ! Chion.jl has no ice thickness and puts it under every column.
+        n_ice = 0
+        if (forc%H_ice .gt. 0.0_wp) n_ice = bsi%now%n_ice
+
         associate(n           => bsi%now%n_lay(icol),               &
                   mass        => bsi%now%mass(:,icol),              &
                   mass_w      => bsi%now%mass_w(:,icol),            &
@@ -608,6 +663,7 @@ contains
                   snow_age    => bsi%now%snow_age_days(icol),       &
                   w_snow_old  => bsi%now%w_snow_old(icol),          &
                   w_snow_max  => bsi%now%w_snow_max(icol),          &
+                  ice_temperature => bsi%now%ice_temperature(1:n_ice,icol), &
                   par         => bsi%par)
 
         ! === Step 1: setup ===================================================
@@ -668,6 +724,9 @@ contains
         ! The return is unconditional: percolation, refreezing and the HTESSEL
         ! compaction never run on a bare column, so liquid water already in
         ! mass_w stays exactly where it is.
+        !
+        ! With an ice substrate the bare surface is solved for, not held at T0
+        ! (Chion.jl 03bb445 _step_bare_ice_substrate!).
 
         has_surface_snow = surface_has_snow(mass,n)
 
@@ -675,6 +734,16 @@ contains
 
             if (.not. use_prescribed_albedo) albedo = alb_ice_use
             snow_age = 0.0_wp
+
+            if (n_ice .gt. 0) then
+                call bessi_bare_ice_substrate_step(mass,density,temperature,n, &
+                                                   ice_temperature,t_srf,albedo, &
+                                                   smb_ice,runoff,melt,vapor_mass, &
+                                                   sublimation,lhf_sum,c,forc, &
+                                                   par%ice_substrate_top_thickness, &
+                                                   dt_seconds)
+                return
+            end if
 
             bare_ice_fluxes = bare_ice_ablation_mass(c,forc,dt_seconds)
 
@@ -764,6 +833,8 @@ contains
         call densify_column(mass,density,temperature,n,c,accumulation_rate,dt_seconds)
 
         ! === Step 9: latent-heat coefficients, then the energy solve =========
+        ! The ice substrate, if any, is solved below the snow in the same
+        ! system: the base of the snow conducts into it.
 
         lh_coef = diagnose_latent_heat_flux_coefficients(has_surface_snow,c, &
                                                          forc%air_temperature, &
@@ -771,7 +842,8 @@ contains
                                                          forc%rainfall_rate)
 
         call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,albedo, &
-                              lh_coef%linear,lh_coef%constant,dt_seconds,energy)
+                              lh_coef%linear,lh_coef%constant,dt_seconds,energy, &
+                              ice_temperature,par%ice_substrate_top_thickness)
 
         ! === Step 10: post-solve surface vapor mass flux =====================
         ! Evaluated exactly at the NEW interface temperature t_srf (Chion.jl
@@ -878,6 +950,99 @@ contains
         return
 
     end subroutine bessi_column_step_core
+
+    subroutine bessi_bare_ice_substrate_step(mass,density,temperature,n,ice_temperature, &
+                                             t_srf,albedo,smb_ice,runoff,melt,vapor_mass, &
+                                             sublimation,lhf_sum,c,forc, &
+                                             ice_top_thickness,dt_seconds)
+        ! Chion.jl _step_bare_ice_substrate! (src/step.jl:309-366 at 9ec6cc7).
+        !
+        ! Bare ice over a thermal substrate. The top substrate layer is the
+        ! surface: it cools when the surface energy balance is negative and
+        ! must be re-warmed to T0 before it melts -- the cold content of bare
+        ! ice -- instead of being held at T0 with the negative energy discarded
+        ! (bare_ice_ablation_mass). The full Robin solve of snow_energy_flux
+        ! runs over the substrate rows; rain enthalpy enters the surface
+        ! balance as on snow (has_surface_snow = .TRUE. in the precipitation
+        ! coefficients); the latent flux is re-evaluated at the resolved Ts.
+        ! The albedo has been set by the caller (bare-ice or prescribed).
+        !
+        ! Mass: melt = melt energy/Lm; vapor = Q_lh*dt/(Lv+Lm), bare ice being
+        ! solid; smb_ice += vapor - melt; runoff += melt. No percolation, no
+        ! refreezing. The latent heat in the energy flux stays phase-dependent
+        ! at Ts (Lv at T0), as in Julia (review Q12, a C7 item).
+        !
+        ! RAIN IS NOT ADDED TO RUNOFF HERE (D29). Julia adds the step's rain
+        ! (runoff += rain + melt), but apply_accumulation has already routed
+        ! it: to runoff when no layer can hold it, to mass_w(1) under a sliver
+        ! surface layer (0 < mass(1) <= TOL_EMPTY_LAYER), where Julia counts it
+        ! twice.
+        !
+        ! A sliver surface layer keeps its rows in the solve above the
+        ! substrate, as in Julia: snow_energy_flux counts layers with
+        ! mass(1) > 0, not TOL_EMPTY_LAYER.
+
+        implicit none
+
+        real(wp),     intent(IN)    :: mass(:)            ! (Ntot) [kg m-2]
+        real(wp),     intent(IN)    :: density(:)         ! (Ntot) [kg m-3]
+        real(wp),     intent(INOUT) :: temperature(:)     ! (Ntot) [K]
+        integer,      intent(IN)    :: n                  ! active layer count
+        real(wp),     intent(INOUT) :: ice_temperature(:) ! (n_ice) [K]
+        real(wp),     intent(INOUT) :: t_srf              ! [K]
+        real(wp),     intent(IN)    :: albedo             ! [1]
+        real(wp_acc), intent(INOUT) :: smb_ice            ! [kg m-2]
+        real(wp_acc), intent(INOUT) :: runoff             ! [kg m-2]
+        real(wp_acc), intent(INOUT) :: melt               ! [kg m-2]
+        real(wp_acc), intent(INOUT) :: vapor_mass         ! [kg m-2]
+        real(wp_acc), intent(INOUT) :: sublimation        ! [kg m-2]
+        real(wp_acc), intent(INOUT) :: lhf_sum            ! [W m-2 d]
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+
+        real(wp),     intent(IN)    :: ice_top_thickness  ! [m]
+        real(wp),     intent(IN)    :: dt_seconds         ! [s]
+
+        ! Local variables
+        real(wp) :: q_lh, vapor, melt_mass
+
+        type(latent_heat_coeff_class)  :: lh_coef
+        type(snow_energy_result_class) :: energy
+
+        lh_coef = diagnose_latent_heat_flux_coefficients(.TRUE.,c,forc%air_temperature, &
+                                                         forc%snowfall_rate, &
+                                                         forc%rainfall_rate)
+
+        call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,albedo, &
+                              lh_coef%linear,lh_coef%constant,dt_seconds,energy, &
+                              ice_temperature,ice_top_thickness)
+
+        ! Julia re-evaluates all non-shortwave components at the resolved Ts
+        ! (_resolved_nonshortwave_surface_flux_components); only the latent
+        ! one feeds a budget here. Bare-ice roughness (h_snow = 0) under SEMIX.
+        q_lh = resolved_turbulent_latent_heat_flux(c,forc,t_srf,0.0_wp)
+
+        vapor = real(real(q_lh,wp_acc)*real(dt_seconds,wp_acc) &
+                     /real(c%Lv + c%Lm,wp_acc),wp)
+
+        melt_mass = 0.0_wp
+        if (energy%needs_melt) &
+            melt_mass = real(energy%melt_energy_available/real(c%Lm,wp_acc),wp)
+
+        ! Accumulate directly into the wp_acc accumulators, in Julia's order.
+        smb_ice     = smb_ice + real(vapor,wp_acc) - real(melt_mass,wp_acc)
+        melt        = melt   + real(melt_mass,wp_acc)
+        runoff      = runoff + real(melt_mass,wp_acc)
+        vapor_mass  = vapor_mass  + real(vapor,wp_acc)
+        sublimation = sublimation + real(max(-vapor,0.0_wp),wp_acc)
+
+        ! W m-2 DAYS, not W m-2 seconds. dt_days, not dt_seconds.
+        lhf_sum = lhf_sum + real(q_lh,wp_acc)*real(forc%dt_days,wp_acc)
+
+        return
+
+    end subroutine bessi_bare_ice_substrate_step
 
     subroutine bessi_column_step(bsi,icol,forc,c)
         ! Chion.jl column_step! (src/step.jl:113-157): the diurnal-shortwave

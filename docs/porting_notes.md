@@ -535,6 +535,33 @@ equal values and weights only the difference, so it is also better conditioned.
 **Impact:** round-off only (last bits of merged density and temperature); default
 results are not bit-identical to before. Reported upstream.
 
+### D34. Ice substrate: none on land, reset with the column, old restarts start at `min(t_srf, T0)`
+**What:** three chion-only rules around Chion.jl's thermal ice substrate (`03bb445`,
+`ice_substrate_layers`, chion default 0 until C11):
+1. **Land.** A column with `H_ice <= 0` has no substrate: it runs as
+   `ice_substrate_layers = 0` (adiabatic firn base, bare surface held at `T0`), and its
+   `ice_temperature` slice is never touched. `H_ice` is packed into
+   `chion_step_forcing_class` from the host's `forc%H_ice` (the field ITM already used).
+2. **Reset.** `bessi_reset_columns` sets `ice_temperature` to `temperature_init`, as a cold
+   start does.
+3. **Restart.** `ice_temperature` is written on an `ice_layer` dimension. A restart without
+   it (written with no substrate, or before C3) loads with every substrate layer at
+   `min(t_srf, T0)` of its column, and a log line; one with a different number of substrate
+   layers is refused.
+
+**Why:** (1) Chion.jl has no ice thickness, so it would put 1.55 m of glacier ice under
+tundra: winter cold stored in ice that is not there, and a bare-ice branch that melts it
+(review Q6; plan T9). (2) Chion.jl's reset kernel leaves `ice_temperature` stale, so a
+re-activated column starts on the ice of its previous life (review Q7; N8). (3) Existing
+yelmox restarts lack the field; `t_srf` is the nearest stored estimate of the near-surface
+ice temperature, capped at melting (review Q8).
+
+**Impact:** none on the harness (its substrate configuration has `HI = 1000 m` everywhere;
+no resets or restarts), so not under `legacy_chion`. Host contract: BESSI with a substrate
+needs `forc%H_ice` filled; a host that leaves it at 0 gets no substrate anywhere. yelmox
+fills it for ITM only (`surface_chion.f90`); `chion_column.x` reads `&ctrl H_ice`,
+`chion_grid.x` `H_ice_default` (domain) or `name_hice` (file; `"None"` = 0).
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was
@@ -778,7 +805,9 @@ tightened without moving the layer mass arrays to `dp`.**
 20. **(A) The bare-ice path uses `rainfall_rate` in the energy budget but discards its mass.**
     Extends defect 11: rain is a genuine mass leak on *any* bare column, not only on
     massless-surface columns. Found in WP8. **Fixed upstream** in dev_nils `8fff530`
-    (double counts when `0 < mass(1) <= EPS_EMPTY_LAYER`); chion: D29.
+    (double counts when `0 < mass(1) <= EPS_EMPTY_LAYER`); chion: D29. The ice-substrate
+    bare path of `03bb445` (`_step_bare_ice_substrate!`, `runoff += rain + melt`) has the
+    same double count; chion adds no rain there either (C3).
 
 ### B — latent
 
@@ -820,6 +849,9 @@ tightened without moving the layer mass arrays to `dp`.**
     (vapour flux at `Tsrf`, melt and an emptied column set `T0`). On a column at the depth
     cap the next step's linearization point is the top cell's centre, not the interface.
     chion ports it as is (`snow_layers.f90:continuous_bottom_deplete`). Found in Stage C2.
+28. **(B) `_reset_bessi_columns_kernel!` does not reset `ice_temperature`** (`03bb445`), so a
+    re-activated column starts on the substrate temperature of its previous life. chion
+    resets it to `temperature_init` (D34). PLAN_dev_nils N8.
 
 ### C — doc and cosmetic
 

@@ -82,6 +82,12 @@ module chion_io
     ! CHECKED on read. Loading a BESSI restart into a PDD run, or a Ntot=15
     ! restart into a Ntot=10 run, is refused with an explicit message rather
     ! than silently producing garbage or a shape error from netCDF.
+    !
+    ! BESSI's thermal ice substrate, when configured, is written on its own
+    ! `ice_layer` dimension. A restart without it (no substrate, or written
+    ! before Chion.jl 03bb445 was ported) initialises each substrate layer to
+    ! min(t_srf, T0) instead (docs/porting_notes.md D34); one with a
+    ! different number of substrate layers is refused.
 
     use ncio
     use variable_io, only : var_io_type, load_var_io_table
@@ -651,6 +657,8 @@ contains
 
         if (trim(chn%par%model) .eq. "bessi") then
             call nc_write_dim(filename,"layer",x=1,dx=1,nx=chn%bsi%now%Ntot,units="1")
+            if (chn%bsi%now%n_ice .gt. 0) &
+                call nc_write_dim(filename,"ice_layer",x=1,dx=1,nx=chn%bsi%now%n_ice,units="1")
         end if
 
         call nc_write_dim(filename,"time",x=time,dx=1.0_wp,nx=1,units="days",unlimited=.TRUE.)
@@ -723,6 +731,14 @@ contains
                               start=[1,1,1],units="kg m-3",long_name="Layer density",grid_mapping="",ncid=ncid)
                 call nc_write(filename,"temperature",chn%bsi%now%temperature,dim1="layer",dim2="column",dim3="time", &
                               start=[1,1,1],units="K",long_name="Layer temperature",grid_mapping="",ncid=ncid)
+
+                ! Thermal ice substrate (n_ice,ncol), if configured.
+                if (chn%bsi%now%n_ice .gt. 0) then
+                    call nc_write(filename,"ice_temperature",chn%bsi%now%ice_temperature, &
+                                  dim1="ice_layer",dim2="column",dim3="time", &
+                                  start=[1,1,1],units="K",long_name="Ice substrate layer temperature", &
+                                  grid_mapping="",ncid=ncid)
+                end if
 
                 ! The eight wp_acc accumulators, as NF90_DOUBLE.
                 call chion_restart_write_acc(filename,"mass_base",           chn%bsi%now%mass_base,           "kg m-2",  ncid)
@@ -818,7 +834,7 @@ contains
         ! Local variables
         integer :: ncid, i, ncol, nt
         character(len=56) :: file_model
-        integer :: file_ncol, file_Ntot, Ntot
+        integer :: file_ncol, file_Ntot, Ntot, n_ice
         integer, allocatable :: active_int(:)
         logical, allocatable :: active(:)
 
@@ -909,6 +925,32 @@ contains
 
                 call chion_restart_read_col(filename,"t_srf", chn%bsi%now%t_srf, nt,ncid)
                 call chion_restart_read_col(filename,"albedo",chn%bsi%now%albedo,nt,ncid)
+
+                ! Thermal ice substrate, after t_srf: a restart without one
+                ! (written with none, or before the substrate existed) starts
+                ! every substrate layer at min(t_srf, T0), the surface
+                ! temperature the column last had, capped at melting (D34).
+                n_ice = chn%bsi%now%n_ice
+                if (n_ice .gt. 0) then
+                    if (nc_exists_var(filename,"ice_temperature")) then
+                        if (nc_size(filename,"ice_layer",ncid) .ne. n_ice) then
+                            write(io_unit_err,*) "chion_restart_read:: Error: restart file &
+                                                 &ice substrate layers do not match."
+                            write(io_unit_err,*) "filename              = ", trim(filename)
+                            write(io_unit_err,*) "restart ice layers    = ", nc_size(filename,"ice_layer",ncid)
+                            write(io_unit_err,*) "configured ice layers = ", n_ice
+                            stop "Program stopped."
+                        end if
+                        call nc_read(filename,"ice_temperature",chn%bsi%now%ice_temperature, &
+                                     start=[1,1,nt],count=[n_ice,ncol,1],ncid=ncid)
+                    else
+                        do i = 1, ncol
+                            chn%bsi%now%ice_temperature(:,i) = min(chn%bsi%now%t_srf(i),chn%c%T0)
+                        end do
+                        write(*,*) "chion_restart_read:: no ice_temperature in the restart; &
+                                   &ice substrate initialised to min(t_srf, T0)."
+                    end if
+                end if
 
                 ! Absent from restarts written before the aging scheme: start
                 ! the snow age at 0, as a cold start does.

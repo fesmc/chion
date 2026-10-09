@@ -217,6 +217,9 @@
     density_init     = 300.0                ! [kg m-3] Density assigned to an inactive layer slot
     temperature_init = 273.0                ! [K] Temperature assigned to an inactive layer slot
 
+    ice_substrate_layers        = 0         ! [1] Thermal ice layers below the snow/firn column (0 = none)
+    ice_substrate_top_thickness = 0.05      ! [m] Top substrate layer; each layer below is twice as thick
+
     diurnal_shortwave_substeps            = False   ! [1] Resolve the diurnal cycle by substepping
     diurnal_shortwave_threshold           = 0.0     ! [W m-2] Peak-minus-mean excess required to substep
     diurnal_shortwave_max_substeps        = 3       ! [1] Substeps per day when enabled; 1..24
@@ -241,6 +244,16 @@
 !   The snow-depth cap uses a hard-coded reference layer count of 15
 !   REGARDLESS of Ntot (docs/PLAN.md section 5 item 11). Changing Ntot
 !   therefore does not move the depth cap.
+!
+! ice_substrate_layers, ice_substrate_top_thickness
+!   Chion.jl 03bb445: fixed layers of glacier ice (0.05, 0.10, 0.20, 0.40,
+!   0.80 m at 5 layers; 1.55 m) below the snow/firn, insulated at the base,
+!   solved with the snow in one implicit system. Bare ice then carries cold
+!   content and must warm to T0 before it melts; with 0 it is held at T0.
+!   Upstream default 5; chion 0 until the Stage C default switch (C11).
+!   chion only (D34): no substrate where forc%H_ice = 0 (land), so a host
+!   using it must fill H_ice for BESSI too; ice_temperature is reset with
+!   the column and is initialised to min(t_srf, T0) from an older restart.
 !
 ! The three sub-scheme choices — albedo_scheme, fresh_snow_density_scheme
 ! and low_density_densification — are NOT here. They live in the

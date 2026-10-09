@@ -9,7 +9,8 @@ and the two readers are configured to agree field for field (see runners.jl).
 WHAT IS DELIBERATELY ABSENT FROM THE FILE
 -----------------------------------------
 Only TT, SF, RF, SWD, LAT, SH and mask are written (plus ITM's HI and PDDA in
-the ITM file, and RHZ and PS in the humidity-on BESSI file, see below).
+the ITM file, HI in the ice-substrate BESSI file, and RHZ and PS in the
+humidity-on BESSI file, see below).
 `load_forcing_file` picks up
 LWD / SHF / LHF / RHZ by their default names whenever they are present, while
 `chion_grid.x` reads none of them, so writing any of those would silently hand
@@ -119,10 +120,13 @@ shortwave(s::Scenario, day) = max(s.sw_mean + s.sw_amp * seasonal(day), 0.0)
 
 """
     write_forcing(path, scenarios; nstep, dt_days, t_snow_max, geometry,
-                  relative_humidity)
+                  relative_humidity, h_ice)
 
 Write the shared forcing file. With `relative_humidity` [1] given, uniform RHZ
-and PS (`SEA_LEVEL_PRESSURE`) are added for the humidity-on configuration.
+and PS (`SEA_LEVEL_PRESSURE`) are added for the humidity-on configuration. With
+`h_ice` [m] given, a uniform ice thickness HI is added: chion puts its thermal
+ice substrate only where H_ice > 0 (porting_notes D34); Chion.jl's
+`load_forcing_file` does not read HI and has the substrate everywhere.
 
 The time axis is written in two forms, because the two readers accept different
 ones and neither accepts both: a CF numeric axis for `chion_grid.x`, and
@@ -133,7 +137,8 @@ the write site for why the CF axis alone is not enough.
 function write_forcing(path::AbstractString, scenarios::Vector{Scenario};
                        nstep::Int, dt_days::Float64=1.0, t_snow_max::Float64=273.15,
                        geometry::Union{Nothing,Vector{Geometry}}=nothing,
-                       relative_humidity::Union{Nothing,Float64}=nothing)
+                       relative_humidity::Union{Nothing,Float64}=nothing,
+                       h_ice::Union{Nothing,Float64}=nothing)
     ncol = length(scenarios)
     nx, ny = ncol, 1
 
@@ -218,10 +223,11 @@ function write_forcing(path::AbstractString, scenarios::Vector{Scenario};
         # Static fields. Uniform unless per-column geometry is given (ITM),
         # which also adds ITM's HI and PDDA; Chion.jl's load_forcing_file
         # reads neither, so they cannot leak into the BESSI or PDD runs.
+        hi = h_ice === nothing ? () : (("HI", fill(h_ice, ncol), "m"),)
         statics = geometry === nothing ?
             (("mask", fill(1.0, ncol), "1"),
              ("LAT", fill(70.0, ncol), "degrees_north"),
-             ("SH", fill(1500.0, ncol), "m")) :
+             ("SH", fill(1500.0, ncol), "m"), hi...) :
             (("mask", fill(1.0, ncol), "1"),
              ("LAT", [g.lat for g in geometry], "degrees_north"),
              ("SH", [g.zs for g in geometry], "m"),

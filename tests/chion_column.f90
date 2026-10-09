@@ -26,7 +26,7 @@ program chion_column
     !   wind_speed      = wind_speed                     (constant)
     !   latitude_deg    = latitude
     !   surface_height  = surface_height
-    !   H_ice           = H_ice                          (ITM only)
+    !   H_ice           = H_ice                          (ITM; BESSI ice substrate)
     !   solar_longitude_deg = 360*(d - 1)/Y
     !
     ! Shortwave shares the temperature phase, which is deliberate: it is a

@@ -3,7 +3,9 @@ module snow_energy
     ! boundary (linearized surface energy balance closed against the top
     ! cell's half-thickness conductance), vertical heat conduction below,
     ! zero-flux bottom, solved with the Thomas algorithm, plus a melting
-    ! re-solve with the interface held at T0 (Chion.jl 03bb445).
+    ! re-solve with the interface held at T0 (Chion.jl 03bb445). Optionally a
+    ! fixed-geometry thermal ice substrate below the snow/firn layers, in the
+    ! same tridiagonal system (Chion.jl 03bb445, ice_substrate_layers).
     !
     ! Port of Chion.jl/src/processes/energy_flux.jl:
     !   _go_energy_flux_resolved!            -> snow_energy_flux
@@ -27,8 +29,9 @@ module snow_energy
     ! previous_temperature is not a temperature at all -- it is reused as the
     ! scratch copy of the main diagonal, which the Thomas forward sweep
     ! destroys. chion drops the workspace type entirely and uses stack-local
-    ! AUTOMATIC arrays of size(mass): Ntot is small (default 15), and stack
-    ! locals are automatically private per OpenMP thread.
+    ! AUTOMATIC arrays of size(mass) + n_ice (Julia's _thermal_row_capacity):
+    ! Ntot is small (default 15), and stack locals are automatically private
+    ! per OpenMP thread.
     !
     ! Five work arrays are genuinely needed: lower, diag, upper, rhs and the
     ! destroyed copy solver_diag. Julia's sixth array (interface_conductance)
@@ -49,7 +52,7 @@ module snow_energy
     ! half-cell conductance, and row 1 keeps its coupling to row 2 -- see
     ! step 5 below.
 
-    use chion_defs, only : wp, wp_acc, CHION_SEB_SEMIX, &
+    use chion_defs, only : wp, wp_acc, io_unit_err, CHION_SEB_SEMIX, &
                            chion_const_class, chion_step_forcing_class
 
     ! SEMIX aerodynamic surface scheme, selected by c%seb_scheme. It replaces
@@ -211,10 +214,81 @@ contains
 
     subroutine snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,albedo, &
                                 latent_heat_linear_coefficient, &
-                                latent_heat_constant_term,dt_seconds,res)
+                                latent_heat_constant_term,dt_seconds,res, &
+                                ice_temperature,ice_top_thickness)
         ! Advance the temperature profile of one column over one step.
         ! Chion.jl/src/processes/energy_flux.jl _go_energy_flux_resolved!
-        ! (main 9ec6cc7 = 03bb445), without the ice substrate rows.
+        ! (main 9ec6cc7 = 03bb445). The physics is in energy_flux_rows.
+        !
+        ! The optional pair is the thermal ice substrate: ice_temperature holds
+        ! its n_ice layer temperatures, top first, and ice_top_thickness the
+        ! top layer's thickness (each layer below is twice as thick). Pass both
+        ! or neither; neither, or a zero-size ice_temperature, is no substrate,
+        ! as Julia's trailing defaults (n_ice = 0) are.
+
+        implicit none
+
+        real(wp), intent(IN)    :: mass(:)        ! (Ntot) [kg m-2] solid mass
+        real(wp), intent(IN)    :: density(:)     ! (Ntot) [kg m-3] layer density
+        real(wp), intent(INOUT) :: temperature(:) ! (Ntot) [K] layer (cell-centre) temperature
+        real(wp), intent(INOUT) :: t_srf          ! [K] interface temperature Ts
+        integer,  intent(IN)    :: n              ! number of active layers
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+
+        real(wp), intent(IN) :: albedo            ! [1] diagnosed surface albedo
+        real(wp), intent(IN) :: latent_heat_linear_coefficient  ! [W m-2 K-1] precip
+        real(wp), intent(IN) :: latent_heat_constant_term       ! [W m-2] precip
+        real(wp), intent(IN) :: dt_seconds        ! [s]
+
+        type(snow_energy_result_class), intent(OUT) :: res
+
+        real(wp), optional, intent(INOUT) :: ice_temperature(:)  ! (n_ice) [K] substrate
+        real(wp), optional, intent(IN)    :: ice_top_thickness   ! [m] top substrate layer
+
+        ! Local variables
+        real(wp) :: no_ice(0)
+
+        if (present(ice_temperature) .neqv. present(ice_top_thickness)) then
+            write(io_unit_err,*) "snow_energy_flux:: Error: pass ice_temperature &
+                                 &and ice_top_thickness together."
+            stop "Program stopped."
+        end if
+
+        if (present(ice_temperature)) then
+            call energy_flux_rows(mass,density,temperature,t_srf,n,c,forc,albedo, &
+                                  latent_heat_linear_coefficient,latent_heat_constant_term, &
+                                  dt_seconds,ice_temperature,ice_top_thickness,res)
+        else
+            call energy_flux_rows(mass,density,temperature,t_srf,n,c,forc,albedo, &
+                                  latent_heat_linear_coefficient,latent_heat_constant_term, &
+                                  dt_seconds,no_ice,1.0_wp,res)
+        end if
+
+        return
+
+    end subroutine snow_energy_flux
+
+    subroutine energy_flux_rows(mass,density,temperature,t_srf,n,c,forc,albedo, &
+                                latent_heat_linear_coefficient, &
+                                latent_heat_constant_term,dt_seconds, &
+                                ice_temperature,ice_top_thickness,res)
+        ! The solve behind snow_energy_flux, over THERMAL ROWS (energy_flux.jl
+        ! _thermal_row): rows 1..n_snow are the snow/firn layers, rows
+        ! n_snow+1..n_snow+n_ice the ice substrate. n_snow = n when the column
+        ! has layers and mass(1) > 0, else 0; with no snow the top substrate
+        ! layer is the (bare-ice) surface.
+        !
+        ! ICE SUBSTRATE (Chion.jl 03bb445). n_ice fixed layers of glacier ice,
+        ! top thickness h0, doubling downward (h0*2**(k-1); h0 = 0.05 m and
+        ! n_ice = 5 give 0.05..0.80 m, 1.55 m in all), mass rho_i*h, density
+        ! rho_i, Calonne conductivity at (rho_i, T), heat capacity ci. Purely
+        ! thermal: no mass, no water, no advection. The zero-flux base moves
+        ! from the bottom of the firn to the bottom of the substrate, so the
+        ! snow column now conducts into the ice. Each row's mass, density and
+        ! temperature are copied into row arrays first; with n_ice = 0 the
+        ! rows are the snow layers and every operation below is unchanged.
         !
         ! ROBIN SURFACE BOUNDARY (03bb445). t_srf is the physical
         ! atmosphere-snow interface temperature Ts, a state of its own; the
@@ -231,7 +305,8 @@ contains
         ! Melting: if Ts = a + b*T1^{n+1} > T0, the column is re-solved with
         ! Ts = T0 held behind Gs, Tsrf = T0 and
         !     melt energy = max((Q(T0) - Gs*(T0 - T1^{n+1}))*dt, 0),
-        ! the surface energy not conducted into the snow.
+        ! the surface energy not conducted into the snow. Every row is clamped
+        ! to <= T0, the substrate included.
         !
         ! Deviation from Julia, structural only: Julia flattens the forcing
         ! into fifteen positional scalars plus use_* flags because the kernel
@@ -256,14 +331,22 @@ contains
         real(wp), intent(IN) :: latent_heat_constant_term       ! [W m-2] precip
         real(wp), intent(IN) :: dt_seconds        ! [s]
 
+        real(wp), intent(INOUT) :: ice_temperature(:)  ! (n_ice) [K] substrate
+        real(wp), intent(IN)    :: ice_top_thickness   ! [m] top substrate layer
+
         type(snow_energy_result_class), intent(OUT) :: res
 
         ! Work arrays. Automatic, stack-local, OpenMP-private by construction.
-        ! Five arrays; see the workspace note in the module header.
-        real(wp), dimension(size(mass)) :: lower, diag, upper, rhs, solver_diag
+        ! Five solver arrays (see the workspace note in the module header) and
+        ! the three row arrays, all sized for snow plus substrate.
+        real(wp), dimension(size(mass)+size(ice_temperature)) :: lower, diag, upper, rhs, &
+                                                                 solver_diag
+        real(wp), dimension(size(mass)+size(ice_temperature)) :: row_mass, row_density, &
+                                                                 row_temperature
 
         ! Local variables
-        integer  :: k
+        integer  :: k, n_snow, n_ice, n_rows
+        logical  :: surface_is_ice
         real(wp) :: m1, Ts_n, T1_n
         real(wp) :: Ts_sq, Ts_cube, Ts_fourth
         real(wp) :: sw_abs, lw_const, lw_lin, sh_const, sh_lin
@@ -280,12 +363,13 @@ contains
         type(semix_exchange_class)        :: sx
         type(semix_flux_lin_class)        :: lw_coef
 
-        ! === Step 0: early exit ==============================================
+        ! === Step 0: thermal rows, early exit ================================
         ! energy_flux.jl: n_snow = n if n > 0 and mass(1) > 0, else 0. NOTE the
         ! threshold is mass(1) <= 0, NOT TOL_EMPTY_LAYER as in surface_has_snow.
         ! The two guards differ deliberately -- see docs/PLAN.md section 5,
-        ! item 1. Nothing is written: temperature and t_srf are left untouched,
-        ! and the two precipitation latent coefficients are echoed through.
+        ! item 1. A column with neither snow rows nor substrate is left
+        ! untouched (temperature and t_srf), and the two precipitation latent
+        ! coefficients are echoed through.
 
         res%needs_melt                     = .FALSE.
         res%melt_energy_available          = 0.0_wp_acc
@@ -295,16 +379,39 @@ contains
         res%latent_heat_linear_coefficient = latent_heat_linear_coefficient
         res%latent_heat_constant_term      = latent_heat_constant_term
 
-        if (n .le. 0) return
-        if (mass(1) .le. 0.0_wp) return
+        n_ice  = size(ice_temperature)
+        n_snow = 0
+        if (n .gt. 0) then
+            if (mass(1) .gt. 0.0_wp) n_snow = n
+        end if
+        n_rows = n_snow + n_ice
+
+        if (n_rows .le. 0) return
+
+        ! _thermal_row: the substrate layer thickness is ldexp(h0, k-1), i.e.
+        ! scale(h0, k-1), exact.
+        do k = 1, n_snow
+            row_mass(k)        = mass(k)
+            row_density(k)     = density(k)
+            row_temperature(k) = temperature(k)
+        end do
+
+        do k = 1, n_ice
+            row_mass(n_snow+k)        = c%rho_i*scale(ice_top_thickness,k-1)
+            row_density(n_snow+k)     = c%rho_i
+            row_temperature(n_snow+k) = ice_temperature(k)
+        end do
+
+        ! Bare ice: the top substrate layer is the surface.
+        surface_is_ice = (n_snow .eq. 0)
 
         ! === Step 1: surface scalars =========================================
         ! The fluxes are linearized about the previous INTERFACE temperature
         ! Ts^n; the top cell's conductivity is taken at its own T1^n.
 
-        m1   = safe_positive(mass(1))
+        m1   = safe_positive(row_mass(1))
         Ts_n = t_srf
-        T1_n = temperature(1)
+        T1_n = row_temperature(1)
 
         Ts_sq     = Ts_n*Ts_n
         Ts_cube   = Ts_sq*Ts_n
@@ -315,7 +422,7 @@ contains
         uses_semix_seb = (c%seb_scheme .eq. CHION_SEB_SEMIX)
 
         if (uses_semix_seb) then
-            sx = semix_turbulent_exchange(c,semix_snow_depth(mass,density,n), &
+            sx = semix_turbulent_exchange(c,semix_snow_depth(mass,density,n_snow), &
                                           forc%air_temperature,Ts_n, &
                                           forc%wind_speed,forc%air_pressure, &
                                           forc%relative_humidity, &
@@ -341,8 +448,9 @@ contains
         !
         ! Under semix the same linearization applies but the DOWNWELLING flux
         ! is absorbed with the surface emissivity too (ebal num_lw/denom_lw),
-        ! where BESSI absorbs it in full. Always the snow emissivity here:
-        ! snow_energy_flux has already returned on a bare column.
+        ! where BESSI absorbs it in full: the ice emissivity when the top row
+        ! is the substrate (energy_flux.jl: eps_ice when n_snow = 0), else the
+        ! snow emissivity. BESSI's own branch uses eps_snow on either.
         !
         ! The two branches are written out separately rather than factored
         ! through a shared lw_down: the BESSI else-branch groups its two terms
@@ -350,7 +458,7 @@ contains
         ! change the bessi answer in single precision.
         if (uses_semix_seb) then
             lw_coef = semix_longwave_linearized(c, &
-                          semix_surface_emissivity(c,.TRUE.), &
+                          semix_surface_emissivity(c,.not. surface_is_ice), &
                           semix_longwave_down(c,forc%q_lw_down,forc%has_q_lw_down, &
                                               forc%air_temperature), &
                           Ts_n)
@@ -437,8 +545,8 @@ contains
         ! NOTE the surface layer thickness uses the SAFE-POSITIVE mass m1,
         ! while every other layer uses its raw mass. Each layer's conductivity
         ! is at its own start-of-step temperature.
-        dz_prev = m1/safe_positive(density(1))
-        K_prev  = snow_thermal_conductivity(density(1),T1_n,c%rho_i)
+        dz_prev = m1/safe_positive(row_density(1))
+        K_prev  = snow_thermal_conductivity(row_density(1),T1_n,c%rho_i)
 
         ! Robin boundary terms from the top cell's half-thickness.
         G_s           = 2.0_wp*K_prev/safe_positive(dz_prev)
@@ -450,20 +558,20 @@ contains
 
         rhs(1) = T1_n - boundary_term*surface_const
 
-        do k = 2, n
+        do k = 2, n_rows
 
-            dz_k = mass(k)/safe_positive(density(k))
-            K_k  = snow_thermal_conductivity(density(k),temperature(k),c%rho_i)
+            dz_k = row_mass(k)/safe_positive(row_density(k))
+            K_k  = snow_thermal_conductivity(row_density(k),row_temperature(k),c%rho_i)
 
             G_k = interface_conductance(K_prev,dz_prev,K_k,dz_k)
 
-            beta_km1 = beta_scale/safe_positive(mass(k-1))
-            beta_k   = beta_scale/safe_positive(mass(k))
+            beta_km1 = beta_scale/safe_positive(row_mass(k-1))
+            beta_k   = beta_scale/safe_positive(row_mass(k))
 
             upper(k-1) = beta_km1*G_k      ! super-diagonal of row k-1
             lower(k-1) = beta_k*G_k        ! sub-diagonal   of row k
 
-            rhs(k) = temperature(k)
+            rhs(k) = row_temperature(k)
 
             dz_prev = dz_k
             K_prev  = K_k
@@ -473,22 +581,23 @@ contains
         ! Diagonal. Row 1 is 1 - bt*(1 - b), written as 1 - bt*(q_lin/den) so
         ! that a vanishing top cell (bt and b both huge/near 1) keeps an exact
         ! 1 when q_lin = 0 instead of the difference of two enormous terms.
-        ! Row n is zero-flux at the bottom (no lower(n), no upper(n)).
+        ! The last row is zero-flux at the bottom (no lower(n), no upper(n)):
+        ! the base of the substrate, or of the firn without one.
         diag(1) = 1.0_wp - boundary_term*(q_lin/surface_den)
 
-        if (n .gt. 1) then
+        if (n_rows .gt. 1) then
             diag(1) = diag(1) - upper(1)
-            diag(n) = 1.0_wp - lower(n-1)
+            diag(n_rows) = 1.0_wp - lower(n_rows-1)
         end if
 
-        do k = 2, n-1
+        do k = 2, n_rows-1
             diag(k) = 1.0_wp - lower(k-1) - upper(k)
         end do
 
         ! === Step 4: first solve =============================================
 
-        solver_diag(1:n) = diag(1:n)
-        call solve_tridiagonal_thomas(lower,solver_diag,upper,rhs,n)
+        solver_diag(1:n_rows) = diag(1:n_rows)
+        call solve_tridiagonal_thomas(lower,solver_diag,upper,rhs,n_rows)
 
         ts_new = surface_const + surface_coef*rhs(1)
 
@@ -502,20 +611,20 @@ contains
 
             res%needs_melt = .TRUE.
 
-            ! Rebuild the rhs from the ORIGINAL temperatures. temperature() has
+            ! Rebuild the rhs from the ORIGINAL temperatures. The state has
             ! not been written yet, which is exactly why it is only updated at
             ! step 6.
-            do k = 1, n
-                rhs(k) = temperature(k)
+            do k = 1, n_rows
+                rhs(k) = row_temperature(k)
             end do
             rhs(1) = rhs(1) - boundary_term*c%T0
 
-            solver_diag(1:n) = diag(1:n)
-            solver_diag(1)   = diag(1) - boundary_term*surface_coef
+            solver_diag(1:n_rows) = diag(1:n_rows)
+            solver_diag(1)        = diag(1) - boundary_term*surface_coef
 
-            call solve_tridiagonal_thomas(lower,solver_diag,upper,rhs,n)
+            call solve_tridiagonal_thomas(lower,solver_diag,upper,rhs,n_rows)
 
-            do k = 1, n
+            do k = 1, n_rows
                 if (rhs(k) .gt. c%T0) rhs(k) = c%T0
             end do
 
@@ -532,7 +641,7 @@ contains
 
         else
 
-            do k = 1, n
+            do k = 1, n_rows
                 if (rhs(k) .gt. c%T0) rhs(k) = c%T0
             end do
 
@@ -543,14 +652,18 @@ contains
 
         ! === Step 6: write state =============================================
 
-        do k = 1, n
+        do k = 1, n_snow
             temperature(k) = rhs(k)
+        end do
+
+        do k = 1, n_ice
+            ice_temperature(k) = rhs(n_snow+k)
         end do
 
         t_srf = ts_new
 
         return
 
-    end subroutine snow_energy_flux
+    end subroutine energy_flux_rows
 
 end module snow_energy

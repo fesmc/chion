@@ -32,11 +32,10 @@ module chion_model
     !               -- takes four scalars by reference; it has no layers and
     !                  no state object worth threading.
     !   itm     call itm_step(itm,icol,fc,z_srf,H_ice,PDDs,c)
-    !               -- takes the state object plus three extra arguments that
-    !                  are deliberately NOT in chion_step_forcing_class,
-    !                  because they are ice-sheet state, not atmosphere.
-    ! Forcing a common signature onto these would mean either polluting the
-    ! shared forcing type with ice-sheet fields or wrapping PDD in a state
+    !               -- takes the state object plus three extra arguments
+    !                  (z_srf and H_ice are also in the step forcing now, for
+    !                  BESSI; PDDs is not).
+    ! Forcing a common signature onto these would mean wrapping PDD in a state
     ! object it does not need. Each case is written out instead.
     !
     ! -----------------------------------------------------------------------
@@ -114,10 +113,11 @@ contains
         ! Fields are assigned in declaration order, which is also the order of
         ! Chion.jl's SnowpackStepForcing, so the two can be diffed by eye.
         !
-        ! NOTE what is NOT here: H_ice and PDDs. Both are ITM's and are passed
-        ! to itm_step directly (see the module header). surface_height is
-        ! packed (Chion.jl d0146e1: elevation-dependent diurnal T amplitude);
-        ! ITM still receives it as its explicit z_srf argument as well.
+        ! NOTE what is NOT here: PDDs, ITM's alone, passed to itm_step
+        ! directly (see the module header). surface_height is packed (Chion.jl
+        ! d0146e1: elevation-dependent diurnal T amplitude) and H_ice too
+        ! (chion: BESSI's ice substrate only under ice, D34); ITM still
+        ! receives both as its explicit z_srf and H_ice arguments as well.
 
         implicit none
 
@@ -165,6 +165,8 @@ contains
         fc%surface_height      = forc%surface_height(icol)
         fc%day_of_year         = forc%day_of_year
         fc%solar_longitude_deg = forc%solar_longitude_deg
+
+        fc%H_ice = forc%H_ice(icol)
 
         return
 

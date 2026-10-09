@@ -50,7 +50,7 @@
     trans_a             = 0.768           ! [1]
     trans_b             = 6.99e-5         ! [m-1]
     trans_c             = -0.376          ! [1]
-    H_ice_default       = 1000.0          ! [m]  ice thickness on every column (ITM)
+    H_ice_default       = 1000.0          ! [m]  ice thickness on every column (ITM; BESSI ice substrate)
 /
 
 ! ============================================================

@@ -188,6 +188,12 @@ module chion_defs
     real(wp), parameter, public :: DEF_DENSITY_INIT     = 300.0_wp
     real(wp), parameter, public :: DEF_TEMPERATURE_INIT = 273.0_wp
 
+    ! Thermal ice substrate below the snow/firn column (Chion.jl 03bb445,
+    ! src/models.jl:98-99). Upstream defaults to 5 layers; chion keeps 0
+    ! (no substrate, the bare-ice-at-T0 treatment) until the default switch.
+    integer,  parameter, public :: DEF_ICE_SUBSTRATE_LAYERS        = 0
+    real(wp), parameter, public :: DEF_ICE_SUBSTRATE_TOP_THICKNESS = 0.05_wp
+
     ! Depth cap: a fixed total solid depth, independent of Ntot and of
     ! mass_split (Chion.jl 03bb445, src/constants.jl:39). It replaces the
     ! former 15*mass_split*1.5/300, identical at mass_split = 300.
@@ -354,6 +360,12 @@ module chion_defs
         real(wp) :: surface_height = 0.0_wp  ! [m] diurnal T amplitude gradient; non-finite = no excess
         real(wp) :: day_of_year         ! [d] fractional, 1-based
         real(wp) :: solar_longitude_deg ! [deg]
+
+        ! chion only, not in SnowpackStepForcing: the host's ice thickness.
+        ! BESSI puts its thermal ice substrate only under ice (H_ice > 0); a
+        ! land column (H_ice = 0, the forcing default) has none
+        ! (docs/porting_notes.md D34). ITM still takes it as an argument.
+        real(wp) :: H_ice = 0.0_wp      ! [m]
     end type chion_step_forcing_class
 
     ! === Host-facing forcing =================================================
@@ -402,14 +414,15 @@ module chion_defs
 
         real(wp), allocatable :: latitude_deg(:)         ! [deg N]
 
-        ! --- ITM-only fields (WP11) ------------------------------------
+        ! --- Ice-sheet fields (WP11; H_ice also BESSI since C3) ---------
         !
-        ! These three are deliberately NOT part of chion_step_forcing_class.
-        ! That type mirrors Chion.jl's SnowpackStepForcing and is the shared,
-        ! model-neutral contract every kernel takes; adding ice-sheet state to
-        ! it would make BESSI and PDD carry fields they can never use. ITM
-        ! instead receives them as explicit arguments from the dispatcher
-        ! (itm_step(itm,icol,fc,z_srf,H_ice,PDDs)).
+        ! PDDs is deliberately NOT part of chion_step_forcing_class. That type
+        ! mirrors Chion.jl's SnowpackStepForcing and is the shared,
+        ! model-neutral contract every kernel takes. ITM receives z_srf, H_ice
+        ! and PDDs as explicit arguments from the dispatcher
+        ! (itm_step(itm,icol,fc,z_srf,H_ice,PDDs)). H_ice is packed into the
+        ! step forcing as well, because BESSI places its thermal ice substrate
+        ! only where H_ice > 0 (docs/porting_notes.md D34).
         !
         ! ITM's z_srf is the EXISTING surface_height(:) field above -- there is
         ! no separate array for it.
@@ -771,9 +784,10 @@ contains
 
         forc%latitude_deg = 0.0_wp
 
-        ! ITM-only. H_ice = 0 selects calc_albedo_surface's land branch, and
-        ! PDDs = 0 selects the "desert" critical snow depth. Both are neutral
-        ! starting points; a host running model="itm" must set them.
+        ! H_ice = 0 selects ITM's land albedo branch and gives BESSI no ice
+        ! substrate; PDDs = 0 selects ITM's "desert" critical snow depth. A
+        ! host running model="itm", or BESSI with ice_substrate_layers > 0,
+        ! must set H_ice.
         forc%H_ice = 0.0_wp
         forc%PDDs  = 0.0_wp
 

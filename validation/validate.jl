@@ -283,6 +283,80 @@ function run_bessi_humid(nstep::Int)
     return nfail
 end
 
+"""Thermal ice substrate layers of the substrate configuration (Chion.jl's default)."""
+const ICE_SUBSTRATE_LAYERS = 5
+
+"""
+The substrate configuration's extra column. `bare_recover` goes bare only in
+the melt season, after the melting snow has brought the ice beneath it to T0
+(measured: every bare step melts, Tsrf = T0), so it never shows the cold
+content of bare ice. This column never holds snow: bare ice through the year,
+cooled below T0 in winter, melting in summer only once re-warmed.
+"""
+const BARE_ICE_SCENARIO = Scenario("bare_ice",
+    "dry bare ice over the substrate: cold in winter, melts only once re-warmed",
+    263.0, 15.0, 0.0, 150.0, 130.0)
+
+"""
+BESSI with the thermal ice substrate (Chion.jl 03bb445, plan C3): 5 layers of
+ice below the snow/firn on both sides, gated like the default configuration
+(dp+legacy, every BESSI field), on the default columns plus `bare_ice`. The
+forcing carries a uniform HI = 1000 m, because chion puts the substrate only
+under ice (porting_notes D34); Chion.jl does not read HI and has it under every
+column. Coverage: `bare_recover` goes bare over the substrate; `bare_ice` sits
+below T0 without melting while cold, and melts only later -- the cold content
+of bare ice, which the substrate-free path (surface held at T0) cannot produce.
+"""
+function run_bessi_substrate(nstep::Int)
+    scen = vcat(BESSI_SCENARIOS, [BARE_ICE_SCENARIO])
+    fs = joinpath(WORKDIR, "forcing_bessi_ice.nc")
+    write_forcing(fs, scen; nstep=nstep, dt_days=1.0, h_ice=1000.0)
+    jl = run_julia_bessi(; forcing=fs, outfile="julia_bessi_ice.nc", workdir=WORKDIR,
+                         ntot=15, years=1, ice_substrate_layers=ICE_SUBSTRATE_LAYERS)
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fs,
+                   outfile="chion_bessi_ice_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0, name_hice="HI",
+                   bessi_extra="    ice_substrate_layers = $(ICE_SUBSTRATE_LAYERS)")
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, ice substrate: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity (ice substrate, $(ICE_SUBSTRATE_LAYERS) layers)")
+
+    N, ts, melt = NCDataset(ch) do dc
+        (read_canonical(dc, "N")[1], read_canonical(dc, "Tsrf")[1],
+         read_canonical(dc, "melt")[1])
+    end
+    # Record 1 is the initial state; record k+1 follows step k.
+    names = [s.name for s in scen]
+    function bare_stats(name)
+        i = findfirst(==(name), names)
+        bare = Float64.(N[2:end, 1, i]) .== 0.0
+        tsrf = Float64.(ts[2:end, 1, i])
+        dm = diff(Float64.(melt[:, 1, i]))
+        cold = findall(bare .& (tsrf .< 273.0) .& (dm .== 0.0))
+        melting = findall(bare .& (dm .> 0.0))
+        println("      $(rpad(name, 13)) $(count(bare)) bare steps, $(length(cold)) below " *
+                "T0 without melt, $(length(melting)) melting; min bare Tsrf = " *
+                "$(any(bare) ? minimum(tsrf[bare]) : NaN)")
+        return bare, cold, melting
+    end
+    println()
+    bare_r, _, _ = bare_stats("bare_recover")
+    bare_i, cold_i, melt_i = bare_stats("bare_ice")
+    checks = [("ice substrate: bare_recover goes bare", any(bare_r)),
+              ("ice substrate: bare_ice stays bare", all(bare_i)),
+              ("ice substrate: bare ice below T0 without melt (cold content)",
+               !isempty(cold_i)),
+              ("ice substrate: bare ice melts only after re-warming",
+               !isempty(cold_i) && !isempty(melt_i) && first(melt_i) > first(cold_i))]
+    println()
+    println("--- coverage assertions (ice substrate) ---")
+    for (label, ok) in checks
+        println(ok ? "  ok   : $label" : "  FAIL : $label")
+        ok || (nfail += 1)
+    end
+    return nfail
+end
+
 """
 ITM against Chion.jl's ITMModel (ported from chion, 29eb867): dp+legacy, so
 chion's tsrf uses the daily melt_net as Chion.jl does (D27), and all eight
@@ -385,6 +459,7 @@ function main()
 
     nfail += run_bessi_aging(fbessi)
     nfail += run_bessi_humid(nstep)
+    nfail += run_bessi_substrate(nstep)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

@@ -37,7 +37,7 @@
     swd_source          = "file"           ! "file" (ERA5) | "transmissivity"
     trans_a             = 0.46             ! [1]  tau = trans_a + trans_b*z_srf
     trans_b             = 6.0e-5           ! [m-1]
-    H_ice_default       = 1000.0           ! [m]  ice thickness on every column (ITM)
+    H_ice_default       = 1000.0           ! [m]  ice thickness on every column (ITM; BESSI ice substrate)
 /
 
 ! ============================================================

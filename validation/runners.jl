@@ -58,9 +58,11 @@ make_cmd(target::AbstractString, precision::Symbol; legacy::Bool=false) =
 
 """
     run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra,
-              legacy, pdd_method, name_hice, name_pdds)
+              legacy, pdd_method, name_hice, name_pdds, bessi_extra)
 
 Write a namelist and run `chion_grid.x` in `workdir`. Returns the output path.
+`bessi_extra` adds lines to the `&bessi` group (a second group of the same name
+in `nml_extra` would not be read).
 The namelist and log are named after `outfile`, so runs sharing a `workdir`
 keep their own.
 
@@ -74,7 +76,7 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
                    dt::Float64=-1.0, nml_extra::AbstractString="",
                    legacy::Bool=false, pdd_method::AbstractString="simple",
                    name_hice::AbstractString="None", name_pdds::AbstractString="None",
-                   rh_default::Float64=0.0)
+                   rh_default::Float64=0.0, bessi_extra::AbstractString="")
     mkpath(workdir)
     link = joinpath(workdir, "input")
     islink(link) || ispath(link) || symlink(joinpath(CHION_ROOT, "input"), link)
@@ -129,6 +131,7 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
     diurnal_shortwave_min_air_temperature = 265.15
     diurnal_temperature_cycle             = .FALSE.
     diurnal_temperature_amplitude         = 5.0
+$(bessi_extra)
 /
 
 &pdd
@@ -153,7 +156,8 @@ $(nml_extra)
 end
 
 """
-    run_julia_bessi(; forcing, outfile, workdir, ntot, albedo, vars, humidity)
+    run_julia_bessi(; forcing, outfile, workdir, ntot, albedo, vars, humidity,
+                    ice_substrate_layers)
 
 Run Chion.jl's BESSI on the same file. `netcdf_variables` is the explicit 18-var
 list: requesting `latent_heat_flux` would flip the run into monthly-aggregation
@@ -162,11 +166,12 @@ per step and would not be comparable. With `albedo = :aging` the timescales are
 passed explicitly (`AGING_PARAMS`): 12407a3 defaults the melting one to 5 d,
 dev_nils and chion to 2 d. `humidity = true` reads the forcing's RHZ and PS
 (see forcing.jl), matching chion's `rh_default` and sea-level pressure.
+`ice_substrate_layers` overrides the pin of `BESSI_SCHEME_PINS` (0).
 """
 function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
                          workdir::AbstractString, ntot::Int=15, years::Int=1,
                          albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS,
-                         humidity::Bool=false)
+                         humidity::Bool=false, ice_substrate_layers::Int=0)
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -192,8 +197,10 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
     # (alpha_ice 0.3 -> 0.4 -> 0.3 -> 0.4 on main 9ec6cc7, alpha_wet
     # 0.70 -> 0.60 on dev_nils -> 0.70 on main).
     aging = albedo === :aging ? AGING_PARAMS : (;)
+    pins = ice_substrate_layers == 0 ? BESSI_SCHEME_PINS :
+           merge(BESSI_SCHEME_PINS, (; ice_substrate_layers))
     model = BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
-                       alpha_ice=0.3, alpha_wet=0.70, aging..., BESSI_SCHEME_PINS...,
+                       alpha_ice=0.3, alpha_wet=0.70, aging..., pins...,
                        densification=:bessi, fresh_snow_density=:constant,
                        mass_max=500.0, mass_split=300.0, mass_min=100.0,
                        density_init=300.0, temperature_init=273.0,

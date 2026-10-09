@@ -238,6 +238,10 @@ contains
                        bpar%diurnal_temperature_amplitude_gradient, 0.0_wp, nfail)
         call check_val("bessi: diurnal_temperature_amplitude_max from defaults", &
                        bpar%diurnal_temperature_amplitude_max, 1.0e30_wp, nfail)
+        call check("bessi: ice_substrate_layers = 0 from defaults", &
+                   bpar%ice_substrate_layers .eq. 0, nfail)
+        call check_val("bessi: ice_substrate_top_thickness from defaults", &
+                       bpar%ice_substrate_top_thickness, 0.05_wp, nfail)
 
         ! --- &pdd -----------------------------------------------------
         call pdd_par_init(ppar)

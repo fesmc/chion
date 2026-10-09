@@ -40,7 +40,7 @@
     ! insolation, with precipitation split into snow below t_snow_max.
     latitude         = 70.0                 ! [deg N] Column latitude
     surface_height   = 1500.0               ! [m] Surface elevation
-    H_ice            = 1000.0               ! [m] Ice thickness (ITM only)
+    H_ice            = 1000.0               ! [m] Ice thickness (ITM; BESSI ice substrate)
 
     t2m_mean         = 258.15               ! [K] Annual mean air temperature
     t2m_amplitude    = 16.0                 ! [K] Half-amplitude of the annual cycle

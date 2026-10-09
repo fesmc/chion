@@ -101,6 +101,8 @@ program test_bessi
     call test_fresh_snow_split_on_bare(nfail)
     call test_diurnal(nfail)
     call test_scheme_matrix(nfail)
+    call test_substrate_cold_content(nfail)
+    call test_substrate_column(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -209,10 +211,11 @@ contains
     ! Drivers
     ! =====================================================================
 
-    subroutine run_annual_cycle(bsi,c,nyears,icol,precip)
+    subroutine run_annual_cycle(bsi,c,nyears,icol,precip,h_ice)
         ! Drive one column through nyears of the synthetic annual cycle,
         ! accumulating the precipitation mass offered. All of it is accepted:
-        ! rain with no layer to hold it runs off (D29).
+        ! rain with no layer to hold it runs off (D29). h_ice is the host ice
+        ! thickness (default 0, land: no ice substrate).
 
         implicit none
 
@@ -221,6 +224,7 @@ contains
         integer,                 intent(IN)    :: nyears
         integer,                 intent(IN)    :: icol
         real(wp_acc),            intent(INOUT) :: precip
+        real(wp), optional,      intent(IN)    :: h_ice
 
         ! Local variables
         integer  :: iyr, iday
@@ -231,6 +235,7 @@ contains
             do iday = 1, NDAY_YEAR
 
                 call annual_forcing(iday,c,forc)
+                if (present(h_ice)) forc%H_ice = h_ice
 
                 dt_seconds = forc%dt_days*real(sec_day,wp)
 
@@ -620,6 +625,208 @@ contains
     end subroutine test_bare_and_recover
 
     ! =====================================================================
+    ! Test 12 -- bare ice over a cold substrate: cold content delays melt
+    ! =====================================================================
+
+    subroutine test_substrate_cold_content(nfail)
+        ! A bare column (n = 0) over a 5-layer substrate at 263 K, under a
+        ! constant prescribed surface flux Q and nothing else (no emission, no
+        ! turbulence, no precipitation), so the surface balance is exactly Q.
+        ! Without a substrate the bare ice is held at T0 and melts Q*dt/Lm
+        ! every step. With one (Chion.jl 03bb445) the ice must first be warmed:
+        !
+        !   * the first steps do not melt at all -- the cold ice takes
+        !     everything (Q = 20 W m-2 warms the top ~0.3 m by a few K a day);
+        !   * melt only starts after the top layer has warmed;
+        !   * energy closes: Lm*melt + sum_k m_k ci (T_k - 263) == Q*t, the
+        !     insulated base keeping every joule in the substrate;
+        !   * so the melt deficit against the no-substrate column is exactly the
+        !     cold content taken up, (melt_0 - melt)*Lm == sum m ci dT.
+        ! Bare ice is impermeable and solid: runoff = melt, smb_ice = -melt.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        integer,  parameter :: NSTEP = 40
+        real(wp), parameter :: Q = 20.0_wp, T_ICE = 263.0_wp
+
+        type(bessi_class)       :: bsi, bsi0
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        integer      :: istep, k, first_melt
+        real(wp)     :: t1_at_first_melt
+        real(wp_acc) :: cold_taken, total_in
+
+        write(*,"(a)") "--- 12. bare ice over a cold substrate: cold content delays melt ---"
+
+        call chion_const_init(c)
+        c%eps_snow = 0.0_wp
+
+        call bessi_par_init(bsi%par)
+        bsi%par%ice_substrate_layers = 5
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+        bsi%now%ice_temperature = T_ICE
+        bsi%now%t_srf           = T_ICE
+
+        call bessi_par_init(bsi0%par)
+        call bessi_alloc(bsi0,1)
+        call bessi_init_state(bsi0,c)
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 275.0_wp
+        forc%has_q_sw_net    = .TRUE.
+        forc%q_sw_net        = Q
+        forc%has_q_lw_down   = .TRUE.
+        forc%has_q_sh        = .TRUE.
+        forc%has_q_lh        = .TRUE.
+        forc%H_ice           = 1000.0_wp
+
+        first_melt       = 0
+        t1_at_first_melt = 0.0_wp
+
+        do istep = 1, NSTEP
+            call bessi_column_step(bsi, 1,forc,c)
+            call bessi_column_step(bsi0,1,forc,c)
+            if (first_melt .eq. 0) then
+                if (bsi%now%melt(1) .gt. 0.0_wp_acc) then
+                    first_melt       = istep
+                    t1_at_first_melt = bsi%now%ice_temperature(1,1)
+                end if
+            end if
+        end do
+
+        cold_taken = 0.0_wp_acc
+        do k = 1, 5
+            cold_taken = cold_taken + real(c%rho_i*bsi%par%ice_substrate_top_thickness &
+                                           *2.0_wp**(k-1),wp_acc)*real(c%ci,wp_acc) &
+                                    *(real(bsi%now%ice_temperature(k,1),wp_acc) - real(T_ICE,wp_acc))
+        end do
+        total_in = real(Q,wp_acc)*real(NSTEP,wp_acc)*real(sec_day,wp_acc)
+
+        write(*,"(a,i0)")    "         first melting step         = ", first_melt
+        write(*,"(a,g14.6)") "         top ice T at first melt    = ", t1_at_first_melt
+        write(*,"(a,g16.8)") "         melt, substrate  [kg m-2]  = ", bsi%now%melt(1)
+        write(*,"(a,g16.8)") "         melt, none       [kg m-2]  = ", bsi0%now%melt(1)
+        write(*,"(a,g16.8)") "         cold content taken [J m-2] = ", cold_taken
+
+        call check("still bare (no layers)", bsi%now%n_lay(1) .eq. 0, nfail)
+        call check("no substrate: melts from the first step", bsi0%now%melt(1) .gt. 0.0_wp_acc, nfail)
+        call check("substrate: no melt in the first step (cold ice takes Q)", first_melt .gt. 1, nfail)
+        call check("substrate: top ice warmed to near T0 before melting", &
+                   t1_at_first_melt .gt. T_ICE + 5.0_wp, nfail)
+        call check("substrate: melts eventually", first_melt .gt. 0 .and. first_melt .le. NSTEP, nfail)
+        call check("substrate stays at or below T0", &
+                   all(bsi%now%ice_temperature(:,1) .le. c%T0), nfail)
+        call check_close("no substrate: melt == Q t/Lm", bsi0%now%melt(1), &
+                         total_in/real(c%Lm,wp_acc), 1.0e-6_wp_acc, nfail)
+        call check_close("substrate: Lm*melt + cold content taken == Q t", &
+                         real(c%Lm,wp_acc)*bsi%now%melt(1) + cold_taken, total_in, &
+                         1.0e-5_wp_acc, nfail)
+        call check_close("melt deficit == cold content taken", &
+                         real(c%Lm,wp_acc)*(bsi0%now%melt(1) - bsi%now%melt(1)), cold_taken, &
+                         1.0e-3_wp_acc, nfail)
+        call check_close("substrate: runoff == melt", bsi%now%runoff(1), bsi%now%melt(1), &
+                         1.0e-12_wp_acc, nfail)
+        call check_close("substrate: smb_ice == -melt", bsi%now%smb_ice(1), -bsi%now%melt(1), &
+                         1.0e-12_wp_acc, nfail)
+
+        call bessi_dealloc(bsi)
+        call bessi_dealloc(bsi0)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_substrate_cold_content
+
+    ! =====================================================================
+    ! Test 13 -- the substrate in a full column; land; reset
+    ! =====================================================================
+
+    subroutine test_substrate_column(nfail)
+        ! (a) Mass closure over a 5-yr annual cycle with the substrate on: the
+        !     substrate carries no mass, so the identity is unchanged, while
+        !     the run itself must differ from the no-substrate one.
+        ! (b) A land column (H_ice = 0) with the substrate configured is
+        !     bit-identical to a no-substrate run, and its substrate untouched
+        !     (D34).
+        ! (c) A column reset restores the substrate to temperature_init (D34).
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi, bsi0
+        type(chion_const_class) :: c
+        real(wp_acc)            :: precip, precip0
+        real(wp)                :: tmin
+
+        write(*,"(a)") "--- 13. ice substrate in a full column; land; reset ---"
+
+        call chion_const_init(c)
+
+        call bessi_par_init(bsi%par)
+        bsi%par%ice_substrate_layers = 5
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,2)
+        call bessi_init_state(bsi,c)
+
+        call bessi_par_init(bsi0%par)
+        call bessi_alloc(bsi0,1)
+        call bessi_init_state(bsi0,c)
+
+        ! (a) column 1 on ice
+        precip = 0.0_wp_acc
+        call run_annual_cycle(bsi,c,5,1,precip,h_ice=1000.0_wp)
+        precip0 = 0.0_wp_acc
+        call run_annual_cycle(bsi0,c,5,1,precip0)
+
+        tmin = minval(bsi%now%ice_temperature(:,1))
+        write(*,"(a,g16.8,a,g16.8)") "         melt with / without substrate = ", &
+                                     bsi%now%melt(1), " / ", bsi0%now%melt(1)
+        write(*,"(a,g14.6)")         "         coldest substrate layer [K]  = ", tmin
+
+        call check("substrate cooled below T0 over the cycle", tmin .lt. c%T0 - 1.0_wp, nfail)
+        call check("substrate changes the melt", bsi%now%melt(1) .ne. bsi0%now%melt(1), nfail)
+        call check_close("closure with the substrate on", closure_lhs(bsi,1),precip, &
+                         1.0e-6_wp_acc,nfail)
+
+        ! (b) column 2 on land, same configuration
+        precip = 0.0_wp_acc
+        call run_annual_cycle(bsi,c,5,2,precip,h_ice=0.0_wp)
+
+        call check("land: identical to no substrate (n_lay, mass, temperature)", &
+                   bsi%now%n_lay(2) .eq. bsi0%now%n_lay(1) .and. &
+                   all(bsi%now%mass(:,2) .eq. bsi0%now%mass(:,1)) .and. &
+                   all(bsi%now%temperature(:,2) .eq. bsi0%now%temperature(:,1)), nfail)
+        call check("land: identical to no substrate (melt, runoff, smb_ice, t_srf)", &
+                   bsi%now%melt(2) .eq. bsi0%now%melt(1) .and. &
+                   bsi%now%runoff(2) .eq. bsi0%now%runoff(1) .and. &
+                   bsi%now%smb_ice(2) .eq. bsi0%now%smb_ice(1) .and. &
+                   bsi%now%t_srf(2) .eq. bsi0%now%t_srf(1), nfail)
+        call check("land: substrate untouched", &
+                   all(bsi%now%ice_temperature(:,2) .eq. bsi%par%temperature_init), nfail)
+
+        ! (c) reset
+        call bessi_reset_columns(bsi,c,[1])
+        call check("reset: substrate back to temperature_init", &
+                   all(bsi%now%ice_temperature(:,1) .eq. bsi%par%temperature_init), nfail)
+
+        call bessi_dealloc(bsi)
+        call bessi_dealloc(bsi0)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_substrate_column
+
+    ! =====================================================================
     ! Test 4 -- drive the column to Ntot capacity
     ! =====================================================================
 
@@ -823,11 +1030,17 @@ contains
         type(chion_step_forcing_class) :: forc
         real(wp_acc) :: rain_mass
 
-        write(*,"(a)") "--- 5b. rain on a bare column is routed exactly once ---"
+        integer :: n_ice
+
+        do n_ice = 0, 5, 5
+
+        write(*,"(a,i0,a)") "--- 5b. rain on a bare column is routed exactly once (ice substrate ", &
+                            n_ice, ") ---"
 
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
         bsi%par%mass_min = 1.0e-12_wp
+        bsi%par%ice_substrate_layers = n_ice
         call bessi_par_validate(bsi%par)
         call bessi_alloc(bsi,2)
         call bessi_init_state(bsi,c)
@@ -849,6 +1062,7 @@ contains
         forc%rainfall_rate   = 2.0e-5_wp
         forc%shortwave_down  = 200.0_wp
         forc%wind_speed      = 2.0_wp
+        forc%H_ice           = 1000.0_wp
 
         rain_mass = real(forc%rainfall_rate,wp_acc)*real(forc%dt_days,wp_acc) &
                    *real(sec_day,wp_acc)
@@ -871,6 +1085,8 @@ contains
         call bessi_dealloc(bsi)
 
         write(*,*)
+
+        end do
 
         return
 
