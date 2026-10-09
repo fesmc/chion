@@ -666,11 +666,15 @@ contains
 
         write(*,"(a)") "--- 12. bare ice over a cold substrate: cold content delays melt ---"
 
+        ! BESSI's longwave (eps_snow on every surface, here 0: no emission)
+        ! and daily steps, so the closed forms below hold.
         call chion_const_init(c)
-        c%eps_snow = 0.0_wp
+        c%eps_snow   = 0.0_wp
+        c%seb_scheme = CHION_SEB_BESSI
 
         call bessi_par_init(bsi%par)
         bsi%par%ice_substrate_layers = 5
+        bsi%par%diurnal_shortwave_substeps = .FALSE.
         call bessi_par_validate(bsi%par)
         call bessi_alloc(bsi,1)
         call bessi_init_state(bsi,c)
@@ -678,6 +682,8 @@ contains
         bsi%now%t_srf           = T_ICE
 
         call bessi_par_init(bsi0%par)
+        bsi0%par%ice_substrate_layers = 0
+        bsi0%par%diurnal_shortwave_substeps = .FALSE.
         call bessi_alloc(bsi0,1)
         call bessi_init_state(bsi0,c)
 
@@ -865,6 +871,7 @@ contains
         call bessi_init_state(bsi,c)
 
         call bessi_par_init(bsi0%par)
+        bsi0%par%near_surface_layer_max_thicknesses = 0.0_wp
         call bessi_alloc(bsi0,1)
         call bessi_init_state(bsi0,c)
 
@@ -1385,6 +1392,7 @@ contains
         call chion_const_init(c)
 
         call bessi_par_init(bsi_off%par)
+        bsi_off%par%diurnal_shortwave_substeps = .FALSE.
         call bessi_alloc(bsi_off,1)
         call bessi_init_state(bsi_off,c)
 
@@ -1392,6 +1400,7 @@ contains
         bsi_on%par%diurnal_shortwave_substeps     = .TRUE.
         bsi_on%par%diurnal_shortwave_max_substeps = 8
         bsi_on%par%diurnal_shortwave_threshold    = 0.0_wp
+        bsi_on%par%diurnal_temperature_cycle      = .FALSE.
         call bessi_par_validate(bsi_on%par)
         call bessi_alloc(bsi_on,1)
         call bessi_init_state(bsi_on,c)
@@ -1442,6 +1451,7 @@ contains
         call chion_const_init(c)
 
         call bessi_par_init(bsi_off%par)
+        bsi_off%par%diurnal_shortwave_substeps = .FALSE.
         call bessi_alloc(bsi_off,1)
         call bessi_init_state(bsi_off,c)
 
@@ -1449,6 +1459,7 @@ contains
         bsi_on%par%diurnal_shortwave_substeps     = .TRUE.
         bsi_on%par%diurnal_shortwave_max_substeps = 8
         bsi_on%par%diurnal_shortwave_threshold    = 0.0_wp
+        bsi_on%par%diurnal_temperature_cycle      = .FALSE.
         call bessi_par_validate(bsi_on%par)
         call bessi_alloc(bsi_on,1)
         call bessi_init_state(bsi_on,c)
@@ -1503,6 +1514,7 @@ contains
         ! legacy_chion (Chion.jl) averages it over [-pi, pi], which zeroes the
         ! shortwave, i.e. exactly as substepping off with no shortwave.
         call bessi_par_init(bsi_off%par)
+        bsi_off%par%diurnal_shortwave_substeps = .FALSE.
         call bessi_alloc(bsi_off,1)
         call bessi_init_state(bsi_off,c)
 
