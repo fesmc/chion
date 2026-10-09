@@ -294,9 +294,9 @@
 !   shortwave resolution.
 !
 ! Ntot
-!   The snow-depth cap uses a hard-coded reference layer count of 15
-!   REGARDLESS of Ntot (docs/PLAN.md section 5 item 11). Changing Ntot
-!   therefore does not move the depth cap.
+!   The snow-depth cap is a fixed 22.5 m of solid depth
+!   (BESSI_REFERENCE_SNOW_DEPTH_M, Chion.jl 03bb445), independent of Ntot
+!   and mass_split; changing Ntot does not move it.
 !
 ! ice_substrate_layers, ice_substrate_top_thickness
 !   Chion.jl 03bb445: fixed layers of glacier ice (0.05, 0.10, 0.20, 0.40,
