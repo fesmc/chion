@@ -58,7 +58,13 @@ program test_surface
 
     nfail = 0
 
+    ! BESSI's original surface scheme, which the closed forms below are
+    ! written for (the defaults are Chion.jl's calibrated semix set since
+    ! C11); the blocks for the other schemes switch explicitly.
     call chion_const_init(c)
+    c%seb_scheme            = CHION_SEB_BESSI
+    c%turbulent_flux_scheme = CHION_TURB_BESSI
+    c%longwave_scheme       = CHION_LONGWAVE_GRAYBODY
 
     write(*,"(a)") "=========================================================="
     write(*,"(a)") " chion WP5 acceptance test: snow_surface_fluxes"

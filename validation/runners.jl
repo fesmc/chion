@@ -20,7 +20,15 @@ on the harness' one-year axis starting 1 January 2000. They feed the
 cloud-proxy longwave's TOA and the diurnal substeps.
 
 DIURNAL SUBSTEPPING IS OFF in every configuration but its own, which runs
-Chion.jl's calibrated 03bb445 set on both sides (DIURNAL_CALIBRATED).
+Chion.jl's calibrated 03bb445 set on both sides (DIURNAL_CALIBRATED), and the
+defaults configuration.
+
+PINS. Since C11 both models default to Chion.jl's calibrated set (03bb445).
+Every configuration but the defaults one starts instead from BESSI's original
+surface physics, pinned on both sides (`BESSI_SCHEME_PINS` for Chion.jl,
+`CHION_CONST_PINS` and `CHION_BESSI_PINS` for chion), and switches one option
+on, so each option is gated on its own. The defaults configuration
+(`defaults = true`) pins nothing: each model runs its own defaults.
 """
 
 using NCDatasets
@@ -59,12 +67,16 @@ make_cmd(target::AbstractString, precision::Symbol; legacy::Bool=false) =
 
 """
     run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra,
-              legacy, pdd_method, name_hice, name_pdds, bessi_extra)
+              legacy, pdd_method, name_hice, name_pdds, consts, bessi, diurnal,
+              defaults)
 
 Write a namelist and run `chion_grid.x` in `workdir`. Returns the output path.
-`bessi_extra` adds lines to the `&bessi` group (a second group of the same name
-in `nml_extra` would not be read); `diurnal` sets its diurnal parameters
-(`diurnal_nml`, default off).
+`consts` sets `&chion_const` and `bessi` `&bessi` entries over the pins
+(`CHION_CONST_PINS`, `CHION_BESSI_PINS`), `diurnal` the diurnal parameters
+(`diurnal_nml`, default off); a second group of the same name in `nml_extra`
+would not be read. With `defaults = true` nothing is pinned: the two groups
+carry only `consts` and `bessi`, everything else comes from
+`input/chion_defaults.nml`.
 The namelist and log are named after `outfile`, so runs sharing a `workdir`
 keep their own.
 
@@ -78,13 +90,26 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
                    dt::Float64=-1.0, nml_extra::AbstractString="",
                    legacy::Bool=false, pdd_method::AbstractString="simple",
                    name_hice::AbstractString="None", name_pdds::AbstractString="None",
-                   rh_default::Float64=0.0, bessi_extra::AbstractString="",
-                   diurnal::NamedTuple=DIURNAL_OFF)
+                   rh_default::Float64=0.0, consts::NamedTuple=(;),
+                   bessi::NamedTuple=(;), diurnal::NamedTuple=DIURNAL_OFF,
+                   defaults::Bool=false)
     mkpath(workdir)
     link = joinpath(workdir, "input")
     islink(link) || ispath(link) || symlink(joinpath(CHION_ROOT, "input"), link)
 
     tag = splitext(basename(outfile))[1]
+    bessi_group = defaults ? nml_lines(bessi) : """
+    Ntot                = 15
+    mass_max            = 500.0
+    mass_split          = 300.0
+    mass_min            = 100.0
+    density_init        = 300.0
+    temperature_init    = 273.0
+$(diurnal_nml(diurnal))
+$(nml_lines(merge(CHION_BESSI_PINS, bessi)))"""
+    const_entries = defaults ? consts : merge(CHION_CONST_PINS, consts)
+    const_group = isempty(const_entries) ? "" :
+                  "&chion_const\n$(nml_lines(const_entries))\n/\n"
     nml = joinpath(workdir, "$(tag).nml")
     open(nml, "w") do io
         print(io, """
@@ -122,16 +147,9 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
 /
 
 &bessi
-    Ntot                = 15
-    mass_max            = 500.0
-    mass_split          = 300.0
-    mass_min            = 100.0
-    density_init        = 300.0
-    temperature_init    = 273.0
-$(diurnal_nml(diurnal))
-$(bessi_extra)
+$(bessi_group)
 /
-
+$(const_group)
 &pdd
     pdd_method          = "$(pdd_method)"
     ddf_snow            = 3.0
@@ -169,6 +187,15 @@ const DIURNAL_CALIBRATED = (substeps=true, threshold=0.0, max_substeps=8,
 
 fortran_logical(b::Bool) = b ? ".TRUE." : ".FALSE."
 
+"""A namelist value: strings quoted, logicals Fortran, tuples comma-separated."""
+nml_value(v::AbstractString) = "\"$(v)\""
+nml_value(v::Bool) = fortran_logical(v)
+nml_value(v::Real) = string(v)
+nml_value(v::Tuple) = join(map(nml_value, v), ", ")
+
+"""The entries `nt` as namelist lines, one per key."""
+nml_lines(nt::NamedTuple) = join(("    $(k) = $(nml_value(v))" for (k, v) in pairs(nt)), "\n")
+
 diurnal_nml(d::NamedTuple) = """
     diurnal_shortwave_substeps            = $(fortran_logical(d.substeps))
     diurnal_shortwave_threshold           = $(d.threshold)
@@ -203,14 +230,16 @@ dev_nils and chion to 2 d. `humidity = true` reads the forcing's RHZ and PS
 `near_surface` the fine-layer thicknesses [m] (pinned to Inf, no limit).
 `diurnal` sets the diurnal substepping (`DIURNAL_OFF` by default, see
 `diurnal_kwargs`), and `overrides` replaces any other `BESSIModel` keyword
-last, e.g. `(longwave_scheme=:cloud_proxy,)`.
+last, e.g. `(longwave_scheme=:cloud_proxy,)`. With `defaults = true` the model
+is `BESSIModel(grid; overrides...)`: Chion.jl's own defaults, nothing pinned.
 """
 function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
                          workdir::AbstractString, ntot::Int=15, years::Int=1,
                          albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS,
                          humidity::Bool=false, ice_substrate_layers::Int=0,
                          near_surface::Union{Nothing,NTuple{4,Float64}}=nothing,
-                         diurnal::NamedTuple=DIURNAL_OFF, overrides::NamedTuple=(;))
+                         diurnal::NamedTuple=DIURNAL_OFF, overrides::NamedTuple=(;),
+                         defaults::Bool=false)
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -232,20 +261,22 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
         wind_default=5.0,
     )
 
-    # Albedo constants pinned to chion's defaults: Chion.jl's have moved
-    # (alpha_ice 0.3 -> 0.4 -> 0.3 -> 0.4 on main 9ec6cc7, alpha_wet
-    # 0.70 -> 0.60 on dev_nils -> 0.70 on main).
+    # Albedo constants pinned on both sides (CHION_CONST_PINS): Chion.jl's
+    # have moved (alpha_ice 0.3 -> 0.4 -> 0.3 -> 0.4 on main 9ec6cc7,
+    # alpha_wet 0.70 -> 0.60 on dev_nils -> 0.70 on main); 0.3 keeps the
+    # single-option configurations on BESSI's original value.
     aging = albedo === :aging ? AGING_PARAMS : (;)
     pins = ice_substrate_layers == 0 ? BESSI_SCHEME_PINS :
            merge(BESSI_SCHEME_PINS, (; ice_substrate_layers))
     near_surface === nothing ||
         (pins = merge(pins, (; near_surface_layer_max_thicknesses_m=near_surface)))
     settings = merge(pins, diurnal_kwargs(diurnal), overrides)
-    model = BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
-                       alpha_ice=0.3, alpha_wet=0.70, aging..., settings...,
-                       densification=:bessi, fresh_snow_density=:constant,
-                       mass_max=500.0, mass_split=300.0, mass_min=100.0,
-                       density_init=300.0, temperature_init=273.0)
+    model = defaults ? BESSIModel(loaded.grid; overrides...) :
+        BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
+                   alpha_ice=0.3, alpha_wet=0.70, aging..., settings...,
+                   densification=:bessi, fresh_snow_density=:constant,
+                   mass_max=500.0, mass_split=300.0, mass_min=100.0,
+                   density_init=300.0, temperature_init=273.0)
 
     sim = Simulation(model; forcing=loaded.forcing, years=years,
                      backend=:threads, write_netcdf=true,
@@ -267,13 +298,14 @@ ported by chion C7) and `seb_scheme` (longwave only), both pinned to `:bessi`;
 `refreezing_correction` (default 1, neutral; pinned so a default change
 upstream cannot slip in).
 
-main (9ec6cc7 = 03bb445) added, all on by default upstream and absent in chion
-(plan Stage C3-C5): `longwave_scheme` pinned to `:graybody` (no cloud proxy),
+main (9ec6cc7 = 03bb445) added, all on by default (in chion too since C11):
+`longwave_scheme` pinned to `:graybody` (no cloud proxy),
 `ice_substrate_layers = 0` (no thermal ice substrate) and
 `near_surface_layer_max_thicknesses_m = Inf` (no fine near-surface layers).
 Diurnal substepping and the temperature cycle, also on by default at
 9ec6cc7, are switched off in `run_julia_bessi` for every reference. The Robin
-surface boundary of 03bb445 has no switch (plan C2).
+surface boundary of 03bb445 has no switch (plan C2). chion's side of the same
+pins: `CHION_CONST_PINS`, `CHION_BESSI_PINS`.
 """
 const BESSI_SCHEME_PINS = let pc = fieldnames(Chion.SnowpackPhysicalConstants),
                               bp = fieldnames(Chion.BESSIParameters)
@@ -301,24 +333,25 @@ function reference_id()
 end
 
 """
+chion's side of `BESSI_SCHEME_PINS` and of `run_julia_bessi`'s albedo pins:
+BESSI's original longwave and turbulence, graybody downwelling longwave and
+`alpha_ice = 0.3` (`&chion_const`), no ice substrate and no fine near-surface
+layers (`&bessi`). Written by `run_chion` unless `defaults = true`; a
+configuration's `consts` / `bessi` entries replace them.
+"""
+const CHION_CONST_PINS = (seb_scheme="bessi", turbulent_flux_scheme="bessi",
+                          longwave_scheme="graybody", alpha_ice=0.3, alpha_wet=0.70)
+const CHION_BESSI_PINS = (ice_substrate_layers=0,
+                          near_surface_layer_max_thicknesses=(0.0, 0.0, 0.0, 0.0))
+
+"""
 Aging-albedo timescales, set explicitly on both sides: chion's `&chion_const`
-(via `aging_nml`) and Chion.jl's `BESSIModel` keywords. chion's defaults.
+(via `AGING_CONSTS`) and Chion.jl's `BESSIModel` keywords. chion's defaults.
 """
 const AGING_PARAMS = (aging_cold_timescale_days=20.0, aging_melting_timescale_days=2.0)
 
-"""
-A `&chion_const` namelist group setting `kwargs` (strings quoted), for the
-configurations that switch one of chion's constants or scheme flags.
-"""
-const_nml(; kwargs...) =
-    "&chion_const\n" *
-    join(("    $(k) = " * (v isa AbstractString ? "\"$(v)\"" : string(v)) for (k, v) in pairs(kwargs)),
-         "\n") * "\n/\n"
-
-"""The `&chion_const` group selecting the aging scheme with `AGING_PARAMS`."""
-aging_nml(p=AGING_PARAMS) =
-    "&chion_const\n    albedo_scheme = \"aging\"\n" *
-    join(("    $(k) = $(v)" for (k, v) in pairs(p)), "\n") * "\n/\n"
+"""chion's `&chion_const` entries selecting the aging scheme with `AGING_PARAMS`."""
+const AGING_CONSTS = (albedo_scheme="aging", AGING_PARAMS...)
 
 """
 Run Chion.jl's PDD. The explicit var list keeps it in per-step output mode.

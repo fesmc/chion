@@ -214,7 +214,7 @@ function run_bessi_aging(fbessi::AbstractString)
                          vars=BESSI_AGING_VARS)
     ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
                    outfile="chion_bessi_aging_dp_legacy.nc", workdir=WORKDIR,
-                   model="bessi", dt_out=1.0, dt=1.0, nml_extra=aging_nml())
+                   model="bessi", dt_out=1.0, dt=1.0, consts=AGING_CONSTS)
     d = compare_files(ch, jl, BESSI_AGING_VARS; eps_wp=eps_of(:dp))
     report(d, "BESSI port fidelity, albedo = aging: chion dp+legacy vs Chion.jl")
     nfail = gate(d, "BESSI port fidelity (albedo = aging)")
@@ -316,7 +316,7 @@ function run_bessi_substrate(nstep::Int)
     ch = run_chion(; precision=:dp, legacy=true, forcing=fs,
                    outfile="chion_bessi_ice_dp_legacy.nc", workdir=WORKDIR,
                    model="bessi", dt_out=1.0, dt=1.0, name_hice="HI",
-                   bessi_extra="    ice_substrate_layers = $(ICE_SUBSTRATE_LAYERS)")
+                   bessi=(ice_substrate_layers=ICE_SUBSTRATE_LAYERS,))
     d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
     report(d, "BESSI port fidelity, ice substrate: chion dp+legacy vs Chion.jl")
     nfail = gate(d, "BESSI port fidelity (ice substrate, $(ICE_SUBSTRATE_LAYERS) layers)")
@@ -363,8 +363,8 @@ Fine near-surface layer thicknesses [m] of the fine-layer configurations
 """
 const NEAR_SURFACE_THICKNESSES = (0.02, 0.05, 0.10, 0.30)
 
-"""chion's `&bessi` line for `NEAR_SURFACE_THICKNESSES`."""
-fine_nml() = "    near_surface_layer_max_thicknesses = " * join(NEAR_SURFACE_THICKNESSES, ", ")
+"""chion's `&bessi` entry for `NEAR_SURFACE_THICKNESSES`."""
+const FINE_BESSI = (near_surface_layer_max_thicknesses=NEAR_SURFACE_THICKNESSES,)
 
 """
 BESSI with fine near-surface layers (Chion.jl 03bb445, plan C4): the top four
@@ -382,7 +382,7 @@ function run_bessi_fine(fbessi::AbstractString)
                          ntot=15, years=1, near_surface=NEAR_SURFACE_THICKNESSES)
     ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
                    outfile="chion_bessi_fine_dp_legacy.nc", workdir=WORKDIR,
-                   model="bessi", dt_out=1.0, dt=1.0, bessi_extra=fine_nml())
+                   model="bessi", dt_out=1.0, dt=1.0, bessi=FINE_BESSI)
     d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
     report(d, "BESSI port fidelity, fine near-surface layers: chion dp+legacy vs Chion.jl")
     nfail = gate(d, "BESSI port fidelity (fine near-surface layers)")
@@ -448,7 +448,7 @@ function run_bessi_fine_substrate(nstep::Int)
     ch = run_chion(; precision=:dp, legacy=true, forcing=fs,
                    outfile="chion_bessi_fine_ice_dp_legacy.nc", workdir=WORKDIR,
                    model="bessi", dt_out=1.0, dt=1.0, name_hice="HI",
-                   bessi_extra="    ice_substrate_layers = $(ICE_SUBSTRATE_LAYERS)\n" * fine_nml())
+                   bessi=(ice_substrate_layers=ICE_SUBSTRATE_LAYERS, FINE_BESSI...))
     d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
     report(d, "BESSI port fidelity, fine layers + ice substrate: chion dp+legacy vs Chion.jl")
     return gate(d, "BESSI port fidelity (fine near-surface layers + ice substrate)")
@@ -471,7 +471,7 @@ function run_bessi_cloud_proxy(fbessi::AbstractString, ch_graybody::AbstractStri
     ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
                    outfile="chion_bessi_lwcp_dp_legacy.nc", workdir=WORKDIR,
                    model="bessi", dt_out=1.0, dt=1.0,
-                   nml_extra=const_nml(longwave_scheme="cloud_proxy"))
+                   consts=(longwave_scheme="cloud_proxy",))
     d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
     report(d, "BESSI port fidelity, cloud-proxy longwave: chion dp+legacy vs Chion.jl")
     nfail = gate(d, "BESSI port fidelity (cloud-proxy longwave)")
@@ -515,7 +515,7 @@ function run_bessi_seb_semix(fbessi::AbstractString, ch_bessi::AbstractString)
                          ntot=15, years=1, overrides=(seb_scheme=:semix,))
     ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
                    outfile="chion_bessi_seb_semix_dp_legacy.nc", workdir=WORKDIR,
-                   model="bessi", dt_out=1.0, dt=1.0, nml_extra=const_nml(seb_scheme="semix"))
+                   model="bessi", dt_out=1.0, dt=1.0, consts=(seb_scheme="semix",))
     d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
     report(d, "BESSI port fidelity, seb_scheme = semix, turbulence bessi: chion dp+legacy vs Chion.jl")
     nfail = gate(d, "BESSI port fidelity (seb_scheme = semix, turbulent_flux_scheme = bessi)")
@@ -546,8 +546,8 @@ function run_bessi_turb_semix(nstep::Int; substrate::Bool=false)
     chion_run(turb, out) = run_chion(; precision=:dp, legacy=true, forcing=ft,
         outfile=out, workdir=WORKDIR, model="bessi", dt_out=1.0, dt=1.0,
         rh_default=RH_HUMID, name_hice=substrate ? "HI" : "None",
-        bessi_extra=substrate ? "    ice_substrate_layers = $(ICE_SUBSTRATE_LAYERS)" : "",
-        nml_extra=const_nml(seb_scheme="semix", turbulent_flux_scheme=turb))
+        bessi=substrate ? (ice_substrate_layers=ICE_SUBSTRATE_LAYERS,) : (;),
+        consts=(seb_scheme="semix", turbulent_flux_scheme=turb))
     ch = chion_run("semix", "chion_bessi_$(tag)_dp_legacy.nc")
     ch_ref = chion_run("bessi", "chion_bessi_$(tag)_ref_dp_legacy.nc")
     label = "seb_scheme = turbulent_flux_scheme = semix, humidity on" *
@@ -608,6 +608,61 @@ function run_bessi_diurnal(fbessi::AbstractString, ch_daily::AbstractString)
         ok || (nfail += 1)
     end
     return nfail + check_moved(ch, ch_daily, "diurnal substeps", "the daily run")
+end
+
+"""
+BESSI with each model's own defaults (plan C11): Chion.jl's `BESSIModel(grid)`
+and chion's `input/chion_defaults.nml`, nothing pinned (`defaults = true`), so
+the gate covers Chion.jl's calibrated 03bb445 set as one package: alpha_ice
+0.40, the cloud-proxy longwave, `seb_scheme = turbulent_flux_scheme = semix`
+(2.5, 40), the 5-layer ice substrate, the fine near-surface layers and 8
+diurnal substeps with a 1 K cycle. Forcing: the semix-turbulence substrate
+configuration's (default columns plus `bare_ice`, humidity on, HI = 1000 m),
+only what the physics needs: chion puts the substrate only under ice (D34),
+and the latent exchange needs a humidity. `legacy_chion` reverts chion's
+deviations on this path (C4b's split below the fine layers, D35, D38, D39).
+Gated like the default configuration (dp+legacy, every BESSI field). Coverage
+on chion's output: layer 1 holds its fine thickness, bare ice cools below T0
+over the substrate, and the result differs from the semix-turbulence substrate
+run `ch_turb_ice` (same forcing, the other options pinned).
+"""
+function run_bessi_defaults(nstep::Int)
+    scen = vcat(BESSI_SCENARIOS, [BARE_ICE_SCENARIO])
+    fd = joinpath(WORKDIR, "forcing_bessi_defaults.nc")
+    write_forcing(fd, scen; nstep=nstep, dt_days=1.0, relative_humidity=RH_HUMID,
+                  h_ice=1000.0)
+    jl = run_julia_bessi(; forcing=fd, outfile="julia_bessi_defaults.nc", workdir=WORKDIR,
+                         years=1, humidity=true, defaults=true)
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fd,
+                   outfile="chion_bessi_defaults_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0, rh_default=RH_HUMID,
+                   name_hice="HI", defaults=true)
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, Chion.jl defaults: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity (Chion.jl defaults, calibrated 03bb445 set)")
+
+    N, m, rho, ts = NCDataset(ch) do dc
+        (read_canonical(dc, "N")[1], read_canonical(dc, "mass")[1],
+         read_canonical(dc, "density")[1], read_canonical(dc, "Tsrf")[1])
+    end
+    names = [s.name for s in scen]
+    h1 = first(NEAR_SURFACE_THICKNESSES)
+    fine = [abs(m[t, 1, 1, i] / rho[t, 1, 1, i] - h1) <= 1e-9 * h1
+            for i in eachindex(names), t in 2:size(N, 1) if N[t, 1, i] >= 2]
+    i = findfirst(==("bare_ice"), names)
+    cold_bare = any(N[t, 1, i] == 0 && ts[t, 1, i] < 273.0 for t in 2:size(N, 1))
+    checks = [("defaults: layer 1 at its fine thickness on every layered step",
+               !isempty(fine) && all(fine)),
+              ("defaults: bare ice below T0 over the substrate", cold_bare)]
+    println()
+    println("--- coverage assertions (Chion.jl defaults) ---")
+    for (label, ok) in checks
+        println(ok ? "  ok   : $label" : "  FAIL : $label")
+        ok || (nfail += 1)
+    end
+    ch_turb_ice = joinpath(WORKDIR, "chion_bessi_turb_semix_ice_dp_legacy.nc")
+    return nfail + check_moved(ch, ch_turb_ice, "Chion.jl defaults",
+                               "the semix-turbulence substrate run")
 end
 
 """
@@ -737,6 +792,7 @@ function main()
     nfail += run_bessi_turb_semix(nstep)
     nfail += run_bessi_turb_semix(nstep; substrate=true)
     nfail += run_bessi_diurnal(fbessi, ch_legacy)
+    nfail += run_bessi_defaults(nstep)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

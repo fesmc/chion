@@ -532,8 +532,11 @@ contains
 
         write(*,"(a)") "--- 3. melting column goes bare, then recovers ---"
 
+        ! BESSI's mass-based layering (no fine near-surface layers, the
+        ! default since C11): one snowy step must give exactly one layer.
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
         call bessi_alloc(bsi,1)
         call bessi_init_state(bsi,c)
 
@@ -1033,8 +1036,12 @@ contains
 
         write(*,"(a)") "--- 4. column driven to Ntot capacity ---"
 
+        ! BESSI's mass-based layering: under legacy_chion the fine
+        ! near-surface layers (the default since C11) leave the layer below
+        ! them unsplit (D32), so the column would never reach Ntot.
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
         call bessi_alloc(bsi,1)
         call bessi_init_state(bsi,c)
 
@@ -1116,9 +1123,12 @@ contains
 
         write(*,"(a)") "--- 5. bare-ice branch skips percolation and refreezing ---"
 
+        ! No fine near-surface layers (the default since C11): their remesh
+        ! would fill the sliver surface layer from below.
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
         bsi%par%mass_min = 1.0e-12_wp
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
         call bessi_par_validate(bsi%par)
         call bessi_alloc(bsi,2)
         call bessi_init_state(bsi,c)
@@ -1225,6 +1235,7 @@ contains
         call bessi_par_init(bsi%par)
         bsi%par%mass_min = 1.0e-12_wp
         bsi%par%ice_substrate_layers = n_ice
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp   ! keep the sliver (test 5)
         call bessi_par_validate(bsi%par)
         call bessi_alloc(bsi,2)
         call bessi_init_state(bsi,c)

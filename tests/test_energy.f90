@@ -34,7 +34,7 @@ program test_energy
 
     use chion_defs,   only : wp, wp_acc, chion_const_class, chion_step_forcing_class, &
                              chion_const_init, CHION_SEB_BESSI, CHION_SEB_SEMIX, &
-                             CHION_TURB_BESSI, CHION_TURB_CLIMBERX
+                             CHION_TURB_BESSI, CHION_TURB_CLIMBERX, CHION_LONGWAVE_GRAYBODY
     use snow_energy
     use snow_seb_semix, only : semix_exchange_class, semix_flux_lin_class, &
                                semix_snow_depth, semix_turbulent_exchange, &
@@ -396,10 +396,14 @@ contains
         write(*,*)
         write(*,"(a)") "--- Energy conservation, non-melting ---"
 
+        ! A realistic, fully internal surface energy balance, BESSI's
+        ! (the defaults are Chion.jl's semix set since C11).
         call chion_const_init(c)
+        c%seb_scheme            = CHION_SEB_BESSI
+        c%turbulent_flux_scheme = CHION_TURB_BESSI
+        c%longwave_scheme       = CHION_LONGWAVE_GRAYBODY
         call quiet_forcing(forc)
 
-        ! A realistic, fully internal surface energy balance.
         forc%has_q_sh          = .FALSE.
         forc%has_q_lw_down     = .FALSE.
         forc%has_q_sw_net      = .FALSE.

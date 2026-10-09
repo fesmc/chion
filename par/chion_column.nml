@@ -74,8 +74,9 @@
     mass_split       = 300.0                ! [kg m-2] Mass left below after a split
     mass_min         = 100.0                ! [kg m-2] Merge trigger
 
-    ! Substepping is off. Enabling it changes the albedo scheme as well as
-    ! the shortwave resolution — see the notes in input/chion_defaults.nml.
+    ! Everything else is Chion.jl's calibrated default set: ice substrate,
+    ! fine near-surface layers, 8 diurnal substeps with a 1 K cycle (see the
+    ! notes in input/chion_defaults.nml).
 /
 
 &pdd

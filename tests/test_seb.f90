@@ -30,7 +30,7 @@ program test_seb
                              DEF_SEA_LEVEL_AIR_PRESSURE, &
                              CLIMBERX_QSAT_CLIMBERX, CLIMBERX_QSAT_BESSI, &
                              CHION_SEB_BESSI, CHION_SEB_SEMIX, &
-                             CHION_TURB_BESSI, CHION_TURB_CLIMBERX, &
+                             CHION_TURB_BESSI, CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                              SEMIX_SNOW_ALBEDO_WW, &
                              chion_seb_scheme_flag, chion_climberx_qsat_flag, &
                              chion_turbulent_flux_scheme_flag, CHION_TURB_SEMIX, &
@@ -69,9 +69,9 @@ program test_seb
     ! === Scheme flags ====================================================
     write(*,"(a)") "--- scheme flags ---"
 
-    call check("seb_scheme default is bessi", c%seb_scheme .eq. CHION_SEB_BESSI, nfail)
-    call check("turbulent_flux_scheme default is bessi", &
-               c%turbulent_flux_scheme .eq. CHION_TURB_BESSI, nfail)
+    call check("seb_scheme default is semix", c%seb_scheme .eq. CHION_SEB_SEMIX, nfail)
+    call check("turbulent_flux_scheme default is semix", &
+               c%turbulent_flux_scheme .eq. CHION_TURB_SEMIX, nfail)
     call check("climberx_qsat default is climberx", &
                c%climberx_qsat .eq. CLIMBERX_QSAT_CLIMBERX, nfail)
     call check("flag('bessi') = CHION_SEB_BESSI", &

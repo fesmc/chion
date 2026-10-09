@@ -328,7 +328,7 @@ contains
         write(*,*)
         write(*,"(a)") "--- (a') restart without ice substrate into ice_substrate_layers = 5 ---"
 
-        call write_par(par_a,"bessi")
+        call write_par(par_a,"bessi",n_ice=0)
         call chion_init(chn1,par_a,NCOL_TEST)
         call chion_init_state(chn1)
         do k = 1, NSTEP_1
