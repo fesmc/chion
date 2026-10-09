@@ -14,6 +14,15 @@ First run only:
 julia --project=validation -e 'using Pkg; Pkg.develop(path=joinpath(homedir(),"models","Chion.jl")); Pkg.instantiate()'
 ```
 
+The reference is whichever Chion.jl the active environment develops; select
+another without editing code by pointing `CHION_VALIDATION_PROJECT` at an
+environment that develops it (e.g. one per reference commit, each made as
+above with `Pkg.develop(path=<Chion.jl worktree>)`). The log's header prints the
+reference's path and commit. Options a newer reference adds with defaults that
+differ from chion's physics are pinned to chion's choice when present
+(`BESSI_SCHEME_PINS` in `runners.jl`: `turbulent_flux_scheme = seb_scheme =
+:bessi`, `refreezing_correction = 1` since dev_nils `27113b6`).
+
 Requires three chion builds, all with `fpsafe=1`:
 
 ```sh
@@ -125,6 +134,17 @@ step of every column. ITM agrees with smbpal to 1.1e-07 relative at sp and
 (`simple`) and 0.41 ulp (`pism`). ITM vs Chion.jl (dp+legacy, 1095 daily steps):
 worst 0.44 ulp (`Tsrf`). PDD mass closure: 2.3e-15 at dp, 3.8e-07 at
 sp.
+
+**Re-pointed to dev_nils `27113b6` (WP8), before WP9–WP11:** PDD (both methods)
+and ITM unchanged and green (≤0.44 ulp). BESSI fails in every
+temperature-driven field, both configurations, as expected from upstream's
+harmonic conductance, Calonne conductivity and phase-dependent latent heat:
+`temperature`, `Tsrf`, `density` and `bulk_density` from record 1; `mass_w`
+2.6e-02 relative, `liquid_water`, `refreezing` ~7e-03, `mass`, `mass_base`,
+`smb_ice`, `thickness`, `wet_mass` 1.5–2.7e-03, `runoff`/`melt` 6e-06–3e-05,
+`albedo` 1.4e-04 (`:dynamic` only; `:aging` stays 0.30 ulp). `N`,
+`snow_age_days`, `sublimation` and `latent_heat_flux_sum` agree exactly — the
+last two are identically zero, since humidity is off.
 
 Reported, not gated:
 
