@@ -152,15 +152,18 @@ $(nml_extra)
 end
 
 """
-    run_julia_bessi(; forcing, outfile, workdir, ntot)
+    run_julia_bessi(; forcing, outfile, workdir, ntot, albedo, vars)
 
 Run Chion.jl's BESSI on the same file. `netcdf_variables` is the explicit 18-var
 list: requesting `latent_heat_flux` would flip the run into monthly-aggregation
 mode (`_uses_monthly_output`), which writes one record per month instead of one
-per step and would not be comparable.
+per step and would not be comparable. With `albedo = :aging` the timescales are
+passed explicitly (`AGING_PARAMS`): 12407a3 defaults the melting one to 5 d,
+dev_nils and chion to 2 d.
 """
 function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
-                         workdir::AbstractString, ntot::Int=15, years::Int=1)
+                         workdir::AbstractString, ntot::Int=15, years::Int=1,
+                         albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS)
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -183,8 +186,9 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
 
     # Albedo constants pinned to chion's defaults: Chion.jl's have moved
     # (alpha_ice 0.3 -> 0.4 -> 0.3, alpha_wet 0.70 -> 0.60 on dev_nils).
-    model = BESSIModel(loaded.grid; Ntot=ntot, albedo=:dynamic,
-                       alpha_ice=0.3, alpha_wet=0.70,
+    aging = albedo === :aging ? AGING_PARAMS : (;)
+    model = BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
+                       alpha_ice=0.3, alpha_wet=0.70, aging...,
                        densification=:bessi, fresh_snow_density=:constant,
                        mass_max=500.0, mass_split=300.0, mass_min=100.0,
                        density_init=300.0, temperature_init=273.0,
@@ -193,11 +197,22 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
 
     sim = Simulation(model; forcing=loaded.forcing, years=years,
                      backend=:threads, write_netcdf=true,
-                     netcdf_variables=BESSI_VARS, netcdf_path=out,
+                     netcdf_variables=vars, netcdf_path=out,
                      name="wp16_bessi")
     run!(sim)
     return out
 end
+
+"""
+Aging-albedo timescales, set explicitly on both sides: chion's `&chion_const`
+(via `aging_nml`) and Chion.jl's `BESSIModel` keywords. chion's defaults.
+"""
+const AGING_PARAMS = (aging_cold_timescale_days=20.0, aging_melting_timescale_days=2.0)
+
+"""The `&chion_const` group selecting the aging scheme with `AGING_PARAMS`."""
+aging_nml(p=AGING_PARAMS) =
+    "&chion_const\n    albedo_scheme = \"aging\"\n" *
+    join(("    $(k) = $(v)" for (k, v) in pairs(p)), "\n") * "\n/\n"
 
 """
 Run Chion.jl's PDD. The explicit var list keeps it in per-step output mode.

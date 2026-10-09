@@ -23,7 +23,7 @@ module snow_bessi
     !   4  prescribed albedo, if any, applied BEFORE the bare-surface test
     !   5  no surface snow -> bare-ice ablation, accumulate diagnostics, RETURN
     !      (percolation and refreezing are skipped ENTIRELY -- trap, see below)
-    !   6  albedo update (prescribed | dynamic-or-constant)
+    !   6  albedo update (prescribed | semix | aging | dynamic-or-constant)
     !   7  HTESSEL only: snapshot mass_w(1:n) BEFORE the energy solve
     !   8  accumulation_rate -> densification
     !   9  latent-heat coefficients -> implicit energy solve
@@ -32,7 +32,7 @@ module snow_bessi
     !  12  percolation -> runoff
     !  13  HTESSEL only: liquid-water compaction, using the step-7 snapshot
     !  14  refreezing
-    !  15  final albedo fixup
+    !  15  final albedo fixup (and snow age)
     !
     ! ---------------------------------------------------------------------
     ! Traps honoured here (docs/PLAN.md section 5)
@@ -63,6 +63,7 @@ module snow_bessi
                            DEF_NTOT, DEF_MASS_MAX, DEF_MASS_SPLIT, DEF_MASS_MIN, &
                            DEF_DENSITY_INIT, DEF_TEMPERATURE_INIT, &
                            CHION_ALBEDO_PRESCRIBED, CHION_ALBEDO_SEMIX, &
+                           CHION_ALBEDO_AGING, &
                            CHION_DENSIFY_HTESSEL, &
                            chion_const_class, chion_step_forcing_class
 
@@ -70,7 +71,7 @@ module snow_bessi
     use snow_column_utils,  only : surface_has_snow, column_has_liquid_water
 
     use snow_accumulation,  only : apply_accumulation
-    use snow_albedo,        only : albedo_update
+    use snow_albedo,        only : albedo_update, albedo_update_aging
     use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration, &
                                    semix_daily_coszm
     use snow_densify,       only : densify_column, apply_htessel_liquid_water_compaction
@@ -143,6 +144,10 @@ module snow_bessi
         ! Instantaneous per-column scalars
         real(wp), allocatable :: t_srf(:)          ! (ncol) [K]
         real(wp), allocatable :: albedo(:)         ! (ncol) [1]
+
+        ! Time since the latest snowfall (albedo_scheme = "aging"); 0 on a
+        ! bare column and under every other scheme. Chion.jl snow_age_days.
+        real(wp), allocatable :: snow_age_days(:)  ! (ncol) [d]
 
         ! SEMIX albedo bookkeeping: column SWE last step and its seasonal peak.
         ! The drawdown (w_snow_max - w_snow) drives dust concentration.
@@ -337,6 +342,7 @@ contains
 
         allocate(bsi%now%t_srf(ncol))
         allocate(bsi%now%albedo(ncol))
+        allocate(bsi%now%snow_age_days(ncol))
         allocate(bsi%now%w_snow_old(ncol))
         allocate(bsi%now%w_snow_max(ncol))
 
@@ -372,6 +378,7 @@ contains
 
         if (allocated(bsi%now%t_srf))  deallocate(bsi%now%t_srf)
         if (allocated(bsi%now%albedo)) deallocate(bsi%now%albedo)
+        if (allocated(bsi%now%snow_age_days)) deallocate(bsi%now%snow_age_days)
         if (allocated(bsi%now%w_snow_old)) deallocate(bsi%now%w_snow_old)
         if (allocated(bsi%now%w_snow_max)) deallocate(bsi%now%w_snow_max)
 
@@ -425,6 +432,7 @@ contains
 
         bsi%now%t_srf  = c%T0
         bsi%now%albedo = c%alpha_dry
+        bsi%now%snow_age_days = 0.0_wp
         bsi%now%w_snow_old = 0.0_wp
         bsi%now%w_snow_max = 0.0_wp
 
@@ -484,6 +492,7 @@ contains
 
             bsi%now%t_srf(icol)  = c%T0
             bsi%now%albedo(icol) = c%alpha_dry
+            bsi%now%snow_age_days(icol) = 0.0_wp
             bsi%now%w_snow_old(icol) = 0.0_wp
             bsi%now%w_snow_max(icol) = 0.0_wp
 
@@ -566,6 +575,7 @@ contains
                   lhf_sum     => bsi%now%latent_heat_flux_sum(icol),&
                   t_srf       => bsi%now%t_srf(icol),               &
                   albedo      => bsi%now%albedo(icol),              &
+                  snow_age    => bsi%now%snow_age_days(icol),       &
                   w_snow_old  => bsi%now%w_snow_old(icol),          &
                   w_snow_max  => bsi%now%w_snow_max(icol),          &
                   par         => bsi%par)
@@ -631,6 +641,7 @@ contains
         if (.not. has_surface_snow) then
 
             if (.not. use_prescribed_albedo) albedo = alb_ice_use
+            snow_age = 0.0_wp
 
             bare_ice_fluxes = bare_ice_ablation_mass(c,forc,dt_seconds)
 
@@ -682,6 +693,9 @@ contains
                                       coszm,cloud,z_sur_std,dust_con,albedo)
 
             w_snow_old = w_snow
+        else if (c%albedo_scheme .eq. CHION_ALBEDO_AGING) then
+            call albedo_update_aging(mass,temperature,n,c,forc%snowfall_rate,forc%dt_days, &
+                                     albedo,snow_age)
         else
             call albedo_update(mass,mass_w,density,temperature,n,c,forc%dt_days,albedo)
         end if
@@ -814,12 +828,16 @@ contains
         ! === Step 15: final albedo fixup =====================================
         ! The column may have gone bare during melt or sublimation, in which
         ! case the albedo diagnosed in step 6 no longer describes the surface.
+        ! A bare column carries zero snow age; Chion.jl resets it only under
+        ! the aging scheme, the only one that advances it, so this is the same.
 
         if (use_prescribed_albedo) then
             albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
         else if (.not. surface_has_snow(mass,n)) then
             albedo = alb_ice_use
         end if
+
+        if (.not. surface_has_snow(mass,n)) snow_age = 0.0_wp
 
         end associate
 

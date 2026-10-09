@@ -38,6 +38,9 @@ const BESSI_VARS = ["thickness", "wet_mass", "bulk_density", "liquid_water",
                     "sublimation", "latent_heat_flux_sum", "Tsrf", "albedo",
                     "N", "mass", "mass_w", "density", "temperature"]
 
+"""BESSI with `albedo = :aging` (Chion.jl 6d06af6) also writes the snow age."""
+const BESSI_AGING_VARS = vcat(BESSI_VARS, ["snow_age_days"])
+
 """The 4 variables both write for PDD."""
 const PDD_VARS = ["snowpack_swe", "smb_ice", "runoff", "pdd_sum"]
 

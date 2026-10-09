@@ -36,6 +36,7 @@ appended by the writer and is always the unlimited dimension.
 | 18 | mass_w               | layer, column | kg m-2      | Layer liquid-water mass                              |
 | 19 | density              | layer, column | kg m-3      | Layer density                                        |
 | 20 | temperature          | layer, column | K           | Layer temperature                                    |
+| 21 | snow_age_days        | column        | day         | Time since the latest snowfall event                 |
 
 Notes.
 

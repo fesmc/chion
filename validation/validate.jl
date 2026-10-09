@@ -86,7 +86,7 @@ loosen it further (PLAN.md WP16).
 """
 const TOL_ULP_DP = 4.0
 
-const GATED_VARS = vcat(BESSI_VARS, PDD_VARS, ITM_VARS)
+const GATED_VARS = vcat(BESSI_AGING_VARS, PDD_VARS, ITM_VARS)
 
 function gate(diffs::Vector{FieldDiff}, label::AbstractString)
     nfail = 0
@@ -203,6 +203,42 @@ function check_itm_coverage(chion_path::AbstractString, forcing_path::AbstractSt
 end
 
 """
+BESSI with `albedo = :aging` (Chion.jl 6d06af6), gated like the default
+configuration: dp+legacy, same forcing, plus the `snow_age_days` output. The
+coverage check asserts that the snow actually aged, under both timescales.
+"""
+function run_bessi_aging(fbessi::AbstractString)
+    jl = run_julia_bessi(; forcing=fbessi, outfile="julia_bessi_aging.nc",
+                         workdir=WORKDIR, ntot=15, years=1, albedo=:aging,
+                         vars=BESSI_AGING_VARS)
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
+                   outfile="chion_bessi_aging_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0, nml_extra=aging_nml())
+    d = compare_files(ch, jl, BESSI_AGING_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, albedo = aging: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity (albedo = aging)")
+
+    age, alb, ts = NCDataset(ch) do dc
+        (read_canonical(dc, "snow_age_days")[1], read_canonical(dc, "albedo")[1],
+         read_canonical(dc, "Tsrf")[1])
+    end
+    aged = [a > 0 for a in skipmissing(age)]
+    melting_aged = [a > 0 && t > 273.149 for (a, t) in zip(age, ts)
+                    if !ismissing(a) && !ismissing(t)]
+    checks = [("aging: snow ages (snow_age_days > 0)", any(aged)),
+              ("aging: albedo relaxes below alpha_dry",
+               any(a -> 0.70 < a < 0.81, skipmissing(alb))),
+              ("aging: snow ages on a melting surface (tau_melt)", any(melting_aged))]
+    println()
+    println("--- coverage assertions (albedo = aging) ---")
+    for (label, ok) in checks
+        println(ok ? "  ok   : $label" : "  FAIL : $label")
+        ok || (nfail += 1)
+    end
+    return nfail
+end
+
+"""
 ITM against Chion.jl's ITMModel (ported from chion, 29eb867): dp+legacy, so
 chion's tsrf uses the daily melt_net as Chion.jl does (D27), and all eight
 written fields are gated.
@@ -299,6 +335,8 @@ function main()
     cov = coverage(ch_legacy, [s.name for s in BESSI_SCENARIOS])
     report_coverage(cov)
     nfail += check_coverage(cov)
+
+    nfail += run_bessi_aging(fbessi)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

@@ -347,6 +347,8 @@ contains
                 call chion_write_col(filename,v,chn%bsi%now%t_srf,chn%grd,n,ncid)
             case("albedo")
                 call chion_write_col(filename,v,chn%bsi%now%albedo,chn%grd,n,ncid)
+            case("snow_age_days")
+                call chion_write_col(filename,v,chn%bsi%now%snow_age_days,chn%grd,n,ncid)
             case("N")
                 ! Written as a float so that unmapped grid cells can carry MV.
                 ! The restart writes n_lay as an integer.
@@ -735,6 +737,7 @@ contains
                 ! Instantaneous per-column scalars.
                 call chion_restart_write_col(filename,"t_srf", chn%bsi%now%t_srf, "K",ncid)
                 call chion_restart_write_col(filename,"albedo",chn%bsi%now%albedo,"1",ncid)
+                call chion_restart_write_col(filename,"snow_age_days",chn%bsi%now%snow_age_days,"day",ncid)
 
                 ! Diagnostics. Not prognostic -- summarize_domain_state
                 ! recomputes them -- but bessi_reset_columns deliberately does
@@ -906,6 +909,14 @@ contains
 
                 call chion_restart_read_col(filename,"t_srf", chn%bsi%now%t_srf, nt,ncid)
                 call chion_restart_read_col(filename,"albedo",chn%bsi%now%albedo,nt,ncid)
+
+                ! Absent from restarts written before the aging scheme: start
+                ! the snow age at 0, as a cold start does.
+                if (nc_exists_var(filename,"snow_age_days")) then
+                    call chion_restart_read_col(filename,"snow_age_days",chn%bsi%now%snow_age_days,nt,ncid)
+                else
+                    chn%bsi%now%snow_age_days = 0.0_wp
+                end if
 
                 call chion_restart_read_col(filename,"thickness",   chn%bsi%now%thickness,   nt,ncid)
                 call chion_restart_read_col(filename,"wet_mass",    chn%bsi%now%wet_mass,    nt,ncid)

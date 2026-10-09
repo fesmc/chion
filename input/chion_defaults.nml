@@ -121,7 +121,9 @@
     alpha_wet                 = 0.70        ! [1] Wet snow albedo (lower bound)
     alpha_ice                 = 0.30        ! [1] Bare ice albedo
     max_lwc_albedo            = 0.10        ! [1] LWC at which the albedo reaches alpha_wet
-    albedo_scheme             = "dynamic"   ! "constant" | "dynamic" | "prescribed" | "semix" (aliases: "bessi", "legacy")
+    albedo_scheme             = "dynamic"   ! "constant" | "dynamic" | "prescribed" | "semix" | "aging" (aliases: "bessi", "legacy")
+    aging_cold_timescale_days    = 20.0     ! [d] Aging e-folding time, surface below T0 (albedo_scheme = "aging")
+    aging_melting_timescale_days = 2.0      ! [d] Aging e-folding time, surface at T0
 
     ! ## SEMIX spectral albedo (albedo_scheme = "semix"; CLIMBER-X) ##
     frac_vu                   = 0.45        ! [1]  Visible+UV fraction of incoming solar
@@ -165,6 +167,13 @@
 !   Takes the DYNAMIC code path inside the albedo routines and is then
 !   overridden by the caller. If forc%has_prescribed_albedo is false it
 !   silently behaves as "dynamic" (docs/PLAN.md section 5 item 9).
+!
+! albedo_scheme = "aging"
+!   Snowfall-age scheme (Chion.jl 6d06af6): snowfall resets the albedo
+!   to alpha_dry and snow_age_days to 0; otherwise
+!   alpha = alpha_wet + (alpha - alpha_wet)*exp(-dt/tau), tau = the
+!   melting timescale when the surface is at T0, else the cold one.
+!   Requires 0 <= alpha_wet <= alpha_dry <= 1.
 !
 ! low_density_densification
 !   Selects only the rho < 550 kg m-3 branch. The mid and high branches

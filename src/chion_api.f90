@@ -65,7 +65,7 @@ module chion_api
     use chion_defs, only : wp, wp_acc, io_unit_err, MV, &
                            chion_const_class, chion_param_class, &
                            chion_grid_class, chion_forcing_class, &
-                           chion_const_init, chion_const_print, &
+                           chion_const_init, chion_const_print, chion_const_validate, &
                            chion_forcing_alloc, chion_forcing_dealloc, &
                            chion_grid_init, chion_grid_dealloc, &
                            chion_grid_set_active, &
@@ -113,7 +113,7 @@ module chion_api
     ! Allowed values, in one place so the error messages and the validation
     ! can never disagree. Aliases are included because chion_defs' *_flag
     ! functions accept them (docs/porting_notes.md D4).
-    character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|bessi|legacy"
+    character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|aging|bessi|legacy"
     character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "ww|dang|warren|warren_wiscombe"
     character(len=*), parameter :: CHION_SEB_CHOICES     = "bessi|semix"
     character(len=*), parameter :: CHION_SEMIX_QSAT_CHOICES = "semix|bessi|climberx|chion"
@@ -1068,6 +1068,8 @@ contains
         call nml_read(filename,group,"alpha_ice",                c%alpha_ice,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"max_lwc_albedo",           c%max_lwc_albedo,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"albedo_scheme",            albedo_scheme,             init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"aging_cold_timescale_days",   c%aging_cold_timescale_days,   init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"aging_melting_timescale_days",c%aging_melting_timescale_days,init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"frac_vu",                  c%frac_vu,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"alb_snow_vis_new",         c%alb_snow_vis_new,        init=init_pars,defaults_file=def_file,defaults_group=def_const)
@@ -1111,6 +1113,8 @@ contains
         c%semix_qsat                = chion_semix_qsat_flag(semix_qsat)
         c%fresh_snow_density_scheme = chion_fresh_snow_density_scheme_flag(fresh_snow_density_scheme)
         c%low_density_densification = chion_densify_scheme_flag(low_density_densification)
+
+        call chion_const_validate(c)
 
         return
 

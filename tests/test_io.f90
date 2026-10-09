@@ -80,6 +80,7 @@ program test_io
             write(*,"(a)") "=========================================================="
 
             call test_restart_roundtrip("bessi",nfail)
+            call test_restart_roundtrip("bessi",nfail,albedo_scheme="aging")
             call test_restart_roundtrip("pdd",  nfail)
             call test_restart_roundtrip("itm",  nfail)
 
@@ -111,12 +112,13 @@ contains
     ! (a) Restart round-trip
     ! =====================================================================
 
-    subroutine test_restart_roundtrip(model,nfail)
+    subroutine test_restart_roundtrip(model,nfail,albedo_scheme)
 
         implicit none
 
         character(len=*), intent(IN)    :: model
         integer,          intent(INOUT) :: nfail
+        character(len=*), optional, intent(IN) :: albedo_scheme
 
         ! Local variables
         type(chion_class) :: chn1, chn2
@@ -125,9 +127,14 @@ contains
         integer  :: k
 
         write(*,*)
-        write(*,"(a)") "--- (a) restart round-trip, model = "//trim(model)//" ---"
-
-        call write_par(par_a,model)
+        if (present(albedo_scheme)) then
+            write(*,"(a)") "--- (a) restart round-trip, model = "//trim(model)// &
+                           ", albedo_scheme = "//trim(albedo_scheme)//" ---"
+            call write_par(par_a,model,albedo_scheme=albedo_scheme)
+        else
+            write(*,"(a)") "--- (a) restart round-trip, model = "//trim(model)//" ---"
+            call write_par(par_a,model)
+        end if
 
         ! --- Reference run, part 1 ------------------------------------
         call chion_init(chn1,par_a,NCOL_TEST)
@@ -159,6 +166,14 @@ contains
         call check("n_active recovered",chn2%grd%n_active .eq. chn1%grd%n_active,nfail)
 
         call compare_state("after restart read",model,chn1,chn2,nfail)
+
+        ! The aging run must carry a nonzero snow age through the restart, or
+        ! the round trip of snow_age_days proves nothing.
+        if (present(albedo_scheme)) then
+            if (trim(albedo_scheme) .eq. "aging") &
+                call check("aging: snow_age_days > 0 somewhere at the restart", &
+                           maxval(chn1%bsi%now%snow_age_days) .gt. 0.0_wp,nfail)
+        end if
 
         ! --- (c) chion_get_smb immediately after the restart ----------
         call chion_get_smb(chn2,smb2)
@@ -220,6 +235,7 @@ contains
                 call check_eq_acc("latent_heat_flux_sum",b%bsi%now%latent_heat_flux_sum,a%bsi%now%latent_heat_flux_sum,nfail)
                 call check_eq_r1 ("t_srf",               b%bsi%now%t_srf,               a%bsi%now%t_srf,               nfail)
                 call check_eq_r1 ("albedo",              b%bsi%now%albedo,              a%bsi%now%albedo,              nfail)
+                call check_eq_r1 ("snow_age_days",       b%bsi%now%snow_age_days,       a%bsi%now%snow_age_days,       nfail)
                 call check_eq_r1 ("thickness",           b%bsi%now%thickness,           a%bsi%now%thickness,           nfail)
                 call check_eq_r1 ("wet_mass",            b%bsi%now%wet_mass,            a%bsi%now%wet_mass,            nfail)
                 call check_eq_r1 ("bulk_density",        b%bsi%now%bulk_density,        a%bsi%now%bulk_density,        nfail)
@@ -431,6 +447,7 @@ contains
                 call check_var("mass_w",              "kg m-2",    "Layer liquid-water mass",              nfail)
                 call check_var("density",             "kg m-3",    "Layer density",                        nfail)
                 call check_var("temperature",         "K",         "Layer temperature",                    nfail)
+                call check_var("snow_age_days",       "day",       "Time since the latest snowfall event", nfail)
 
                 ! Shape of a layered variable: (layer,column,time).
                 call check_shape3("mass",chn%bsi%now%Ntot,NCOL_TEST,4,nfail)
@@ -674,7 +691,7 @@ contains
     ! Fixtures
     ! =====================================================================
 
-    subroutine write_par(filename,model,Ntot)
+    subroutine write_par(filename,model,Ntot,albedo_scheme)
         ! A minimal, SPARSE parameter file. Everything not named here comes
         ! from input/chion_defaults.nml, which is exactly the property WP13
         ! built (chion_api.f90 header), so the test does not have to restate
@@ -685,6 +702,7 @@ contains
         character(len=*),  intent(IN) :: filename
         character(len=*),  intent(IN) :: model
         integer, optional, intent(IN) :: Ntot
+        character(len=*), optional, intent(IN) :: albedo_scheme
 
         ! Local variables
         integer :: io
@@ -702,6 +720,12 @@ contains
             write(io,"(a)")       "&bessi"
             write(io,"(a,i0)")    "    Ntot         = ", Ntot
             write(io,"(a)")       "/"
+        end if
+
+        if (present(albedo_scheme)) then
+            write(io,"(a)") "&chion_const"
+            write(io,"(a)") "    albedo_scheme    = """//trim(albedo_scheme)//""""
+            write(io,"(a)") "/"
         end if
 
         close(io)

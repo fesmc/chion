@@ -1,5 +1,5 @@
 module snow_albedo
-    ! Surface albedo: constant, dynamic and prescribed schemes.
+    ! Surface albedo: constant, dynamic, aging and prescribed schemes.
     !
     ! Port of Chion.jl/src/processes/albedo.jl.
     !
@@ -29,7 +29,7 @@ module snow_albedo
     ! (alpha_dry-alpha_wet)*(1-exp(-dm/3)) < (alpha_dry-alpha_wet).
 
     use chion_defs, only : wp, wp_acc, TOL_TINY, TOL_EMPTY_LAYER, &
-                           chion_const_class, CHION_ALBEDO_CONSTANT
+                           chion_const_class, CHION_ALBEDO_CONSTANT, CHION_ALBEDO_AGING
     use snow_column_utils, only : layer_lwc
 
     implicit none
@@ -48,6 +48,7 @@ module snow_albedo
     public :: surface_liquid_water_content
     public :: albedo_refresh_from_snowfall
     public :: albedo_update
+    public :: albedo_update_aging
 
 contains
 
@@ -124,7 +125,9 @@ contains
         !
         ! No-op below TOL_TINY of added mass. Under the CONSTANT scheme the
         ! albedo is simply reset to alpha_dry (and then recomputed from scratch
-        ! by albedo_update, since the constant scheme is memoryless).
+        ! by albedo_update, since the constant scheme is memoryless). Under the
+        ! AGING scheme it is reset to alpha_dry too (6d06af6); the snow age is
+        ! reset by albedo_update_aging.
         !
         ! Trap 9: the test is on the CONSTANT scheme only, so PRESCRIBED lands
         ! in the dynamic branch here, exactly as in Julia.
@@ -138,6 +141,11 @@ contains
         if (real(snowfall_mass,wp_acc) .le. TOL_TINY) return
 
         if (c%albedo_scheme .eq. CHION_ALBEDO_CONSTANT) then
+            albedo = c%alpha_dry
+            return
+        end if
+
+        if (c%albedo_scheme .eq. CHION_ALBEDO_AGING) then
             albedo = c%alpha_dry
             return
         end if
@@ -225,5 +233,75 @@ contains
         return
 
     end subroutine albedo_update
+
+    subroutine albedo_update_aging(mass,temperature,n,c,snowfall_rate,dt_days, &
+                                   albedo,snow_age_days)
+        ! Chion.jl/src/processes/albedo.jl _update_aging_surface_albedo_arrays!
+        ! (6d06af6). Snow albedo from the time since the latest snowfall:
+        !
+        !   0. no surface snow                  -> alpha_ice, age 0, return
+        !   1. snowfall this step (rate > 0)    -> alpha_dry, age 0, return
+        !   2. age = max(age, 0) + dt_days
+        !   3. a = alpha_wet + (clamp(a_prev, alpha_wet, alpha_dry) - alpha_wet)
+        !          *exp(-dt_days/tau)
+        !      tau = aging_melting_timescale_days if Ts >= T0,
+        !            aging_cold_timescale_days    otherwise
+        !   4. clamp   a = clamp(a, alpha_wet, alpha_dry)
+        !
+        ! Step 1 tests the RATE, so any snowfall at all fully rejuvenates the
+        ! surface, however little mass it adds. Liquid water plays no role.
+
+        implicit none
+
+        real(wp),                intent(IN)    :: mass(:)         ! (Ntot) [kg m-2]
+        real(wp),                intent(IN)    :: temperature(:)  ! (Ntot) [K]
+        integer,                 intent(IN)    :: n
+        type(chion_const_class), intent(IN)    :: c
+        real(wp),                intent(IN)    :: snowfall_rate   ! [kg m-2 s-1]
+        real(wp),                intent(IN)    :: dt_days         ! [d] step length
+        real(wp),                intent(INOUT) :: albedo          ! [1]
+        real(wp),                intent(INOUT) :: snow_age_days   ! [d]
+
+        ! Local variables
+        real(wp) :: alb, tau
+
+        ! Step 0: bare surface. Threshold TOL_EMPTY_LAYER, as albedo_update.
+        if (n .le. 0) then
+            albedo        = c%alpha_ice
+            snow_age_days = 0.0_wp
+            return
+        end if
+        if (mass(1) .le. TOL_EMPTY_LAYER) then
+            albedo        = c%alpha_ice
+            snow_age_days = 0.0_wp
+            return
+        end if
+
+        ! Step 1: fresh snow.
+        if (snowfall_rate .gt. 0.0_wp) then
+            albedo        = c%alpha_dry
+            snow_age_days = 0.0_wp
+            return
+        end if
+
+        ! Step 2
+        snow_age_days = max(snow_age_days,0.0_wp) + dt_days
+
+        ! Step 3: exponential relaxation towards alpha_wet.
+        if (temperature(1) .ge. c%T0) then
+            tau = c%aging_melting_timescale_days
+        else
+            tau = c%aging_cold_timescale_days
+        end if
+
+        alb = min(max(albedo,c%alpha_wet),c%alpha_dry)
+        alb = c%alpha_wet + (alb - c%alpha_wet)*exp(-dt_days/tau)
+
+        ! Step 4
+        albedo = min(max(alb,c%alpha_wet),c%alpha_dry)
+
+        return
+
+    end subroutine albedo_update_aging
 
 end module snow_albedo

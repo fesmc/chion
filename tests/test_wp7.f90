@@ -22,7 +22,7 @@ program test_wp7
     use chion_defs, only : wp, wp_acc, TOL_TINY, chion_const_class, &
                            chion_const_init, &
                            CHION_ALBEDO_CONSTANT, CHION_ALBEDO_DYNAMIC, &
-                           CHION_ALBEDO_PRESCRIBED, &
+                           CHION_ALBEDO_PRESCRIBED, CHION_ALBEDO_AGING, &
                            CHION_FRESH_SNOW_DENSITY_CONSTANT, &
                            CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, &
                            CHION_DENSIFY_BESSI, CHION_DENSIFY_HTESSEL
@@ -50,6 +50,7 @@ program test_wp7
 
     call test_fresh_snow_density(c,nfail)
     call test_albedo(c,nfail)
+    call test_albedo_aging(c,nfail)
     call test_densification(c,nfail)
     call test_diurnal(nfail)
 
@@ -352,6 +353,97 @@ contains
         return
 
     end subroutine test_albedo
+
+    subroutine test_albedo_aging(c,nfail)
+        ! The snowfall-age scheme (Chion.jl 6d06af6): reset on snowfall,
+        ! exponential relaxation towards alpha_wet otherwise, with the melting
+        ! timescale at T0 and the cold one below.
+
+        implicit none
+
+        type(chion_const_class), intent(IN)    :: c
+        integer,                 intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_const_class) :: cc
+        real(wp) :: mass(Ntot), temperature(Ntot)
+        real(wp) :: alb, age, alb_a, age_a, alb_b, age_b, expected
+
+        write(*,"(a)") "--- albedo: aging scheme (snowfall reset, exponential relaxation) ---"
+
+        cc = c
+        cc%albedo_scheme = CHION_ALBEDO_AGING
+
+        mass           = 0.0_wp
+        temperature    = 0.0_wp
+        mass(1)        = 200.0_wp
+        temperature(1) = 260.0_wp
+
+        ! === bare surface -> alpha_ice, age 0 =============================
+        alb = 0.75_wp
+        age = 4.0_wp
+        call albedo_update_aging(mass,temperature,0,cc,0.0_wp,1.0_wp,alb,age)
+        call check_val("aging, n=0 -> alpha_ice", alb, cc%alpha_ice, nfail)
+        call check_val("aging, n=0 -> snow age 0", age, 0.0_wp, nfail)
+
+        ! === snowfall resets to alpha_dry, age 0 ==========================
+        alb = 0.72_wp
+        age = 5.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,1.0e-9_wp,1.0_wp,alb,age)
+        call check_val("aging, any snowfall -> alpha_dry", alb, cc%alpha_dry, nfail)
+        call check_val("aging, any snowfall -> snow age 0", age, 0.0_wp, nfail)
+
+        ! === relaxation, cold surface: tau = aging_cold_timescale_days ====
+        alb = cc%alpha_dry
+        age = 0.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,1.0_wp,alb,age)
+        expected = cc%alpha_wet + (cc%alpha_dry - cc%alpha_wet) &
+                                 *exp(-1.0_wp/cc%aging_cold_timescale_days)
+        call check_val("aging, cold relaxation alpha_wet + (a-alpha_wet)*exp(-dt/tau_cold)", &
+                       alb, expected, nfail)
+        call check_val("aging, snow age advances by dt", age, 1.0_wp, nfail)
+
+        ! === relaxation, melting surface: tau = aging_melting_timescale_days
+        temperature(1) = cc%T0
+        alb = cc%alpha_dry
+        age = 3.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,0.5_wp,alb,age)
+        expected = cc%alpha_wet + (cc%alpha_dry - cc%alpha_wet) &
+                                 *exp(-0.5_wp/cc%aging_melting_timescale_days)
+        call check_val("aging, melting relaxation uses tau_melt at Ts = T0", alb, expected, nfail)
+        call check_val("aging, snow age advances by a partial dt", age, 3.5_wp, nfail)
+
+        ! === dt composition: two half-day steps == one daily step =========
+        temperature(1) = 260.0_wp
+        alb_a = cc%alpha_dry
+        age_a = 0.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,1.0_wp,alb_a,age_a)
+        alb_b = cc%alpha_dry
+        age_b = 0.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,0.5_wp,alb_b,age_b)
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,0.5_wp,alb_b,age_b)
+        call check("aging, two half-day steps == one daily step", &
+                   abs(alb_b - alb_a) .le. 4.0_wp*epsilon(1.0_wp), nfail)
+        call check_val("aging, two half-day steps age one day", age_b, 1.0_wp, nfail)
+
+        ! === out-of-range previous albedo is clamped first ================
+        alb = cc%alpha_ice
+        age = -2.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,1.0_wp,alb,age)
+        call check_val("aging, previous alpha_ice is clamped up to alpha_wet", &
+                       alb, cc%alpha_wet, nfail)
+        call check_val("aging, negative snow age is clamped to 0 first", age, 1.0_wp, nfail)
+
+        ! === snowfall refresh in the accumulation slot ====================
+        alb = cc%alpha_wet
+        call albedo_refresh_from_snowfall(alb,cc,0.001_wp)
+        call check_val("aging, snowfall refresh -> alpha_dry", alb, cc%alpha_dry, nfail)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_albedo_aging
 
     ! ======================================================================
     ! (iii) densification

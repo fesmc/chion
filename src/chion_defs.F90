@@ -101,6 +101,7 @@ module chion_defs
     integer, parameter, public :: CHION_ALBEDO_DYNAMIC    = 2
     integer, parameter, public :: CHION_ALBEDO_PRESCRIBED = 3
     integer, parameter, public :: CHION_ALBEDO_SEMIX      = 4
+    integer, parameter, public :: CHION_ALBEDO_AGING      = 5   ! Chion.jl ALBEDO_AGING = 4
 
     ! Which spectral snow-albedo parameterization the SEMIX scheme uses.
     ! CLIMBER-X defaults to Dang (its isnow_albedo = 2).
@@ -253,6 +254,11 @@ module chion_defs
         real(wp) :: alpha_ice          ! [1] bare ice albedo
         real(wp) :: max_lwc_albedo     ! [1] LWC at which albedo reaches alpha_wet
         integer  :: albedo_scheme      ! CHION_ALBEDO_*
+
+        ! Snowfall-age albedo (CHION_ALBEDO_AGING): e-folding time of the
+        ! relaxation towards alpha_wet, cold vs melting surface.
+        real(wp) :: aging_cold_timescale_days     ! [d]
+        real(wp) :: aging_melting_timescale_days  ! [d]
 
         ! SEMIX spectral albedo (CHION_ALBEDO_SEMIX). Warren & Wiscombe 1980
         ! bands, collapsed to broadband by the incoming-SW spectral weights.
@@ -474,6 +480,7 @@ module chion_defs
 
     public :: chion_const_init
     public :: chion_const_print
+    public :: chion_const_validate
 
     public :: chion_forcing_alloc
     public :: chion_forcing_dealloc
@@ -542,6 +549,10 @@ contains
         c%alpha_ice      = 0.30_wp
         c%max_lwc_albedo = 0.10_wp
         c%albedo_scheme  = CHION_ALBEDO_DYNAMIC
+
+        ! dev_nils defaults (27113b6); 12407a3 had 5 d for the melting surface.
+        c%aging_cold_timescale_days    = 20.0_wp
+        c%aging_melting_timescale_days =  2.0_wp
 
         ! SEMIX spectral albedo defaults (CLIMBER-X smb_par / constants).
         c%frac_vu          = 0.45_wp
@@ -612,6 +623,8 @@ contains
         write(*,"(a25,g14.6,a)") "alpha_ice = ", c%alpha_ice, "  [1]"
         write(*,"(a25,g14.6,a)") "max_lwc_albedo = ", c%max_lwc_albedo, "  [1]"
         write(*,"(a25,i14)")     "albedo_scheme = ", c%albedo_scheme
+        write(*,"(a25,g14.6,a)") "aging_cold_timescale_days = ",    c%aging_cold_timescale_days,    "  [d]"
+        write(*,"(a25,g14.6,a)") "aging_melting_timescale_days = ", c%aging_melting_timescale_days, "  [d]"
         write(*,"(a25,g14.6,a)") "eps_air  = ", c%eps_air,  "  [1]"
         write(*,"(a25,g14.6,a)") "eps_snow = ", c%eps_snow, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_ice  = ", c%eps_ice,  "  [1]"
@@ -622,6 +635,37 @@ contains
         return
 
     end subroutine chion_const_print
+
+    subroutine chion_const_validate(c)
+        ! Constraints Chion.jl's SnowpackPhysicalConstants constructor checks
+        ! (src/constants.jl, 6d06af6): the aging timescales are positive, and
+        ! under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1.
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+
+        if (c%aging_cold_timescale_days .le. 0.0_wp .or. &
+            c%aging_melting_timescale_days .le. 0.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: aging timescales must be positive."
+            write(io_unit_err,*) "aging_cold_timescale_days    = ", c%aging_cold_timescale_days
+            write(io_unit_err,*) "aging_melting_timescale_days = ", c%aging_melting_timescale_days
+            stop "Program stopped."
+        end if
+
+        if (c%albedo_scheme .eq. CHION_ALBEDO_AGING) then
+            if (c%alpha_wet .lt. 0.0_wp .or. c%alpha_wet .gt. c%alpha_dry &
+                                         .or. c%alpha_dry .gt. 1.0_wp) then
+                write(io_unit_err,*) "chion_const_validate:: Error: albedo_scheme = 'aging' &
+                                     &requires 0 <= alpha_wet <= alpha_dry <= 1."
+                write(io_unit_err,*) "alpha_wet, alpha_dry = ", c%alpha_wet, c%alpha_dry
+                stop "Program stopped."
+            end if
+        end if
+
+        return
+
+    end subroutine chion_const_validate
 
     subroutine chion_forcing_alloc(forc,ncol)
         ! Allocate all forcing arrays and set neutral defaults: no prescribed
@@ -1003,10 +1047,12 @@ contains
                 flag = CHION_ALBEDO_PRESCRIBED
             case("semix")
                 flag = CHION_ALBEDO_SEMIX
+            case("aging")
+                flag = CHION_ALBEDO_AGING
             case DEFAULT
                 write(io_unit_err,*) "chion_albedo_scheme_flag:: Error: albedo scheme not recognized."
                 write(io_unit_err,*) "albedo_scheme should be one of: &
-                                     &['constant','dynamic','prescribed','semix'] &
+                                     &['constant','dynamic','prescribed','semix','aging'] &
                                      &(aliases: 'bessi','legacy' -> 'constant')"
                 write(io_unit_err,*) "albedo_scheme = ", trim(name)
                 stop "Program stopped."
