@@ -614,6 +614,27 @@ needs `forc%H_ice` filled; a host that leaves it at 0 gets no substrate anywhere
 fills it for ITM only (`surface_chion.f90`); `chion_column.x` reads `&ctrl H_ice`,
 `chion_grid.x` `H_ice_default` (domain) or `name_hice` (file; `"None"` = 0).
 
+### D35. semix turbulence over bare ice: the latent exchange carries Lv + Lm
+**What:** under `turbulent_flux_scheme = "semix"` (Chion.jl's bulk turbulence, C7), the
+latent heat in the turbulent latent flux of a bare-ice surface -- ice held at T0 (no
+substrate) and the top layer of the thermal ice substrate -- is `Lv + Lm` at any surface
+temperature, in the energy solve's linearization and in the resolved flux
+(`turb_semix_latent_heat`). Snow keeps the phase's latent heat at `Ts` (`Lv + Lm` below T0,
+`Lv` at it), as in Julia. Reverted under `legacy_chion` (`TURB_SEMIX_ICE_SUBLIMATION`).
+
+**Why:** bare ice is solid at T0 too: Julia converts its vapour flux to mass with
+`Lv + Lm` on both bare-ice paths, and the BESSI turbulence's bare-ice flux uses `Lv + Lm`
+(`_resolved_bare_ice_surface_flux_components`), but the semix flux is built with
+`_surface_vapor_latent_heat(T0) = Lv`. Each kg sublimated from ice at T0 then costs the
+surface energy budget `Lv` but the mass budget `Lv + Lm`; the `Lm` is unaccounted (review
+Q12; PLAN_dev_nils N3).
+
+**Impact:** semix turbulence only, on bare ice at T0 (and on the substrate surface at T0):
+the latent flux there is `(Lv+Lm)/Lv = 1.13` times Julia's. The harness gates Julia's form
+under `legacy_chion`. Not changed: BESSI turbulence over the substrate, where Julia (and
+chion) also evaluate the flux with `L(Ts)` (`Lv` at T0) and the mass with `Lv + Lm`; listed
+for Nils, not fixed here.
+
 ### D36. Fine near-surface layers: no limit is 0, only the top layers can be limited
 **What:** `&bessi near_surface_layer_max_thicknesses` (Chion.jl
 `near_surface_layer_max_thicknesses_m`, `03bb445`; chion default off until C11):
@@ -637,7 +658,8 @@ an sp round-off loop.
 ### D37. Turbulence scheme `climberx`: chion's CLIMBER-X SEMIX exchange under its own name
 **What:** Chion.jl split its surface scheme (`d0146e1`): `seb_scheme` (`bessi` | `semix`)
 selects the longwave only, `turbulent_flux_scheme` (`bessi` | `semix`) the sensible and
-latent heat. chion follows the split and adds a third turbulence option,
+latent heat. chion follows the split (`semix` ported in C7, D35, D38) and adds a third
+turbulence option,
 `turbulent_flux_scheme = "climberx"`: its port of CLIMBER-X SEMIX's aerodynamic exchange
 (`snow_seb_semix`, `docs/semix_port_scope.md`), formerly the turbulent half of
 `seb_scheme = "semix"`. chion's old `seb_scheme = "semix"` is now `seb_scheme = "semix"` +
@@ -659,6 +681,19 @@ BESSI's turbulence; add `turbulent_flux_scheme = "climberx"` for the former beha
 rename `semix_qsat`. The shared longwave expression keeps CLIMBER-X's evaluation order
 (`eps*LW↓ - eps*σTs⁴`, Julia `eps*(LW↓ - σTs⁴)`), so the `seb_scheme = semix` gate sees
 round-off only.
+
+### D38. semix turbulence: air density with `R_dry`
+**What:** Chion.jl's `_semix_air_density` divides by the literal `287.05 * T_a`; chion uses
+`c%R_dry` (287.058, `&chion_const`, the value CLIMBER-X's exchange already uses). Reverted
+under `legacy_chion` (`TURB_SEMIX_R_AIR_LITERAL`). The Richardson number's gravity is
+standard gravity `DEF_GRAVITY = 9.80665`, which is Julia's literal too (no deviation; not
+the host's `g`, as for densification, D25).
+
+**Why:** one gas constant for dry air in one model (review Q13; cf. D22 for the universal
+gas constant). Ask Nils to use a named constant.
+
+**Impact:** `rho_a` 2.8e-5 relative lower, and with it both turbulent fluxes, under
+`turbulent_flux_scheme = "semix"` only. Gated under `legacy_chion`.
 
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its

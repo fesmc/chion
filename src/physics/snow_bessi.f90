@@ -1039,8 +1039,10 @@ contains
         !
         ! Mass: melt = melt energy/Lm; vapor = Q_lh*dt/(Lv+Lm), bare ice being
         ! solid; smb_ice += vapor - melt; runoff += melt. No percolation, no
-        ! refreezing. The latent heat in the energy flux stays phase-dependent
-        ! at Ts (Lv at T0), as in Julia (review Q12, a C7 item).
+        ! refreezing. The latent heat in the energy flux is the phase's at Ts
+        ! (Lv at T0) under the BESSI turbulence, as in Julia; under the semix
+        ! turbulence it is Lv+Lm, consistent with the mass (D35; Julia's Lv
+        ! under legacy_chion).
         !
         ! RAIN IS NOT ADDED TO RUNOFF HERE (D29). Julia adds the step's rain
         ! (runoff += rain + melt), but apply_accumulation has already routed
@@ -1090,8 +1092,10 @@ contains
 
         ! Julia re-evaluates all non-shortwave components at the resolved Ts
         ! (_resolved_nonshortwave_surface_flux_components); only the latent
-        ! one feeds a budget here. Bare-ice roughness (h_snow = 0) under SEMIX.
-        q_lh = resolved_turbulent_latent_heat_flux(c,forc,t_srf,0.0_wp)
+        ! one feeds a budget here. A bare-ice surface: no snow depth for the
+        ! CLIMBER-X roughness blend, the ice roughness and (D35) latent heat
+        ! for the semix turbulence.
+        q_lh = resolved_turbulent_latent_heat_flux(c,forc,t_srf,0.0_wp,.FALSE.)
 
         vapor = real(real(q_lh,wp_acc)*real(dt_seconds,wp_acc) &
                      /real(c%Lv + c%Lm,wp_acc),wp)

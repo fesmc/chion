@@ -12,7 +12,8 @@ module snow_seb_semix
     ! CLIMBER-X's ebal longwave and Chion.jl's :semix SEB alike. The former
     ! all-in-one seb_scheme = "semix" is seb_scheme = "semix" together with
     ! turbulent_flux_scheme = "climberx". Chion.jl's own bulk turbulence, also
-    ! called :semix upstream, is a different scheme.
+    ! called :semix upstream, is a different scheme (turbulent_flux_scheme =
+    ! "semix", snow_turbulence).
     !
     ! SEMIX replaces BESSI's single bulk exchange coefficient D_sh by a
     ! Monin-Obukhov-style aerodynamic resistance r_a: a snow-depth-weighted

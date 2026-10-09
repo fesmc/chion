@@ -523,6 +523,43 @@ function run_bessi_seb_semix(fbessi::AbstractString, ch_bessi::AbstractString)
 end
 
 """
+BESSI with Chion.jl's calibrated surface scheme, `seb_scheme = :semix` and
+`turbulent_flux_scheme = :semix` (Julia's bulk turbulence at its 03bb445
+defaults: sensible exchange factor 2.5, stable coefficient 40; plan C7), with
+humidity on so the latent exchange and its vapour mass run too. Two
+configurations: the default columns, and the ice-substrate columns (5 layers,
+plus `bare_ice`), where the bare-ice latent heat of D35 and the ice roughness
+apply. Both gated like the default configuration (dp+legacy: Julia's 287.05 and
+bare-ice Lv, D35/D38); coverage: each differs from chion's run with BESSI
+turbulence on the same forcing, so the switch is seen to act.
+"""
+function run_bessi_turb_semix(nstep::Int; substrate::Bool=false)
+    scen = substrate ? vcat(BESSI_SCENARIOS, [BARE_ICE_SCENARIO]) : BESSI_SCENARIOS
+    tag = substrate ? "turb_semix_ice" : "turb_semix"
+    ft = joinpath(WORKDIR, "forcing_bessi_$(tag).nc")
+    write_forcing(ft, scen; nstep=nstep, dt_days=1.0, relative_humidity=RH_HUMID,
+                  h_ice=substrate ? 1000.0 : nothing)
+    jl = run_julia_bessi(; forcing=ft, outfile="julia_bessi_$(tag).nc", workdir=WORKDIR,
+                         ntot=15, years=1, humidity=true,
+                         ice_substrate_layers=substrate ? ICE_SUBSTRATE_LAYERS : 0,
+                         overrides=(seb_scheme=:semix, turbulent_flux_scheme=:semix))
+    chion_run(turb, out) = run_chion(; precision=:dp, legacy=true, forcing=ft,
+        outfile=out, workdir=WORKDIR, model="bessi", dt_out=1.0, dt=1.0,
+        rh_default=RH_HUMID, name_hice=substrate ? "HI" : "None",
+        bessi_extra=substrate ? "    ice_substrate_layers = $(ICE_SUBSTRATE_LAYERS)" : "",
+        nml_extra=const_nml(seb_scheme="semix", turbulent_flux_scheme=turb))
+    ch = chion_run("semix", "chion_bessi_$(tag)_dp_legacy.nc")
+    ch_ref = chion_run("bessi", "chion_bessi_$(tag)_ref_dp_legacy.nc")
+    label = "seb_scheme = turbulent_flux_scheme = semix, humidity on" *
+            (substrate ? ", ice substrate" : "")
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, $label: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity ($label)")
+    return nfail + check_moved(ch, ch_ref, "semix turbulence" * (substrate ? ", ice substrate" : ""),
+                               "the BESSI-turbulence run")
+end
+
+"""
 Coverage helper: assert that a configuration's chion output `ch` differs from
 the run `ch_ref` without its switch (max |Tsrf difference| > 0.1 K), so a gate
 pass cannot come from a switch that silently did nothing on either side.
@@ -646,6 +683,8 @@ function main()
     nfail += run_bessi_fine_substrate(nstep)
     nfail += run_bessi_cloud_proxy(fbessi, ch_legacy)
     nfail += run_bessi_seb_semix(fbessi, ch_legacy)
+    nfail += run_bessi_turb_semix(nstep)
+    nfail += run_bessi_turb_semix(nstep; substrate=true)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

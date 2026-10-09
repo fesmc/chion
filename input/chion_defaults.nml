@@ -101,7 +101,7 @@
 
     ! ## Surface energy balance and turbulent exchange ##
     seb_scheme                = "bessi"     ! Longwave only: "bessi" | "semix" (absorbed with eps_snow / eps_ice)
-    turbulent_flux_scheme     = "bessi"     ! Sensible and latent heat: "bessi" | "climberx"
+    turbulent_flux_scheme     = "bessi"     ! Sensible and latent heat: "bessi" | "semix" | "climberx"
     D_sh                      = 10.0        ! [W m-2 K-1] Sensible heat exchange coefficient (bessi)
 
     ! ## CLIMBER-X SEMIX aerodynamic exchange (turbulent_flux_scheme = "climberx") ##
@@ -114,6 +114,16 @@
     l_neutral                 = .FALSE.     ! [1]  Force neutral stratification?
     l_dew                     = .TRUE.      ! [1]  Allow dew/frost deposition?
     climberx_qsat             = "climberx"  ! Saturation humidity: "climberx" (q_sat_i) | "bessi"
+
+    ! ## Chion.jl bulk turbulence (turbulent_flux_scheme = "semix") ##
+    semix_karman                   = 0.4    ! [1]  von Karman constant
+    semix_surface_height           = 10.0   ! [m]  Reference height of air temperature and wind
+    semix_z0m_snow                 = 0.001  ! [m]  Momentum roughness length, snow
+    semix_z0m_ice                  = 0.01   ! [m]  Momentum roughness length, bare ice
+    semix_zm_to_zh                 = 10.0   ! [1]  z0m/z0h
+    semix_sensible_exchange_factor = 2.5    ! [1]  Sensible-heat exchange factor (MAR-calibrated)
+    semix_stable_coefficient       = 40.0   ! [1]  b in the stable damping 1/(1 + b*Ri) (MAR-calibrated)
+    semix_latent_exchange_factor   = 1.0    ! [1]  Latent-heat exchange factor
 
     ! ## Albedo ##
     alpha_dry                 = 0.81        ! [1] Dry snow albedo (upper bound)
@@ -189,6 +199,14 @@
 ! seb_scheme, turbulent_flux_scheme
 !   Chion.jl's split (d0146e1): seb_scheme selects the longwave
 !   treatment only, turbulent_flux_scheme the sensible and latent heat.
+!   "semix" is Chion.jl's bulk turbulence (03bb445): neutral log-law
+!   exchange at semix_surface_height, z0h = z0m/semix_zm_to_zh,
+!   bulk-Richardson damping 1/(1 + b*Ri) when stable and sqrt(1 - 16*Ri)
+!   enhancement when unstable, wind floored at 0.1 m s-1, air humidity
+!   relative to saturation over ice, vapour mass Q_lh/L. Upstream default
+!   (with seb_scheme = "semix"); chion keeps "bessi" until C11. Over bare
+!   ice chion uses Lv + Lm in its latent exchange (D35), and c%R_dry for
+!   the air density (D38).
 !   "climberx" is chion's port of CLIMBER-X SEMIX's aerodynamic exchange
 !   (docs/semix_port_scope.md); its vapour mass converts with Lv + Lm at
 !   every surface temperature. CLIMBER-X's full surface scheme is

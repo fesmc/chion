@@ -53,7 +53,7 @@ module snow_energy
     ! step 5 below.
 
     use chion_defs, only : wp, wp_acc, io_unit_err, CHION_SEB_SEMIX, &
-                           CHION_TURB_CLIMBERX, &
+                           CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                            chion_const_class, chion_step_forcing_class
 
     ! CLIMBER-X SEMIX: its aerodynamic exchange (turbulent_flux_scheme =
@@ -66,6 +66,11 @@ module snow_energy
                                semix_snow_depth, semix_turbulent_exchange, &
                                semix_surface_emissivity, semix_longwave_down, &
                                semix_longwave_linearized
+
+    ! Chion.jl's bulk turbulence (turbulent_flux_scheme = "semix"), already
+    ! linearized: its (constant, linear) pairs go straight into step 2.
+    use snow_turbulence, only : turb_semix_lin_class, turb_semix_flux_linearized, &
+                                turb_semix_roughness, turb_semix_latent_heat
 
     ! Vapor-pressure / turbulent-latent helpers shared with the unlinearized
     ! twin used for bare ice and post-solve vapor mass (WP5, other half).
@@ -360,11 +365,12 @@ contains
         real(wp) :: G_s, surface_den, surface_const, surface_coef, boundary_term
         real(wp) :: ts_new
 
-        logical  :: uses_semix_seb, uses_climberx_turb
+        logical  :: uses_semix_seb, uses_climberx_turb, uses_semix_turb
 
         type(latent_vapor_flux_lin_class) :: lh_coef
         type(semix_exchange_class)        :: sx
         type(semix_flux_lin_class)        :: lw_coef
+        type(turb_semix_lin_class)        :: tx
 
         ! === Step 0: thermal rows, early exit ================================
         ! energy_flux.jl: n_snow = n if n > 0 and mass(1) > 0, else 0. NOTE the
@@ -422,8 +428,11 @@ contains
 
         ! CLIMBER-X exchange coefficients, built ONCE at the linearization point
         ! Ts^n, which is the temperature the whole of step 2 linearizes about.
+        ! Chion.jl's semix turbulence likewise, with the bare-ice roughness and
+        ! latent heat (D35) when the top row is the substrate.
         uses_semix_seb     = (c%seb_scheme .eq. CHION_SEB_SEMIX)
         uses_climberx_turb = (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX)
+        uses_semix_turb    = (c%turbulent_flux_scheme .eq. CHION_TURB_SEMIX)
 
         if (uses_climberx_turb) then
             sx = semix_turbulent_exchange(c,semix_snow_depth(mass,density,n_snow), &
@@ -431,6 +440,12 @@ contains
                                           forc%wind_speed,forc%air_pressure, &
                                           forc%relative_humidity, &
                                           forc%has_relative_humidity)
+        else if (uses_semix_turb) then
+            tx = turb_semix_flux_linearized(c,Ts_n,forc%air_temperature, &
+                                            forc%relative_humidity,forc%air_pressure, &
+                                            forc%wind_speed, &
+                                            turb_semix_roughness(c,surface_is_ice), &
+                                            turb_semix_latent_heat(c,Ts_n,surface_is_ice))
         end if
 
         ! === Step 2: linearized surface energy balance =======================
@@ -486,6 +501,9 @@ contains
             ! BESSI branch below, with the aerodynamic f_sh in place of D_sh.
             sh_const = forc%air_temperature*sx%f_sh
             sh_lin   = sx%f_sh
+        else if (uses_semix_turb) then
+            sh_const = tx%sensible_constant
+            sh_lin   = tx%sensible_linear
         else
             sh_const = forc%air_temperature*c%D_sh
             sh_lin   = c%D_sh
@@ -506,15 +524,18 @@ contains
             ! collapses both terms to zero exactly as the BESSI selection does.
             lh_turb_const = -sx%f_lh*(sx%qsat - sx%dqsatdT*Ts_n - sx%q_air)
             lh_turb_lin   =  sx%f_lh*sx%dqsatdT
-        else if (forc%has_relative_humidity) then
+        else if (.not. forc%has_relative_humidity) then
+            lh_turb_const = 0.0_wp
+            lh_turb_lin   = 0.0_wp
+        else if (uses_semix_turb) then
+            lh_turb_const = tx%latent_constant
+            lh_turb_lin   = tx%latent_linear
+        else
             lh_coef       = latent_vapor_flux_linearized(Ts_n,c,forc%air_temperature, &
                                                          forc%relative_humidity, &
                                                          forc%air_pressure)
             lh_turb_const = lh_coef%constant
             lh_turb_lin   = lh_coef%linear
-        else
-            lh_turb_const = 0.0_wp
-            lh_turb_lin   = 0.0_wp
         end if
 
         ! The precipitation heat coefficients passed in by the caller are ADDED

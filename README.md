@@ -6,7 +6,7 @@ from Chion.jl.
 
 The energy-balance model (BESSI) is configurable on orthogonal axes: column
 structure (`Ntot`), longwave (`seb_scheme = bessi | semix`), turbulent
-exchange (`turbulent_flux_scheme = bessi | climberx`) and albedo
+exchange (`turbulent_flux_scheme = bessi | semix | climberx`) and albedo
 (`albedo_scheme = constant | dynamic | prescribed | semix | aging`), where
 `seb_scheme = semix`, `climberx` and the `semix` albedo are ports of
 CLIMBER-X's SEMIX surface scheme.

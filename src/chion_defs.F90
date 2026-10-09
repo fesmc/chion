@@ -117,10 +117,13 @@ module chion_defs
 
     ! Turbulent sensible and latent heat, independent of seb_scheme (Chion.jl
     ! turbulent_flux_scheme). "bessi": the bulk coefficient D_sh and BESSI's
-    ! vapour-pressure gradient; "climberx": CLIMBER-X SEMIX's aerodynamic
-    ! resistance (snow_seb_semix; docs/semix_port_scope.md). Orthogonal to
-    ! albedo_scheme and to Ntot.
+    ! vapour-pressure gradient; "semix": Chion.jl's bulk scheme of that name
+    ! (log-law, Richardson stability, calibrated exchange factors;
+    ! snow_turbulence); "climberx": CLIMBER-X SEMIX's aerodynamic resistance
+    ! (snow_seb_semix; docs/semix_port_scope.md). Orthogonal to albedo_scheme
+    ! and to Ntot.
     integer, parameter, public :: CHION_TURB_BESSI    = 1
+    integer, parameter, public :: CHION_TURB_SEMIX    = 2
     integer, parameter, public :: CHION_TURB_CLIMBERX = 3
 
     ! Downwelling longwave when the host does not prescribe it (Chion.jl
@@ -180,6 +183,14 @@ module chion_defs
     !     near-surface layers everything below them stays in one layer that
     !     is never split or merged, as in Chion.jl. chion splits and merges
     !     it by mass like the surface layer (docs/porting_notes.md D32).
+    !   * TURB_SEMIX_ICE_SUBLIMATION -> .FALSE., i.e. the semix turbulence's
+    !     latent exchange over bare ice carries the phase's latent heat at
+    !     the surface temperature (Lv at T0), as in Chion.jl; chion uses
+    !     Lv + Lm, the latent heat its vapour mass is converted with
+    !     (docs/porting_notes.md D35).
+    !   * TURB_SEMIX_R_AIR_LITERAL -> .TRUE., i.e. the semix turbulence's air
+    !     density uses Chion.jl's literal 287.05 instead of c%R_dry
+    !     (docs/porting_notes.md D38).
     !
     ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
     ! the plain build is gated against Chion.jl for PDD.
@@ -193,6 +204,8 @@ module chion_defs
     real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = 1.0_wp
     logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .TRUE.
     logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .FALSE.
+    logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .FALSE.
+    logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .TRUE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
@@ -200,6 +213,8 @@ module chion_defs
     real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = real(sec_year_360d/sec_day,wp)
     logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .FALSE.
     logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .TRUE.
+    logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .TRUE.
+    logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .FALSE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
 #endif
 
@@ -289,6 +304,19 @@ module chion_defs
         logical  :: l_neutral          ! [1] force neutral stratification
         logical  :: l_dew              ! [1] allow dew/frost deposition
         integer  :: climberx_qsat      ! CLIMBERX_QSAT_*
+
+        ! Chion.jl's bulk turbulence (CHION_TURB_SEMIX only; Chion.jl's
+        ! semix_* keywords, 03bb445 defaults). z0h = z0m/semix_zm_to_zh; the
+        ! sensible exchange factor and the stable coefficient b of the
+        ! Richardson damping 1/(1 + b Ri) are calibrated against MAR.
+        real(wp) :: semix_karman                    ! [1] von Karman constant
+        real(wp) :: semix_surface_height            ! [m] reference height of T_a, wind
+        real(wp) :: semix_z0m_snow                  ! [m] momentum roughness, snow
+        real(wp) :: semix_z0m_ice                   ! [m] momentum roughness, bare ice
+        real(wp) :: semix_zm_to_zh                  ! [1] z0m/z0h
+        real(wp) :: semix_sensible_exchange_factor  ! [1]
+        real(wp) :: semix_stable_coefficient        ! [1] b
+        real(wp) :: semix_latent_exchange_factor    ! [1]
 
         ! Albedo
         real(wp) :: alpha_dry          ! [1] dry snow albedo (upper bound)
@@ -624,6 +652,16 @@ contains
         c%l_dew       = .TRUE.
         c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
 
+        ! Chion.jl bulk turbulence defaults (src/constants.jl, 03bb445).
+        c%semix_karman                   = 0.4_wp
+        c%semix_surface_height           = 10.0_wp
+        c%semix_z0m_snow                 = 0.001_wp
+        c%semix_z0m_ice                  = 0.01_wp
+        c%semix_zm_to_zh                 = 10.0_wp
+        c%semix_sensible_exchange_factor = 2.5_wp
+        c%semix_stable_coefficient       = 40.0_wp
+        c%semix_latent_exchange_factor   = 1.0_wp
+
         c%alpha_dry      = 0.81_wp
         c%alpha_wet      = 0.70_wp
         c%alpha_ice      = 0.30_wp
@@ -711,6 +749,16 @@ contains
         write(*,"(a25,l14)")     "l_neutral = ", c%l_neutral
         write(*,"(a25,l14)")     "l_dew     = ", c%l_dew
         write(*,"(a25,i14)")     "climberx_qsat = ", c%climberx_qsat
+        write(*,"(a37,g14.6,a)") "semix_karman = ", c%semix_karman, "  [1]"
+        write(*,"(a37,g14.6,a)") "semix_surface_height = ", c%semix_surface_height, "  [m]"
+        write(*,"(a37,g14.6,a)") "semix_z0m_snow = ", c%semix_z0m_snow, "  [m]"
+        write(*,"(a37,g14.6,a)") "semix_z0m_ice = ", c%semix_z0m_ice, "  [m]"
+        write(*,"(a37,g14.6,a)") "semix_zm_to_zh = ", c%semix_zm_to_zh, "  [1]"
+        write(*,"(a37,g14.6,a)") "semix_sensible_exchange_factor = ", &
+                                 c%semix_sensible_exchange_factor, "  [1]"
+        write(*,"(a37,g14.6,a)") "semix_stable_coefficient = ", c%semix_stable_coefficient, "  [1]"
+        write(*,"(a37,g14.6,a)") "semix_latent_exchange_factor = ", &
+                                 c%semix_latent_exchange_factor, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_dry = ", c%alpha_dry, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_wet = ", c%alpha_wet, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_ice = ", c%alpha_ice, "  [1]"
@@ -745,11 +793,32 @@ contains
         ! (src/constants.jl, 6d06af6, 03bb445): the aging timescales are
         ! positive, under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1,
         ! the clear-sky transmissivity is positive and the night cloud
-        ! fraction in [0,1]. Plus chion's aging_snowfall_ref > 0 (D30).
+        ! fraction in [0,1], the semix turbulence's karman constant, height,
+        ! roughness lengths, roughness ratio and exchange factors positive and
+        ! its stable coefficient non-negative. Plus chion's
+        ! aging_snowfall_ref > 0 (D30).
 
         implicit none
 
         type(chion_const_class), intent(IN) :: c
+
+        if (.not. (c%semix_karman .gt. 0.0_wp .and. c%semix_surface_height .gt. 0.0_wp &
+                   .and. c%semix_z0m_snow .gt. 0.0_wp .and. c%semix_z0m_ice .gt. 0.0_wp &
+                   .and. c%semix_zm_to_zh .gt. 0.0_wp &
+                   .and. c%semix_sensible_exchange_factor .gt. 0.0_wp &
+                   .and. c%semix_latent_exchange_factor .gt. 0.0_wp)) then
+            write(io_unit_err,*) "chion_const_validate:: Error: semix_karman, &
+                                 &semix_surface_height, semix_z0m_snow, semix_z0m_ice, &
+                                 &semix_zm_to_zh and the semix exchange factors must be positive."
+            stop "Program stopped."
+        end if
+
+        if (.not. c%semix_stable_coefficient .ge. 0.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: semix_stable_coefficient &
+                                 &must be non-negative."
+            write(io_unit_err,*) "semix_stable_coefficient = ", c%semix_stable_coefficient
+            stop "Program stopped."
+        end if
 
         if (.not. c%lw_clear_sky_transmissivity .gt. 0.0_wp) then
             write(io_unit_err,*) "chion_const_validate:: Error: lw_clear_sky_transmissivity &
@@ -1172,12 +1241,15 @@ contains
         select case(trim(adjustl(name)))
             case("bessi")
                 flag = CHION_TURB_BESSI
+            case("semix")
+                flag = CHION_TURB_SEMIX
             case("climberx")
                 flag = CHION_TURB_CLIMBERX
             case DEFAULT
                 write(io_unit_err,*) "chion_turbulent_flux_scheme_flag:: Error: &
                                      &turbulent flux scheme not recognized."
-                write(io_unit_err,*) "turbulent_flux_scheme should be one of: ['bessi','climberx']"
+                write(io_unit_err,*) "turbulent_flux_scheme should be one of: &
+                                     &['bessi','semix','climberx']"
                 write(io_unit_err,*) "turbulent_flux_scheme = ", trim(name)
                 stop "Program stopped."
         end select

@@ -53,7 +53,8 @@ $(objdir)/snow_vapor.o: $(physdir)/snow_vapor.f90 \
 $(objdir)/snow_surface_fluxes.o: $(physdir)/snow_surface_fluxes.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
 						  	$(objdir)/snow_layers.o $(objdir)/snow_vapor.o \
-						  	$(objdir)/snow_seb_semix.o $(objdir)/snow_diurnal.o
+						  	$(objdir)/snow_seb_semix.o $(objdir)/snow_turbulence.o \
+						  	$(objdir)/snow_diurnal.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 # snow_seb_semix reuses snow_vapor's ice vapour-pressure helpers for the
@@ -62,10 +63,16 @@ $(objdir)/snow_seb_semix.o: $(physdir)/snow_seb_semix.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_vapor.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+# snow_turbulence is Chion.jl's bulk turbulence (turbulent_flux_scheme =
+# "semix"), on snow_vapor's ice vapour pressure.
+$(objdir)/snow_turbulence.o: $(physdir)/snow_turbulence.f90 \
+						  	$(objdir)/chion_defs.o $(objdir)/snow_vapor.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 $(objdir)/snow_energy.o: $(physdir)/snow_energy.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
 						  	$(objdir)/snow_vapor.o $(objdir)/snow_surface_fluxes.o \
-						  	$(objdir)/snow_seb_semix.o
+						  	$(objdir)/snow_seb_semix.o $(objdir)/snow_turbulence.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/snow_percolation.o: $(physdir)/snow_percolation.f90 \
@@ -186,6 +193,7 @@ chion_physics = $(objdir)/snow_column_utils.o \
 				$(objdir)/snow_layers.o \
 				$(objdir)/snow_vapor.o \
 				$(objdir)/snow_seb_semix.o \
+				$(objdir)/snow_turbulence.o \
 				$(objdir)/snow_diurnal.o \
 				$(objdir)/snow_surface_fluxes.o \
 				$(objdir)/snow_energy.o \

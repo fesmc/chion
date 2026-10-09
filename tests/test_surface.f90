@@ -25,12 +25,13 @@ program test_surface
                                     chion_step_forcing_class, chion_const_init, &
                                     CHION_ALBEDO_PRESCRIBED, DEF_SEA_LEVEL_AIR_PRESSURE, &
                                     CHION_SEB_BESSI, CHION_SEB_SEMIX, &
-                                    CHION_TURB_BESSI, CHION_TURB_CLIMBERX, &
+                                    CHION_TURB_BESSI, CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                                     CHION_LONGWAVE_GRAYBODY, CHION_LONGWAVE_CLOUD_PROXY
     use snow_surface_fluxes
     use snow_diurnal, only : daily_toa_shortwave
     use snow_vapor
     use snow_seb_semix
+    use snow_turbulence
 
     implicit none
 
@@ -53,6 +54,7 @@ program test_surface
     integer  :: nfail
 
     type(semix_exchange_class) :: sx
+    type(turb_semix_lin_class) :: tx
 
     nfail = 0
 
@@ -225,7 +227,7 @@ program test_surface
     call check_close("has_q_lh beats has_relative_humidity", &
                      nsw%latent, -8.25_wp, 1.0e-6_wp, nfail)
     call check_close("resolved_turbulent_latent_heat_flux agrees", &
-                     resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_NONE), -8.25_wp, &
+                     resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_NONE,.TRUE.), -8.25_wp, &
                      1.0e-6_wp, nfail)
 
     ! Rain heat flux is always parameterized; there is no has_* flag for it.
@@ -262,7 +264,7 @@ program test_surface
     call check_close("semix LH = -f_lh*(qsat - q_air)", nsw%latent, &
                      semix_latent_heat_flux(sx), 1.0e-5_wp, nfail)
     call check_close("semix latent site agrees with the flux-components site", &
-                     resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_DEEP), &
+                     resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_DEEP,.TRUE.), &
                      nsw%latent, 1.0e-6_wp, nfail)
 
     ! Longwave: semix absorbs the downwelling flux with the surface
@@ -357,6 +359,70 @@ program test_surface
                      semix_sensible_heat_flux(sx,268.0_wp,265.0_wp), 1.0e-5_wp, nfail)
 
     c%seb_scheme            = CHION_SEB_BESSI
+    c%turbulent_flux_scheme = CHION_TURB_BESSI
+
+    ! === turbulent_flux_scheme = "semix" (Chion.jl bulk turbulence) =====
+    ! Dispatch only; the scheme is pinned in test_seb. Exact fluxes are
+    ! constant - linear*T of the linearization at T, with the snow roughness
+    ! on snow and the ice roughness and (D35) latent heat on bare ice.
+    write(*,*)
+    write(*,"(a)") "--- turbulent_flux_scheme = semix dispatch ---"
+
+    call forcing_init(forc)
+    forc%air_temperature       = 268.0_wp
+    forc%wind_speed            = 5.0_wp
+    forc%has_relative_humidity = .TRUE.
+    forc%relative_humidity     = 0.75_wp
+
+    c%turbulent_flux_scheme = CHION_TURB_SEMIX
+
+    tx  = turb_semix_flux_linearized(c,265.0_wp,268.0_wp,0.75_wp,forc%air_pressure, &
+                                     5.0_wp,c%semix_z0m_snow, &
+                                     surface_vapor_latent_heat(265.0_wp,c))
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
+    call check_close("semix turbulence on snow: SH = const - lin*Ts", nsw%sensible, &
+                     tx%sensible_constant - tx%sensible_linear*265.0_wp, 1.0e-5_wp, nfail)
+    call check_close("semix turbulence on snow: LH = const - lin*Ts", nsw%latent, &
+                     tx%latent_constant - tx%latent_linear*265.0_wp, 1.0e-5_wp, nfail)
+    call check_close("semix turbulence: latent site agrees with the flux-components site", &
+                     resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_DEEP,.TRUE.), &
+                     nsw%latent, 1.0e-6_wp, nfail)
+    call check_close("semix turbulence leaves the BESSI longwave alone", nsw%longwave, &
+                     c%sigma_sb*(c%eps_air*268.0_wp**4 - c%eps_snow*265.0_wp**4), &
+                     1.0e-5_wp, nfail)
+
+    ! Bare ice at T0: ice roughness and the ice latent heat.
+    tx  = turb_semix_flux_linearized(c,c%T0,268.0_wp,0.75_wp,forc%air_pressure, &
+                                     5.0_wp,c%semix_z0m_ice, &
+                                     turb_semix_latent_heat(c,c%T0,.TRUE.))
+    bif = resolved_bare_ice_surface_flux_components(c,forc,0.30_wp)
+    call check_close("semix turbulence on bare ice: ice roughness (sensible)", bif%sensible, &
+                     tx%sensible_constant - tx%sensible_linear*c%T0, 1.0e-5_wp, nfail)
+    call check_close("semix turbulence on bare ice: ice latent heat (D35)", bif%latent, &
+                     tx%latent_constant - tx%latent_linear*c%T0, 1.0e-5_wp, nfail)
+    call check_close("substrate latent site = bare-ice latent", &
+                     resolved_turbulent_latent_heat_flux(c,forc,c%T0,H_NONE,.FALSE.), &
+                     bif%latent, 1.0e-6_wp, nfail)
+
+    ! No humidity forcing: no latent flux, sensible unaffected.
+    forc%has_relative_humidity = .FALSE.
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
+    call check("semix turbulence: no humidity forcing -> no latent flux", &
+               nsw%latent .eq. 0.0_wp .and. &
+               resolved_turbulent_latent_heat_flux(c,forc,265.0_wp,H_DEEP,.TRUE.) .eq. 0.0_wp, &
+               nfail)
+    call check("semix turbulence: sensible flux without humidity", nsw%sensible .gt. 0.0_wp, nfail)
+
+    ! Prescribed fluxes win.
+    forc%has_relative_humidity = .TRUE.
+    forc%has_q_sh = .TRUE.
+    forc%q_sh     = 12.0_wp
+    forc%has_q_lh = .TRUE.
+    forc%q_lh     = -8.0_wp
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
+    call check("semix turbulence: prescribed SH and LH win", &
+               nsw%sensible .eq. 12.0_wp .and. nsw%latent .eq. -8.0_wp, nfail)
+
     c%turbulent_flux_scheme = CHION_TURB_BESSI
 
     ! === Shortwave: has_q_sw_net and the max(SWdn,0) clamp ==============
@@ -628,6 +694,31 @@ contains
         call check("interface at T0 over T1 < T0: liquid reservoir, solid untouched", &
                    mass(1) .eq. 200.0_wp .and. mass_w(1) .lt. 5.0_wp, nfail)
         call check("t_srf is not reset to temperature(1)", t_srf .eq. c%T0, nfail)
+
+        ! Chion.jl's semix turbulence converts its own flux with L(Ts):
+        ! Lv+Lm from the solid surface, Lv at T0.
+        c%turbulent_flux_scheme = CHION_TURB_SEMIX
+        fv%wind_speed = 5.0_wp
+        mass = 0.0_wp; mass_w = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        n = 2
+        mass(1:2) = 200.0_wp; density(1:2) = 350.0_wp; temperature(1:2) = 265.0_wp
+        t_srf = 265.0_wp; runoff = 0.0_wp_acc
+        call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n,runoff, &
+                                                t_srf,albedo,c,fv,dt,300.0_wp,100.0_wp,vflux)
+        call check_close("semix solid: vapor_mass = Q_lh*dt/(Lv+Lm)", vflux%vapor_mass, &
+                         vflux%latent_heat_flux*dt/(c%Lv + c%Lm), 1.0e-5_wp, nfail)
+        call check("semix solid: sublimation into dry air", vflux%vapor_mass .lt. 0.0_wp, nfail)
+
+        mass = 0.0_wp; mass_w = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        n = 2
+        mass(1:2) = 200.0_wp; density(1:2) = 350.0_wp; temperature(1:2) = c%T0
+        mass_w(1) = 5.0_wp
+        t_srf = c%T0; runoff = 0.0_wp_acc
+        call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n,runoff, &
+                                                t_srf,albedo,c,fv,dt,300.0_wp,100.0_wp,vflux)
+        call check_close("semix liquid: vapor_mass = Q_lh*dt/Lv", vflux%vapor_mass, &
+                         vflux%latent_heat_flux*dt/c%Lv, 1.0e-5_wp, nfail)
+        c%turbulent_flux_scheme = CHION_TURB_BESSI
 
         return
 

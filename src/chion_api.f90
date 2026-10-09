@@ -118,7 +118,7 @@ module chion_api
     character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "warren_wiscombe|dang"
     character(len=*), parameter :: CHION_SEB_CHOICES     = "bessi|semix"
     character(len=*), parameter :: CHION_LONGWAVE_CHOICES = "graybody|cloud_proxy"
-    character(len=*), parameter :: CHION_TURB_CHOICES    = "bessi|climberx"
+    character(len=*), parameter :: CHION_TURB_CHOICES    = "bessi|semix|climberx"
     character(len=*), parameter :: CHION_CLIMBERX_QSAT_CHOICES = "climberx|bessi"
     character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized"
     character(len=*), parameter :: CHION_DENSIFY_CHOICES = "bessi|htessel"
@@ -1067,6 +1067,15 @@ contains
         call nml_read(filename,group,"l_neutral",                c%l_neutral,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"l_dew",                    c%l_dew,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"climberx_qsat",            climberx_qsat,             init=init_pars,defaults_file=def_file,defaults_group=def_const)
+
+        call nml_read(filename,group,"semix_karman",             c%semix_karman,            init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_surface_height",     c%semix_surface_height,    init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_z0m_snow",           c%semix_z0m_snow,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_z0m_ice",            c%semix_z0m_ice,           init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_zm_to_zh",           c%semix_zm_to_zh,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_sensible_exchange_factor", c%semix_sensible_exchange_factor, init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_stable_coefficient", c%semix_stable_coefficient, init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_latent_exchange_factor",   c%semix_latent_exchange_factor,   init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"alpha_dry",                c%alpha_dry,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"alpha_wet",                c%alpha_wet,               init=init_pars,defaults_file=def_file,defaults_group=def_const)

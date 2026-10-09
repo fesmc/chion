@@ -52,13 +52,20 @@ tag is the port itself, summarised rather than enumerated.
   proxy against a daily TOA, resolved once per step before the diurnal substeps.
   Optional host field `forc%toa_shortwave` (`has_toa_shortwave`) replaces chion's
   fixed-orbit TOA (D33). Default runs bit-identical.
+- `turbulent_flux_scheme = "semix"`: Chion.jl's bulk turbulence (`03bb445`), neutral
+  log-law exchange at 10 m, Richardson damping `1/(1 + b Ri)` (stable, `b = 40`) and
+  `sqrt(1 - 16 Ri)` (unstable), calibrated sensible exchange factor 2.5, roughness
+  0.001 m (snow) / 0.01 m (bare ice), humidity over ice, vapour mass `Q/L(Ts)`;
+  parameters `semix_*` in `&chion_const`. Bare ice uses `Lv + Lm` in its latent
+  exchange (D35) and the air density `R_dry` (D38), both reverted under
+  `legacy_chion`. Default turbulence stays `bessi`.
 - `calendar_solar_longitude_deg(day_of_year)` (re-exported by `chion`): Chion.jl's
   calendar-day solar longitude, for hosts and drivers without an orbital one.
 
 ### Changed
 
 - `seb_scheme` selects the longwave only (`bessi` | `semix`); new
-  `turbulent_flux_scheme` (`bessi` | `climberx`) selects the sensible and latent
+  `turbulent_flux_scheme` (`bessi` | `semix` | `climberx`) selects the sensible and latent
   heat (Chion.jl `d0146e1`). CLIMBER-X SEMIX's aerodynamic exchange is
   `turbulent_flux_scheme = "climberx"`: the former `seb_scheme = "semix"` is
   `seb_scheme = "semix"` + `turbulent_flux_scheme = "climberx"` (bit-identical);
