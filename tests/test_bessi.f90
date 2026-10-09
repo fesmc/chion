@@ -367,7 +367,14 @@ contains
         ! surface layer and accumulated in vapor_mass. On a column that stays
         ! below T0 and keeps a surface layer far heavier than a day's
         ! sublimation, nothing is clipped (defect 1 cannot fire) and the
-        ! closure identity must hold to the same 1e-6 as with humidity off.
+        ! closure identity holds to round-off.
+        !
+        ! The tolerance is that round-off, not the 1e-6 of test 1: the pack
+        ! never melts, so every step rounds the surface layer (up to
+        ! mass_max) at least twice -- snowfall and vapour -- and the storage
+        ! sum and accumulators add as many again. Bound: 4 roundings of
+        ! half an ulp of mass_max per step, relative to the precipitation;
+        ! 2.4e-5 at sp (measured 2.7e-6), 4.4e-14 at dp (measured 2.7e-14).
 
         implicit none
 
@@ -379,7 +386,8 @@ contains
         type(chion_step_forcing_class) :: forc
         integer      :: iyr, iday
         real(wp)     :: dt_seconds, doy
-        real(wp_acc) :: precip
+        real(wp_acc) :: precip, reltol
+        integer      :: nstep
 
         write(*,"(a)") "--- 1b. mass closure with humidity on (cold, no clipping) ---"
 
@@ -418,8 +426,11 @@ contains
                    bsi%now%sublimation(1) .gt. 1.0_wp_acc, nfail)
         call check("column never melted (solid exchange only)", &
                    bsi%now%melt(1) .eq. 0.0_wp_acc, nfail)
-        call check_close("closure with humidity on", &
-                         closure_lhs(bsi,1),precip,1.0e-6_wp_acc,nfail)
+        nstep  = 3*NDAY_YEAR
+        reltol = 4.0_wp_acc*real(nstep,wp_acc)*0.5_wp_acc &
+                 *real(spacing(bsi%par%mass_max),wp_acc)/precip
+        call check_close("closure with humidity on (round-off bound)", &
+                         closure_lhs(bsi,1),precip,reltol,nfail)
 
         call bessi_dealloc(bsi)
 

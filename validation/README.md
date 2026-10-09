@@ -44,7 +44,7 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 
 | target | reference | authority |
 |---|---|---|
-| BESSI | Chion.jl | authoritative — tight tolerances; two configurations: `albedo = :dynamic` and `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`) |
+| BESSI | Chion.jl | authoritative — tight tolerances; three configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), and `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`) |
 | PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
 | ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 8 written fields (D27 reverted). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
 
@@ -146,6 +146,19 @@ harmonic conductance, Calonne conductivity and phase-dependent latent heat:
 `snow_age_days`, `sublimation` and `latent_heat_flux_sum` agree exactly — the
 last two are identically zero, since humidity is off.
 
+**After WP9–WP11 (dev_nils `27113b6`):** all gated fields pass. WP9 (harmonic
+conductance) alone roughly halved the temperature-driven differences
+(`temperature` 2.4e-03 → 1.5e-03, `mass_w` 2.6e-02 → 1.5e-02); WP10 (Calonne)
+closed the rest: worst 0.47 ulp (`temperature`, `Tsrf`), both configurations.
+The humidity-on configuration (WP11) agrees field for field, worst 0.47 ulp
+(`temperature`), including `sublimation` (0.34 ulp) and
+`latent_heat_flux_sum` (0.44 ulp); every column has a non-zero latent flux and
+the `melting` column sublimates. Defect 1 (the unclipped vapour diagnostic)
+does not split the two models: chion reproduces it, so it is gated rather than
+reported. It still breaks mass closure wherever sublimation exceeds the
+surface layer, which `tests/test_bessi.f90` measures (probe) and avoids (test
+1b, humidity-on closure without clipping).
+
 Reported, not gated:
 
 - **`wp = sp` costs** ~4e-06 relative worst case, first divergence typically
@@ -209,5 +222,5 @@ scheme rather than only the shortwave resolution (upstream defect 21; defect 19,
 aging per substep, is fixed since dev_nils 6d077c5),
 and it is the only consumer of `day_of_year` / `solar_longitude_deg`, which the
 two drivers derive differently. Comparing it would compare two known-divergent
-schemes. Humidity forcing is likewise absent — with it on, Chion.jl's vapour
-diagnostic is unclosed (upstream defect 1).
+schemes. Humidity forcing is uniform (`rh_default`; `chion_grid.x` has no
+humidity reader) and absent from the first two configurations.
