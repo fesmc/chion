@@ -1,6 +1,7 @@
 program test_seb
     ! Acceptance test for snow_seb_semix: the CLIMBER-X SEMIX aerodynamic
-    ! turbulent exchange (docs/semix_port_scope.md, rung 2).
+    ! turbulent exchange (turbulent_flux_scheme = "climberx") and its
+    ! longwave (seb_scheme = "semix"); docs/semix_port_scope.md, rung 2.
     !
     ! PRECISION: the default build is wp = sp (single). Hand-computed values
     ! are therefore checked to ~1e-5 relative, and the two num/denom identities
@@ -11,7 +12,7 @@ program test_seb
     !   * semix_resistance against hand-computed values, in all three
     !     stability regimes plus the dead-calm guard
     !   * semix_air_density against the ideal gas law
-    !   * both saturation-humidity variants (c%semix_qsat) against
+    !   * both saturation-humidity variants (c%climberx_qsat) against
     !     hand-computed values, and their derivatives against finite
     !     differences of the humidity itself
     !   * the exchange coefficients f_sh / f_lh, the no-humidity case and the
@@ -27,10 +28,12 @@ program test_seb
 
     use chion_defs,   only : wp, chion_const_class, chion_const_init, &
                              DEF_SEA_LEVEL_AIR_PRESSURE, &
-                             SEMIX_QSAT_SEMIX, SEMIX_QSAT_BESSI, &
+                             CLIMBERX_QSAT_CLIMBERX, CLIMBERX_QSAT_BESSI, &
                              CHION_SEB_BESSI, CHION_SEB_SEMIX, &
+                             CHION_TURB_BESSI, CHION_TURB_CLIMBERX, &
                              SEMIX_SNOW_ALBEDO_WW, &
-                             chion_seb_scheme_flag, chion_semix_qsat_flag, &
+                             chion_seb_scheme_flag, chion_climberx_qsat_flag, &
+                             chion_turbulent_flux_scheme_flag, &
                              chion_semix_snow_albedo_flag
     use snow_seb_semix
 
@@ -64,15 +67,22 @@ program test_seb
     write(*,"(a)") "--- scheme flags ---"
 
     call check("seb_scheme default is bessi", c%seb_scheme .eq. CHION_SEB_BESSI, nfail)
-    call check("semix_qsat default is semix", c%semix_qsat .eq. SEMIX_QSAT_SEMIX, nfail)
+    call check("turbulent_flux_scheme default is bessi", &
+               c%turbulent_flux_scheme .eq. CHION_TURB_BESSI, nfail)
+    call check("climberx_qsat default is climberx", &
+               c%climberx_qsat .eq. CLIMBERX_QSAT_CLIMBERX, nfail)
     call check("flag('bessi') = CHION_SEB_BESSI", &
                chion_seb_scheme_flag("bessi") .eq. CHION_SEB_BESSI, nfail)
     call check("flag('semix') = CHION_SEB_SEMIX", &
                chion_seb_scheme_flag("semix") .eq. CHION_SEB_SEMIX, nfail)
-    call check("qsat flag('bessi') = SEMIX_QSAT_BESSI", &
-               chion_semix_qsat_flag("bessi") .eq. SEMIX_QSAT_BESSI, nfail)
-    call check("qsat flag('semix') = SEMIX_QSAT_SEMIX", &
-               chion_semix_qsat_flag("semix") .eq. SEMIX_QSAT_SEMIX, nfail)
+    call check("turbulence flag('bessi') = CHION_TURB_BESSI", &
+               chion_turbulent_flux_scheme_flag("bessi") .eq. CHION_TURB_BESSI, nfail)
+    call check("turbulence flag('climberx') = CHION_TURB_CLIMBERX", &
+               chion_turbulent_flux_scheme_flag("climberx") .eq. CHION_TURB_CLIMBERX, nfail)
+    call check("qsat flag('bessi') = CLIMBERX_QSAT_BESSI", &
+               chion_climberx_qsat_flag("bessi") .eq. CLIMBERX_QSAT_BESSI, nfail)
+    call check("qsat flag('climberx') = CLIMBERX_QSAT_CLIMBERX", &
+               chion_climberx_qsat_flag("climberx") .eq. CLIMBERX_QSAT_CLIMBERX, nfail)
     call check("snow albedo flag('warren_wiscombe') = SEMIX_SNOW_ALBEDO_WW", &
                chion_semix_snow_albedo_flag("warren_wiscombe") .eq. SEMIX_SNOW_ALBEDO_WW, nfail)
 
@@ -135,13 +145,13 @@ program test_seb
     write(*,*)
     write(*,"(a)") "--- semix_q_sat / semix_dqsat_dT ---"
 
-    c%semix_qsat = SEMIX_QSAT_SEMIX
+    c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
     call check_close("q_sat semix at T0", semix_q_sat(c%T0,P0,c), &
                      3.7520118431e-3_wp, 1.0e-6_wp, nfail)
     call check_close("q_sat semix at 263.15 K", semix_q_sat(263.15_wp,P0,c), &
                      1.5940374185e-3_wp, 1.0e-6_wp, nfail)
 
-    c%semix_qsat = SEMIX_QSAT_BESSI
+    c%climberx_qsat = CLIMBERX_QSAT_BESSI
     call check_close("q_sat bessi at T0", semix_q_sat(c%T0,P0,c), &
                      3.7519506538e-3_wp, 1.0e-6_wp, nfail)
     call check_close("q_sat bessi at 263.15 K", semix_q_sat(263.15_wp,P0,c), &
@@ -149,9 +159,9 @@ program test_seb
 
     ! The two variants must stay close: the option exists to test sensitivity,
     ! not to change the answer.
-    c%semix_qsat = SEMIX_QSAT_SEMIX
+    c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
     q_a = semix_q_sat(263.15_wp,P0,c)
-    c%semix_qsat = SEMIX_QSAT_BESSI
+    c%climberx_qsat = CLIMBERX_QSAT_BESSI
     call check("the two q_sat variants agree within 1%", &
                abs(semix_q_sat(263.15_wp,P0,c) - q_a) .lt. 0.01_wp*q_a, nfail)
 
@@ -165,12 +175,12 @@ program test_seb
     ! 273.86-offset e_sat_i while q_sat_i uses the T+0.71 approximation. That
     ! ~0.2% mismatch is CLIMBER-X's, reproduced deliberately, and the looser
     ! tolerance below is what pins it.
-    c%semix_qsat = SEMIX_QSAT_BESSI
+    c%climberx_qsat = CLIMBERX_QSAT_BESSI
     dq_fd = (semix_q_sat(263.65_wp,P0,c) - semix_q_sat(262.65_wp,P0,c))/1.0_wp
     call check_close("dq/dT bessi matches a central difference", &
                      semix_dqsat_dT(263.15_wp,P0,c), dq_fd, 5.0e-3_wp, nfail)
 
-    c%semix_qsat = SEMIX_QSAT_SEMIX
+    c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
     dq_fd = (semix_q_sat(263.65_wp,P0,c) - semix_q_sat(262.65_wp,P0,c))/1.0_wp
     call check_close("dq/dT semix matches a central difference to 1%", &
                      semix_dqsat_dT(263.15_wp,P0,c), dq_fd, 1.0e-2_wp, nfail)

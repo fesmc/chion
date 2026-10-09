@@ -448,7 +448,7 @@ shared fields of `chion_const_class` from it:
 | `ci` | `cp_ice` |
 | `cw` | `cp_w` |
 | `Lm` | `L_ice` |
-| `grav` (SEMIX SEB) | `g` |
+| `grav` (CLIMBER-X turbulence) | `g` |
 | `T0` | `T0` |
 
 Without `cnst`, chion loads the record itself from `&chion:phys_const_file`, which is now in
@@ -465,7 +465,7 @@ silently differed from the rest of the program.
 **Not shared, on purpose:** densification's `DENSIFY_GRAVITY` stays chion-internal (D25): it
 is part of the `legacy_chion` reference-reproduction switch. chion therefore still has two
 gravities, as before this change: 9.80665 in densification and `g` (9.81 in both shipped sets)
-in the SEMIX SEB. Universal constants with no
+in the CLIMBER-X turbulence (`turbulent_flux_scheme = "climberx"`, formerly `seb_scheme = "semix"`). Universal constants with no
 `phys_const_class` counterpart (`Lv`, `cp_air`, `karman`, `R_dry`, `sigma_sb`) stay in
 `&chion_const`. (`Ki` was there too until the Calonne et al. 2019 conductivity, Chion.jl
 `49990e6`, made it dead; it was removed from `chion_const_class`, the API reader and
@@ -633,6 +633,32 @@ would keep moving round-off.
 
 **Impact:** none at dp (the harness' fine-layer configurations are gated); (3) only stops
 an sp round-off loop.
+
+### D37. Turbulence scheme `climberx`: chion's CLIMBER-X SEMIX exchange under its own name
+**What:** Chion.jl split its surface scheme (`d0146e1`): `seb_scheme` (`bessi` | `semix`)
+selects the longwave only, `turbulent_flux_scheme` (`bessi` | `semix`) the sensible and
+latent heat. chion follows the split and adds a third turbulence option,
+`turbulent_flux_scheme = "climberx"`: its port of CLIMBER-X SEMIX's aerodynamic exchange
+(`snow_seb_semix`, `docs/semix_port_scope.md`), formerly the turbulent half of
+`seb_scheme = "semix"`. chion's old `seb_scheme = "semix"` is now `seb_scheme = "semix"` +
+`turbulent_flux_scheme = "climberx"`, bit-identical; `semix_qsat` is renamed
+`climberx_qsat` (`"climberx"` | `"bessi"`). `turbulent_flux_scheme = "semix"` is Chion.jl's
+own bulk turbulence (C7). The SEMIX spectral albedo keeps `albedo_scheme = "semix"`, as in
+Chion.jl.
+
+**Why:** in Chion.jl `:semix` turbulence is a bulk scheme of its own (neutral log-law,
+`z0h = z0m/10`, Richardson damping `1/(1 + b Ri)` on the stable side, calibrated
+exchange factors), not CLIMBER-X's resistance (snow-depth roughness blend, stable side
+undamped, `z_sfl = 100 m`). One name for two schemes would make namelists and harness
+pins mean different things on the two sides (review Q2; reverses PLAN_dev_nils §4.5).
+CLIMBER-X's longwave is exactly Chion.jl's `seb_scheme = :semix` (`eps_s (LW↓ - σTs⁴)`,
+`eps_ice` on bare ice), so it keeps that name.
+
+**Impact:** namelists: `seb_scheme = "semix"` alone now gives the semix longwave with
+BESSI's turbulence; add `turbulent_flux_scheme = "climberx"` for the former behaviour, and
+rename `semix_qsat`. The shared longwave expression keeps CLIMBER-X's evaluation order
+(`eps*LW↓ - eps*σTs⁴`, Julia `eps*(LW↓ - σTs⁴)`), so the `seb_scheme = semix` gate sees
+round-off only.
 
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its

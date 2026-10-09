@@ -6,6 +6,14 @@ module snow_seb_semix
     ! Willeit, Calov, Ganopolski. The saturation-humidity helpers are ports of
     ! q_sat_i / dqsat_dT_i from src/main/constants.f90.
     !
+    ! SELECTION (since Chion.jl's seb_scheme/turbulent_flux_scheme split, chion
+    ! C6). The aerodynamic exchange here is turbulent_flux_scheme = "climberx";
+    ! the longwave helpers at the bottom are seb_scheme = "semix", which is
+    ! CLIMBER-X's ebal longwave and Chion.jl's :semix SEB alike. The former
+    ! all-in-one seb_scheme = "semix" is seb_scheme = "semix" together with
+    ! turbulent_flux_scheme = "climberx". Chion.jl's own bulk turbulence, also
+    ! called :semix upstream, is a different scheme.
+    !
     ! SEMIX replaces BESSI's single bulk exchange coefficient D_sh by a
     ! Monin-Obukhov-style aerodynamic resistance r_a: a snow-depth-weighted
     ! roughness length, a neutral exchange coefficient from the log-law, and a
@@ -53,7 +61,7 @@ module snow_seb_semix
     ! true column depth sum(mass/density). Only the roughness blend uses it,
     ! and it saturates quickly (fsnow = h/(h+10*z0m_ice), i.e. half-way at 2 cm).
 
-    use chion_defs, only : wp, chion_const_class, SEMIX_QSAT_BESSI
+    use chion_defs, only : wp, chion_const_class, CLIMBERX_QSAT_BESSI
     use snow_vapor, only : safe_positive, relative_humidity_fraction, &
                            ice_saturation_vapor_pressure, &
                            ice_saturation_vapor_pressure_derivative
@@ -216,19 +224,19 @@ contains
     ! =====================================================================
     ! Saturation specific humidity over ice
     !
-    ! Two parameterizations, selected by c%semix_qsat:
+    ! Two parameterizations, selected by c%climberx_qsat:
     !
-    !   SEMIX_QSAT_SEMIX  CLIMBER-X q_sat_i / dqsat_dT_i (constants.f90), the
-    !                     approximate forms actually used by SEMIX.
-    !   SEMIX_QSAT_BESSI  chion's own ice saturation vapour pressure
+    !   CLIMBERX_QSAT_CLIMBERX  CLIMBER-X q_sat_i / dqsat_dT_i (constants.f90),
+    !                     the approximate forms actually used by SEMIX.
+    !   CLIMBERX_QSAT_BESSI  chion's own ice saturation vapour pressure
     !                     (energy_flux.jl:62-71), converted to specific
     !                     humidity by the same 0.622/p that BESSI's
     !                     latent_exchange_coefficient folds in.
     !
     ! The two differ only in their fit coefficients (22.587/(T+0.71) against
     ! 22.46/(T-T0+272.62)) and are within about 1% of each other over the
-    ! snowpack temperature range; the option exists so the SEMIX SEB can be
-    ! run against either without a rebuild.
+    ! snowpack temperature range; the option exists so the CLIMBER-X
+    ! turbulence can be run against either without a rebuild.
     ! =====================================================================
 
     pure function semix_q_sat(temperature,air_pressure,c) result(q)
@@ -244,7 +252,7 @@ contains
         ! Local variables
         real(wp) :: es
 
-        if (c%semix_qsat .eq. SEMIX_QSAT_BESSI) then
+        if (c%climberx_qsat .eq. CLIMBERX_QSAT_BESSI) then
             es = ice_saturation_vapor_pressure(temperature,c%T0)
             q  = SEMIX_EPS_VAPOR*es/safe_positive(air_pressure)
         else
@@ -283,7 +291,7 @@ contains
 
         real(wp) :: es, des_dT
 
-        if (c%semix_qsat .eq. SEMIX_QSAT_BESSI) then
+        if (c%climberx_qsat .eq. CLIMBERX_QSAT_BESSI) then
             es     = ice_saturation_vapor_pressure(temperature,c%T0)
             des_dT = ice_saturation_vapor_pressure_derivative(temperature,c%T0,es)
             dqdT   = SEMIX_EPS_VAPOR*des_dT/safe_positive(air_pressure)

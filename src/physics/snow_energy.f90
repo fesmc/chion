@@ -53,12 +53,15 @@ module snow_energy
     ! step 5 below.
 
     use chion_defs, only : wp, wp_acc, io_unit_err, CHION_SEB_SEMIX, &
+                           CHION_TURB_CLIMBERX, &
                            chion_const_class, chion_step_forcing_class
 
-    ! SEMIX aerodynamic surface scheme, selected by c%seb_scheme. It replaces
-    ! the sensible and turbulent-latent coefficients of step 2 and nothing
-    ! else: the conduction assembly, the melting-point re-solve and the whole
-    ! firn column below row 1 are untouched (docs/semix_port_scope.md).
+    ! CLIMBER-X SEMIX: its aerodynamic exchange (turbulent_flux_scheme =
+    ! "climberx") replaces the sensible and turbulent-latent coefficients of
+    ! step 2, its longwave (seb_scheme = "semix") the longwave ones, and
+    ! nothing else: the conduction assembly, the melting-point re-solve and
+    ! the whole firn column below row 1 are untouched
+    ! (docs/semix_port_scope.md).
     use snow_seb_semix, only : semix_exchange_class, semix_flux_lin_class, &
                                semix_snow_depth, semix_turbulent_exchange, &
                                semix_surface_emissivity, semix_longwave_down, &
@@ -357,7 +360,7 @@ contains
         real(wp) :: G_s, surface_den, surface_const, surface_coef, boundary_term
         real(wp) :: ts_new
 
-        logical  :: uses_semix_seb
+        logical  :: uses_semix_seb, uses_climberx_turb
 
         type(latent_vapor_flux_lin_class) :: lh_coef
         type(semix_exchange_class)        :: sx
@@ -417,11 +420,12 @@ contains
         Ts_cube   = Ts_sq*Ts_n
         Ts_fourth = Ts_sq*Ts_sq
 
-        ! SEMIX exchange coefficients, built ONCE at the linearization point
+        ! CLIMBER-X exchange coefficients, built ONCE at the linearization point
         ! Ts^n, which is the temperature the whole of step 2 linearizes about.
-        uses_semix_seb = (c%seb_scheme .eq. CHION_SEB_SEMIX)
+        uses_semix_seb     = (c%seb_scheme .eq. CHION_SEB_SEMIX)
+        uses_climberx_turb = (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX)
 
-        if (uses_semix_seb) then
+        if (uses_climberx_turb) then
             sx = semix_turbulent_exchange(c,semix_snow_depth(mass,density,n_snow), &
                                           forc%air_temperature,Ts_n, &
                                           forc%wind_speed,forc%air_pressure, &
@@ -477,7 +481,7 @@ contains
         if (forc%has_q_sh) then
             sh_const = forc%q_sh
             sh_lin   = 0.0_wp
-        else if (uses_semix_seb) then
+        else if (uses_climberx_turb) then
             ! ebal num_sh/denom_sh (smb_ebal.f90:125-126). Same shape as the
             ! BESSI branch below, with the aerodynamic f_sh in place of D_sh.
             sh_const = forc%air_temperature*sx%f_sh
@@ -491,7 +495,7 @@ contains
         if (forc%has_q_lh) then
             lh_turb_const = forc%q_lh
             lh_turb_lin   = 0.0_wp
-        else if (uses_semix_seb) then
+        else if (uses_climberx_turb) then
             ! ebal num_lh/denom_lh (smb_ebal.f90:122-123), which ARE chion's
             ! q_const/q_lin contributions -- coupling decision alpha. Note the
             ! sign flip: SEMIX counts the latent flux positive away from the

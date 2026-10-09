@@ -108,11 +108,20 @@ module chion_defs
     integer, parameter, public :: SEMIX_SNOW_ALBEDO_WW   = 1
     integer, parameter, public :: SEMIX_SNOW_ALBEDO_DANG = 2
 
-    ! Surface energy balance family. "bessi" is the bulk-coefficient scheme
-    ! chion was ported with; "semix" is CLIMBER-X SEMIX's aerodynamic scheme.
-    ! Orthogonal to albedo_scheme and to Ntot -- see docs/semix_port_scope.md.
+    ! Surface energy balance: since Chion.jl d0146e1 it selects the LONGWAVE
+    ! treatment only. "bessi": LWdn - eps_snow*sigma*Ts^4 (the downwelling
+    ! flux absorbed in full); "semix": eps_s*(LWdn - sigma*Ts^4), with eps_s
+    ! = eps_snow on snow and eps_ice on bare ice (CLIMBER-X SEMIX's ebal).
     integer, parameter, public :: CHION_SEB_BESSI = 1
     integer, parameter, public :: CHION_SEB_SEMIX = 2
+
+    ! Turbulent sensible and latent heat, independent of seb_scheme (Chion.jl
+    ! turbulent_flux_scheme). "bessi": the bulk coefficient D_sh and BESSI's
+    ! vapour-pressure gradient; "climberx": CLIMBER-X SEMIX's aerodynamic
+    ! resistance (snow_seb_semix; docs/semix_port_scope.md). Orthogonal to
+    ! albedo_scheme and to Ntot.
+    integer, parameter, public :: CHION_TURB_BESSI    = 1
+    integer, parameter, public :: CHION_TURB_CLIMBERX = 3
 
     ! Downwelling longwave when the host does not prescribe it (Chion.jl
     ! 03bb445 longwave_scheme): "graybody" eps_air*sigma*T_air^4, or
@@ -121,12 +130,12 @@ module chion_defs
     integer, parameter, public :: CHION_LONGWAVE_GRAYBODY    = 1
     integer, parameter, public :: CHION_LONGWAVE_CLOUD_PROXY = 2
 
-    ! Which saturation-specific-humidity parameterization the SEMIX surface
-    ! scheme uses for the turbulent latent flux. SEMIX is CLIMBER-X's own
-    ! q_sat_i/dqsat_dT_i; BESSI routes chion's ice saturation vapour pressure
-    ! through the same 0.622/p conversion.
-    integer, parameter, public :: SEMIX_QSAT_SEMIX = 1
-    integer, parameter, public :: SEMIX_QSAT_BESSI = 2
+    ! Which saturation-specific-humidity parameterization the CLIMBER-X
+    ! turbulence uses for the latent flux. "climberx" is CLIMBER-X's own
+    ! q_sat_i/dqsat_dT_i; "bessi" routes chion's ice saturation vapour
+    ! pressure through the same 0.622/p conversion.
+    integer, parameter, public :: CLIMBERX_QSAT_CLIMBERX = 1
+    integer, parameter, public :: CLIMBERX_QSAT_BESSI    = 2
 
     integer, parameter, public :: CHION_DENSIFY_BESSI   = 1
     integer, parameter, public :: CHION_DENSIFY_HTESSEL = 2
@@ -260,14 +269,16 @@ module chion_defs
         ! Turbulent exchange
         real(wp) :: D_sh               ! [W m-2 K-1] sensible heat exchange coefficient
 
-        ! Surface energy balance scheme, and the aerodynamic exchange it needs
-        ! (CHION_SEB_SEMIX only). Roughness lengths and the surface-layer height
-        ! are CLIMBER-X smb_par / constants values; karman, grav and R_dry are
-        ! the universal constants SEMIX pulls from its constants module. The
-        ! heat capacity of air is chion's existing cp_air (1003 vs SEMIX's
-        ! 1000 J kg-1 K-1, 0.3% on f_sh) rather than a second constant for the
-        ! same quantity.
-        integer  :: seb_scheme         ! CHION_SEB_*
+        ! Surface energy balance (longwave) and turbulent-flux schemes.
+        integer  :: seb_scheme             ! CHION_SEB_*
+        integer  :: turbulent_flux_scheme  ! CHION_TURB_*
+
+        ! CLIMBER-X SEMIX aerodynamic exchange (CHION_TURB_CLIMBERX only).
+        ! Roughness lengths and the surface-layer height are CLIMBER-X smb_par
+        ! / constants values; karman, grav and R_dry are the universal
+        ! constants SEMIX pulls from its constants module. The heat capacity
+        ! of air is chion's existing cp_air (1003 vs SEMIX's 1000 J kg-1 K-1,
+        ! 0.3% on f_sh) rather than a second constant for the same quantity.
         real(wp) :: z0m_snow           ! [m] momentum roughness length, snow
         real(wp) :: z0m_ice            ! [m] momentum roughness length, ice
         real(wp) :: zm_to_zh           ! [1] heat/momentum roughness ratio
@@ -277,7 +288,7 @@ module chion_defs
         real(wp) :: R_dry              ! [J kg-1 K-1] gas constant of dry air
         logical  :: l_neutral          ! [1] force neutral stratification
         logical  :: l_dew              ! [1] allow dew/frost deposition
-        integer  :: semix_qsat         ! SEMIX_QSAT_*
+        integer  :: climberx_qsat      ! CLIMBERX_QSAT_*
 
         ! Albedo
         real(wp) :: alpha_dry          ! [1] dry snow albedo (upper bound)
@@ -558,7 +569,8 @@ module chion_defs
     public :: chion_semix_snow_albedo_flag
     public :: chion_seb_scheme_flag
     public :: chion_longwave_scheme_flag
-    public :: chion_semix_qsat_flag
+    public :: chion_turbulent_flux_scheme_flag
+    public :: chion_climberx_qsat_flag
     public :: chion_fresh_snow_density_scheme_flag
     public :: chion_densify_scheme_flag
 
@@ -596,9 +608,11 @@ contains
 
         c%D_sh    = 10.0_wp
 
-        ! SEMIX aerodynamic exchange defaults (CLIMBER-X smb_par.nml /
-        ! smb_params.f90 / constants.f90).
-        c%seb_scheme  = CHION_SEB_BESSI
+        c%seb_scheme            = CHION_SEB_BESSI
+        c%turbulent_flux_scheme = CHION_TURB_BESSI
+
+        ! CLIMBER-X SEMIX aerodynamic exchange defaults (CLIMBER-X
+        ! smb_par.nml / smb_params.f90 / constants.f90).
         c%z0m_snow    = 0.0024_wp
         c%z0m_ice     = 0.002_wp
         c%zm_to_zh    = exp(-2.0_wp)
@@ -608,7 +622,7 @@ contains
         c%R_dry       = 287.058_wp
         c%l_neutral   = .FALSE.
         c%l_dew       = .TRUE.
-        c%semix_qsat  = SEMIX_QSAT_SEMIX
+        c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
 
         c%alpha_dry      = 0.81_wp
         c%alpha_wet      = 0.70_wp
@@ -689,13 +703,14 @@ contains
         write(*,"(a25,g14.6,a)") "latent_heat_flux_ratio = ", c%latent_heat_flux_ratio, "  [1]"
         write(*,"(a25,g14.6,a)") "D_sh    = ", c%D_sh,    "  [W m-2 K-1]"
         write(*,"(a25,i14)")     "seb_scheme = ", c%seb_scheme
+        write(*,"(a25,i14)")     "turbulent_flux_scheme = ", c%turbulent_flux_scheme
         write(*,"(a25,g14.6,a)") "z0m_snow = ", c%z0m_snow, "  [m]"
         write(*,"(a25,g14.6,a)") "z0m_ice  = ", c%z0m_ice,  "  [m]"
         write(*,"(a25,g14.6,a)") "zm_to_zh = ", c%zm_to_zh, "  [1]"
         write(*,"(a25,g14.6,a)") "z_sfl    = ", c%z_sfl,    "  [m]"
         write(*,"(a25,l14)")     "l_neutral = ", c%l_neutral
         write(*,"(a25,l14)")     "l_dew     = ", c%l_dew
-        write(*,"(a25,i14)")     "semix_qsat = ", c%semix_qsat
+        write(*,"(a25,i14)")     "climberx_qsat = ", c%climberx_qsat
         write(*,"(a25,g14.6,a)") "alpha_dry = ", c%alpha_dry, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_wet = ", c%alpha_wet, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_ice = ", c%alpha_ice, "  [1]"
@@ -706,15 +721,15 @@ contains
         write(*,"(a25,g14.6,a)") "aging_snowfall_ref = ", c%aging_snowfall_ref, "  [kg m-2]"
         write(*,"(a25,g14.6,a)") "eps_air  = ", c%eps_air,  "  [1]"
         write(*,"(a25,i14)")     "longwave_scheme = ", c%longwave_scheme
-        write(*,"(a25,g14.6,a)") "lw_emissivity_base = ", c%lw_emissivity_base, "  [1]"
-        write(*,"(a25,g14.6,a)") "lw_emissivity_temperature_slope = ", &
+        write(*,"(a37,g14.6,a)") "lw_emissivity_base = ", c%lw_emissivity_base, "  [1]"
+        write(*,"(a37,g14.6,a)") "lw_emissivity_temperature_slope = ", &
                                  c%lw_emissivity_temperature_slope, "  [K-1]"
-        write(*,"(a25,g14.6,a)") "lw_emissivity_cloud_slope = ", c%lw_emissivity_cloud_slope, "  [1]"
-        write(*,"(a25,g14.6,a)") "lw_clear_sky_transmissivity = ", &
+        write(*,"(a37,g14.6,a)") "lw_emissivity_cloud_slope = ", c%lw_emissivity_cloud_slope, "  [1]"
+        write(*,"(a37,g14.6,a)") "lw_clear_sky_transmissivity = ", &
                                  c%lw_clear_sky_transmissivity, "  [1]"
-        write(*,"(a25,g14.6,a)") "lw_clear_sky_transmissivity_per_km = ", &
+        write(*,"(a37,g14.6,a)") "lw_clear_sky_transmissivity_per_km = ", &
                                  c%lw_clear_sky_transmissivity_per_km, "  [km-1]"
-        write(*,"(a25,g14.6,a)") "lw_night_cloud_fraction = ", c%lw_night_cloud_fraction, "  [1]"
+        write(*,"(a37,g14.6,a)") "lw_night_cloud_fraction = ", c%lw_night_cloud_fraction, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_snow = ", c%eps_snow, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_ice  = ", c%eps_ice,  "  [1]"
         write(*,"(a25,g14.6,a)") "sigma_sb = ", c%sigma_sb, "  [W m-2 K-4]"
@@ -1146,7 +1161,32 @@ contains
 
     end function chion_longwave_scheme_flag
 
-    function chion_semix_qsat_flag(name) result(flag)
+    function chion_turbulent_flux_scheme_flag(name) result(flag)
+        ! Map a namelist string onto a turbulent-flux scheme flag.
+
+        implicit none
+
+        character(len=*), intent(IN) :: name
+        integer :: flag
+
+        select case(trim(adjustl(name)))
+            case("bessi")
+                flag = CHION_TURB_BESSI
+            case("climberx")
+                flag = CHION_TURB_CLIMBERX
+            case DEFAULT
+                write(io_unit_err,*) "chion_turbulent_flux_scheme_flag:: Error: &
+                                     &turbulent flux scheme not recognized."
+                write(io_unit_err,*) "turbulent_flux_scheme should be one of: ['bessi','climberx']"
+                write(io_unit_err,*) "turbulent_flux_scheme = ", trim(name)
+                stop "Program stopped."
+        end select
+
+        return
+
+    end function chion_turbulent_flux_scheme_flag
+
+    function chion_climberx_qsat_flag(name) result(flag)
         ! Map a namelist string onto a saturation-humidity parameterization.
 
         implicit none
@@ -1155,20 +1195,20 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("semix")
-                flag = SEMIX_QSAT_SEMIX
+            case("climberx")
+                flag = CLIMBERX_QSAT_CLIMBERX
             case("bessi")
-                flag = SEMIX_QSAT_BESSI
+                flag = CLIMBERX_QSAT_BESSI
             case DEFAULT
-                write(io_unit_err,*) "chion_semix_qsat_flag:: Error: scheme not recognized."
-                write(io_unit_err,*) "semix_qsat should be one of: ['semix','bessi']"
-                write(io_unit_err,*) "semix_qsat = ", trim(name)
+                write(io_unit_err,*) "chion_climberx_qsat_flag:: Error: scheme not recognized."
+                write(io_unit_err,*) "climberx_qsat should be one of: ['climberx','bessi']"
+                write(io_unit_err,*) "climberx_qsat = ", trim(name)
                 stop "Program stopped."
         end select
 
         return
 
-    end function chion_semix_qsat_flag
+    end function chion_climberx_qsat_flag
 
     function chion_albedo_scheme_flag(name) result(flag)
         ! Map a namelist string onto an albedo scheme flag. Canonical names

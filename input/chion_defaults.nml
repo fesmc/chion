@@ -99,12 +99,12 @@
     cp_air                    = 1003.0      ! [J kg-1 K-1] Heat capacity of air
     latent_heat_flux_ratio    = 1.0         ! [1] Scaling of the turbulent latent flux
 
-    ! ## Turbulent exchange ##
-    D_sh                      = 10.0        ! [W m-2 K-1] Sensible heat exchange coefficient
+    ! ## Surface energy balance and turbulent exchange ##
+    seb_scheme                = "bessi"     ! Longwave only: "bessi" | "semix" (absorbed with eps_snow / eps_ice)
+    turbulent_flux_scheme     = "bessi"     ! Sensible and latent heat: "bessi" | "climberx"
+    D_sh                      = 10.0        ! [W m-2 K-1] Sensible heat exchange coefficient (bessi)
 
-    ! ## Surface energy balance (CLIMBER-X SEMIX aerodynamic scheme) ##
-    ! seb_scheme = "bessi" uses D_sh above and ignores everything below it.
-    seb_scheme                = "bessi"     ! "bessi" | "semix"
+    ! ## CLIMBER-X SEMIX aerodynamic exchange (turbulent_flux_scheme = "climberx") ##
     z0m_snow                  = 0.0024      ! [m]  Momentum roughness length, snow
     z0m_ice                   = 0.002       ! [m]  Momentum roughness length, ice
     zm_to_zh                  = 0.13533528  ! [1]  Heat/momentum roughness ratio, exp(-2)
@@ -113,7 +113,7 @@
     R_dry                     = 287.058     ! [J kg-1 K-1] Gas constant of dry air
     l_neutral                 = .FALSE.     ! [1]  Force neutral stratification?
     l_dew                     = .TRUE.      ! [1]  Allow dew/frost deposition?
-    semix_qsat                = "semix"     ! "semix" | "bessi"
+    climberx_qsat             = "climberx"  ! Saturation humidity: "climberx" (q_sat_i) | "bessi"
 
     ! ## Albedo ##
     alpha_dry                 = 0.81        ! [1] Dry snow albedo (upper bound)
@@ -185,6 +185,16 @@
 !   snow_age_days are scaled by (1-f), so S >= aging_snowfall_ref resets
 !   to alpha_dry and a trace of snow does almost nothing (D30). Chion.jl
 !   resets on any snowfall; legacy_chion builds do the same.
+!
+! seb_scheme, turbulent_flux_scheme
+!   Chion.jl's split (d0146e1): seb_scheme selects the longwave
+!   treatment only, turbulent_flux_scheme the sensible and latent heat.
+!   "climberx" is chion's port of CLIMBER-X SEMIX's aerodynamic exchange
+!   (docs/semix_port_scope.md); its vapour mass converts with Lv + Lm at
+!   every surface temperature. CLIMBER-X's full surface scheme is
+!   seb_scheme = "semix" with turbulent_flux_scheme = "climberx" (formerly
+!   seb_scheme = "semix" alone); its spectral albedo is albedo_scheme =
+!   "semix", as in Chion.jl.
 !
 ! longwave_scheme
 !   Chion.jl 03bb445, BESSI only, used when the host does not prescribe

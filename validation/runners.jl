@@ -229,8 +229,8 @@ when it does, so the same runner drives either reference environment
 rather than from a commit hash.
 
 dev_nils (27113b6) added, with defaults that differ from chion's: turbulent
-sensible/latent heat `turbulent_flux_scheme = :semix` (Julia's modified SEMIX,
-not ported: plan 1c.1) and `seb_scheme`, both pinned to `:bessi`;
+sensible/latent heat `turbulent_flux_scheme = :semix` (Julia's bulk turbulence,
+ported by chion C7) and `seb_scheme` (longwave only), both pinned to `:bessi`;
 `refreezing_correction` (default 1, neutral; pinned so a default change
 upstream cannot slip in).
 

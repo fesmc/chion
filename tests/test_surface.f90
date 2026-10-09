@@ -25,6 +25,7 @@ program test_surface
                                     chion_step_forcing_class, chion_const_init, &
                                     CHION_ALBEDO_PRESCRIBED, DEF_SEA_LEVEL_AIR_PRESSURE, &
                                     CHION_SEB_BESSI, CHION_SEB_SEMIX, &
+                                    CHION_TURB_BESSI, CHION_TURB_CLIMBERX, &
                                     CHION_LONGWAVE_GRAYBODY, CHION_LONGWAVE_CLOUD_PROXY
     use snow_surface_fluxes
     use snow_diurnal, only : daily_toa_shortwave
@@ -41,9 +42,9 @@ program test_surface
     type(latent_vapor_flux_lin_class) :: lin
     type(latent_heat_coeff_class)     :: coef
 
-    ! Snow depth, needed only by seb_scheme = "semix" for its roughness blend.
-    ! Every check below except the SEMIX section runs the BESSI scheme, which
-    ! ignores it entirely.
+    ! Snow depth, needed only by turbulent_flux_scheme = "climberx" for its
+    ! roughness blend. Every check below except the SEMIX section runs the
+    ! BESSI scheme, which ignores it entirely.
     real(wp), parameter :: H_NONE = 0.0_wp
     real(wp), parameter :: H_DEEP = 1.0_wp
 
@@ -233,14 +234,14 @@ program test_surface
     call check_close("Q_rain = P_rain*cw*(Ta - T0)", &
                      nsw%rain, 1.0e-4_wp*c%cw*(268.0_wp - c%T0), 1.0e-5_wp, nfail)
 
-    ! === seb_scheme = "semix" ===========================================
-    ! The SEMIX aerodynamic scheme replaces the sensible and turbulent-latent
-    ! terms at BOTH exact-flux sites. Its own physics is pinned in test_seb;
-    ! what is checked here is the DISPATCH: that these two entry points route
-    ! to it, that longwave and rain are untouched by the switch, and that a
-    ! prescribed flux still wins.
+    ! === CLIMBER-X SEMIX: seb_scheme = "semix", turbulence = "climberx" ===
+    ! The CLIMBER-X aerodynamic scheme replaces the sensible and
+    ! turbulent-latent terms at BOTH exact-flux sites, its longwave the
+    ! longwave. Its own physics is pinned in test_seb; what is checked here is
+    ! the DISPATCH: that these two entry points route to it, that rain is
+    ! untouched by the switches, and that a prescribed flux still wins.
     write(*,*)
-    write(*,"(a)") "--- seb_scheme = semix dispatch ---"
+    write(*,"(a)") "--- seb_scheme = semix, turbulent_flux_scheme = climberx dispatch ---"
 
     call forcing_init(forc)
     forc%air_temperature       = 268.0_wp
@@ -249,7 +250,8 @@ program test_surface
     forc%has_relative_humidity = .TRUE.
     forc%relative_humidity     = 0.75_wp
 
-    c%seb_scheme = CHION_SEB_SEMIX
+    c%seb_scheme            = CHION_SEB_SEMIX
+    c%turbulent_flux_scheme = CHION_TURB_CLIMBERX
 
     sx  = semix_turbulent_exchange(c,H_DEEP,268.0_wp,265.0_wp,5.0_wp, &
                                    forc%air_pressure,0.75_wp,.TRUE.)
@@ -322,7 +324,40 @@ program test_surface
                      bif%sensible, semix_sensible_heat_flux(sx,271.0_wp,c%T0), &
                      1.0e-5_wp, nfail)
 
-    c%seb_scheme = CHION_SEB_BESSI
+    ! The two switches are independent (Chion.jl d0146e1): the semix
+    ! longwave with BESSI's turbulence, and BESSI's longwave with the
+    ! CLIMBER-X turbulence.
+    call forcing_init(forc)
+    forc%air_temperature       = 268.0_wp
+    forc%wind_speed            = 5.0_wp
+    forc%has_relative_humidity = .TRUE.
+    forc%relative_humidity     = 0.75_wp
+
+    c%seb_scheme            = CHION_SEB_SEMIX
+    c%turbulent_flux_scheme = CHION_TURB_BESSI
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
+    call check_close("seb semix + bessi turbulence: semix longwave", nsw%longwave, &
+                     c%eps_snow*(c%sigma_sb*c%eps_air*268.0_wp**4) &
+                     - c%eps_snow*c%sigma_sb*265.0_wp**4, 1.0e-5_wp, nfail)
+    call check_close("seb semix + bessi turbulence: SH = D_sh*(Ta - Ts)", nsw%sensible, &
+                     c%D_sh*(268.0_wp - 265.0_wp), 1.0e-5_wp, nfail)
+    call check_close("seb semix + bessi turbulence: BESSI latent flux", nsw%latent, &
+                     latent_vapor_flux(265.0_wp,c,268.0_wp,0.75_wp,forc%air_pressure, &
+                                       c%Lv + c%Lm), 1.0e-5_wp, nfail)
+
+    c%seb_scheme            = CHION_SEB_BESSI
+    c%turbulent_flux_scheme = CHION_TURB_CLIMBERX
+    sx  = semix_turbulent_exchange(c,H_DEEP,268.0_wp,265.0_wp,5.0_wp, &
+                                   forc%air_pressure,0.75_wp,.TRUE.)
+    nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
+    call check_close("seb bessi + climberx turbulence: BESSI longwave", nsw%longwave, &
+                     c%sigma_sb*(c%eps_air*268.0_wp**4 - c%eps_snow*265.0_wp**4), &
+                     1.0e-5_wp, nfail)
+    call check_close("seb bessi + climberx turbulence: CLIMBER-X sensible", nsw%sensible, &
+                     semix_sensible_heat_flux(sx,268.0_wp,265.0_wp), 1.0e-5_wp, nfail)
+
+    c%seb_scheme            = CHION_SEB_BESSI
+    c%turbulent_flux_scheme = CHION_TURB_BESSI
 
     ! === Shortwave: has_q_sw_net and the max(SWdn,0) clamp ==============
     write(*,*)

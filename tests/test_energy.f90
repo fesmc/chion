@@ -18,7 +18,8 @@ program test_energy
     !      equilibrium is preserved down to a 1e-8 kg m-2 top cell.
     !   7. The n <= 0 and mass(1) <= 0 early exits write nothing.
     !  11. Two-layer diffusion step against its closed form (Chion.jl 03bb445).
-    !   8. seb_scheme = "semix": the surface row picks up SEMIX's f_sh and the
+    !   8. CLIMBER-X SEMIX (seb_scheme = "semix", turbulent_flux_scheme =
+    !      "climberx"): the surface row picks up SEMIX's f_sh and the
     !      ebal num_lh/denom_lh decomposition, and nothing below row 1 moves.
     !   9. Harmonic interface conductance (Chion.jl 81034fa/d0146e1): equals
     !      the former arithmetic form on a uniform column, coefficient and full
@@ -32,7 +33,8 @@ program test_energy
     !      the substrate; bare ice cools below T0 under a negative balance.
 
     use chion_defs,   only : wp, wp_acc, chion_const_class, chion_step_forcing_class, &
-                             chion_const_init, CHION_SEB_BESSI, CHION_SEB_SEMIX
+                             chion_const_init, CHION_SEB_BESSI, CHION_SEB_SEMIX, &
+                             CHION_TURB_BESSI, CHION_TURB_CLIMBERX
     use snow_energy
     use snow_seb_semix, only : semix_exchange_class, semix_flux_lin_class, &
                                semix_snow_depth, semix_turbulent_exchange, &
@@ -1507,7 +1509,7 @@ contains
     end subroutine check_rel
 
     ! =====================================================================
-    ! 8. seb_scheme = "semix": the surface row only
+    ! 8. CLIMBER-X SEMIX: the surface row only
     ! =====================================================================
 
     subroutine test_semix_surface_row(nfail)
@@ -1538,7 +1540,7 @@ contains
         integer  :: k
 
         write(*,*)
-        write(*,"(a)") "--- 8. seb_scheme = semix surface row ---"
+        write(*,"(a)") "--- 8. seb_scheme = semix, turbulent_flux_scheme = climberx surface row ---"
 
         call chion_const_init(c)
 
@@ -1567,7 +1569,8 @@ contains
         dt     = 3600.0_wp
 
         ! --- the surface row under semix --------------------------------
-        c%seb_scheme = CHION_SEB_SEMIX
+        c%seb_scheme            = CHION_SEB_SEMIX
+        c%turbulent_flux_scheme = CHION_TURB_CLIMBERX
         t_s(1:n)     = temperature(1:n)
         t_srf_s      = Tn
 
@@ -1608,7 +1611,8 @@ contains
                        res_s%surface_flux_linear, expect_lin, 1.0e-3_wp, nfail)
 
         ! The scheme must actually have changed something.
-        c%seb_scheme = CHION_SEB_BESSI
+        c%seb_scheme            = CHION_SEB_BESSI
+        c%turbulent_flux_scheme = CHION_TURB_BESSI
         t_b(1:n)     = temperature(1:n)
         t_srf_b      = Tn
 
@@ -1635,13 +1639,15 @@ contains
         forc%q_lh     = -3.0_wp
         c%eps_snow    = 1.0_wp
 
-        c%seb_scheme = CHION_SEB_SEMIX
+        c%seb_scheme            = CHION_SEB_SEMIX
+        c%turbulent_flux_scheme = CHION_TURB_CLIMBERX
         t_s(1:n)     = temperature(1:n)
         t_srf_s      = Tn
         call snow_energy_flux(mass,density,t_s,t_srf_s,n,c,forc,0.75_wp, &
                               0.0_wp,0.0_wp,dt,res_s)
 
-        c%seb_scheme = CHION_SEB_BESSI
+        c%seb_scheme            = CHION_SEB_BESSI
+        c%turbulent_flux_scheme = CHION_TURB_BESSI
         t_b(1:n)     = temperature(1:n)
         t_srf_b      = Tn
         call snow_energy_flux(mass,density,t_b,t_srf_b,n,c,forc,0.75_wp, &

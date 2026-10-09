@@ -5,9 +5,11 @@ with a clean public API and pluggable snowpack models (BESSI, PDD, ITM), ported
 from Chion.jl.
 
 The energy-balance model (BESSI) is configurable on orthogonal axes: column
-structure (`Ntot`), surface energy balance (`seb_scheme = bessi | semix`) and
-albedo (`albedo_scheme = constant | dynamic | prescribed | semix`), where the
-`semix` options are ports of CLIMBER-X's SEMIX surface scheme.
+structure (`Ntot`), longwave (`seb_scheme = bessi | semix`), turbulent
+exchange (`turbulent_flux_scheme = bessi | climberx`) and albedo
+(`albedo_scheme = constant | dynamic | prescribed | semix | aging`), where
+`seb_scheme = semix`, `climberx` and the `semix` albedo are ports of
+CLIMBER-X's SEMIX surface scheme.
 
 ## Docs
 

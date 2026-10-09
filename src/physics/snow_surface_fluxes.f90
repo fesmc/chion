@@ -38,7 +38,7 @@ module snow_surface_fluxes
 
     use chion_defs, only : wp, wp_acc, TOL_EMPTY_LAYER, io_unit_err, &
                            CHION_ALBEDO_PRESCRIBED, CHION_SEB_SEMIX, &
-                           CHION_LONGWAVE_CLOUD_PROXY, &
+                           CHION_TURB_CLIMBERX, CHION_LONGWAVE_CLOUD_PROXY, &
                            chion_const_class, chion_step_forcing_class
     use snow_column_utils, only : surface_has_snow
 
@@ -51,11 +51,13 @@ module snow_surface_fluxes
     use snow_vapor, only : latent_vapor_flux, vapor_mass_flux, surface_vapor_latent_heat, &
                            safe_positive
 
-    ! SEMIX aerodynamic surface scheme, selected by c%seb_scheme. It supplies
-    ! the exact-at-known-T turbulent fluxes here, as it supplies the linearized
-    ! ones in snow_energy: all three flux sites move together, so the bare-ice
-    ! branch and the vapour-mass budget never fall back to BESSI's D_sh while
-    ! the energy solve uses r_a (docs/semix_port_scope.md).
+    ! CLIMBER-X SEMIX aerodynamic exchange, selected by
+    ! c%turbulent_flux_scheme = "climberx". It supplies the exact-at-known-T
+    ! turbulent fluxes here, as it supplies the linearized ones in
+    ! snow_energy: all three flux sites move together, so the bare-ice branch
+    ! and the vapour-mass budget never fall back to BESSI's D_sh while the
+    ! energy solve uses r_a (docs/semix_port_scope.md). Its longwave helpers
+    ! serve c%seb_scheme = "semix".
     use snow_seb_semix, only : semix_exchange_class, semix_snow_depth, &
                                semix_turbulent_exchange, &
                                semix_sensible_heat_flux, semix_latent_heat_flux, &
@@ -272,18 +274,21 @@ contains
         ! Every has_* flag selects a PRESCRIBED value over the internal
         ! parameterization. Note the latent flux has three cases, in order:
         !   has_q_lh                 -> prescribed q_lh
-        !   has_relative_humidity    -> BESSI vapor flux
+        !   has_relative_humidity    -> the turbulent scheme's vapor flux
         !   otherwise                -> zero
         !
-        ! Under seb_scheme = semix the longwave, sensible and latent terms all
-        ! come from the SEMIX scheme instead. That needs two things BESSI does
-        ! not: the snow depth, for the roughness blend, and whether the surface
-        ! is snow or bare ice, for the emissivity (ebal's mask_snow). Both are
+        ! seb_scheme selects the longwave only (semix: absorbed with the
+        ! surface emissivity, eps_snow or eps_ice), turbulent_flux_scheme the
+        ! sensible and latent terms (Chion.jl d0146e1). The CLIMBER-X
+        ! turbulence and the semix longwave need two things BESSI does not:
+        ! the snow depth, for the roughness blend, and whether the surface is
+        ! snow or bare ice, for the emissivity (ebal's mask_snow). Both are
         ! arguments rather than inferred from each other -- a snow column can be
-        ! arbitrarily thin without ceasing to be snow. The BESSI scheme ignores
-        ! the depth; whether the surface is snow selects the latent heat of its
-        ! vapour exchange: the phase's at surface_temperature on snow, Lv + Lm
-        ! on bare ice, which stays solid at T0 (surface_fluxes.jl:110-116).
+        ! arbitrarily thin without ceasing to be snow. The BESSI turbulence
+        ! ignores the depth; whether the surface is snow selects the latent
+        ! heat of its vapour exchange: the phase's at surface_temperature on
+        ! snow, Lv + Lm on bare ice, which stays solid at T0
+        ! (surface_fluxes.jl:110-116).
         !
         ! Julia carries a dt_seconds argument here purely to spell zero() in
         ! the right type; it is never used numerically. Dropped (cleanup:
@@ -299,13 +304,14 @@ contains
         type(nonshortwave_flux_class) :: flx
 
         ! Local variables
-        logical                    :: uses_semix_seb
+        logical                    :: uses_semix_seb, uses_climberx_turb
         real(wp)                   :: L_vap
         type(semix_exchange_class) :: sx
 
-        uses_semix_seb = (c%seb_scheme .eq. CHION_SEB_SEMIX)
+        uses_semix_seb     = (c%seb_scheme .eq. CHION_SEB_SEMIX)
+        uses_climberx_turb = (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX)
 
-        if (uses_semix_seb) then
+        if (uses_climberx_turb) then
             sx = semix_turbulent_exchange(c,h_snow,forc%air_temperature, &
                                           surface_temperature,forc%wind_speed, &
                                           forc%air_pressure,forc%relative_humidity, &
@@ -332,7 +338,7 @@ contains
 
         if (forc%has_q_sh) then
             flx%sensible = forc%q_sh
-        else if (uses_semix_seb) then
+        else if (uses_climberx_turb) then
             flx%sensible = semix_sensible_heat_flux(sx,forc%air_temperature, &
                                                     surface_temperature)
         else
@@ -341,7 +347,7 @@ contains
 
         if (forc%has_q_lh) then
             flx%latent = forc%q_lh
-        else if (uses_semix_seb) then
+        else if (uses_climberx_turb) then
             ! f_lh is already zero without humidity forcing, so this covers the
             ! third case of the BESSI selection too.
             flx%latent = semix_latent_heat_flux(sx)
@@ -410,7 +416,7 @@ contains
                                                                             result(q_lh)
         ! Chion.jl/src/processes/surface_fluxes.jl:187-200.
         ! The latent-flux-only subset of the three-case selection above, with
-        ! the same seb_scheme branch and the same h_snow argument.
+        ! the same turbulent_flux_scheme branch and the same h_snow argument.
 
         implicit none
 
@@ -425,7 +431,7 @@ contains
 
         if (forc%has_q_lh) then
             q_lh = forc%q_lh
-        else if (c%seb_scheme .eq. CHION_SEB_SEMIX) then
+        else if (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX) then
             sx = semix_turbulent_exchange(c,h_snow,forc%air_temperature, &
                                           surface_temperature,forc%wind_speed, &
                                           forc%air_pressure,forc%relative_humidity, &
@@ -572,8 +578,9 @@ contains
         ! Only the solid branch can empty the surface layer, so only it runs
         ! the depleted-surface removal and surface-merge loops.
         !
-        ! seb_scheme = semix (CLIMBER-X, not Julia's :semix turbulence) converts
-        ! its flux, prescribed or not, with a fixed latent heat. The RESERVOIR
+        ! turbulent_flux_scheme = climberx (CLIMBER-X, not Julia's :semix
+        ! turbulence) converts its flux, prescribed or not, with a fixed latent
+        ! heat. The RESERVOIR
         ! choice (solid mass(1) against liquid mass_w(1)) still turns on T0, but
         ! the LATENT HEAT used to convert the flux into mass no longer does: SEMIX
         ! builds f_lh with the latent heat of sublimation at every temperature
@@ -621,7 +628,7 @@ contains
         ! humidity forcing never touches the layer structure. Reproduced.
         if (q_lh .eq. 0.0_wp) return
 
-        if (c%seb_scheme .eq. CHION_SEB_SEMIX) then
+        if (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX) then
             L_exchange = c%Lv + c%Lm
             vapor      = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(L_exchange,wp_acc)
         else if (forc%has_q_lh) then

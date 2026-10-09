@@ -55,6 +55,15 @@ tag is the port itself, summarised rather than enumerated.
 - `calendar_solar_longitude_deg(day_of_year)` (re-exported by `chion`): Chion.jl's
   calendar-day solar longitude, for hosts and drivers without an orbital one.
 
+### Changed
+
+- `seb_scheme` selects the longwave only (`bessi` | `semix`); new
+  `turbulent_flux_scheme` (`bessi` | `climberx`) selects the sensible and latent
+  heat (Chion.jl `d0146e1`). CLIMBER-X SEMIX's aerodynamic exchange is
+  `turbulent_flux_scheme = "climberx"`: the former `seb_scheme = "semix"` is
+  `seb_scheme = "semix"` + `turbulent_flux_scheme = "climberx"` (bit-identical);
+  `semix_qsat` is renamed `climberx_qsat` (`"climberx"` | `"bessi"`) (D37).
+
 ### Fixed
 
 - `chion_column.x` and `chion_grid.x` derive the solar longitude with Chion.jl's

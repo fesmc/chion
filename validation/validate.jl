@@ -488,24 +488,55 @@ function run_bessi_cloud_proxy(fbessi::AbstractString, ch_graybody::AbstractStri
     tau = 0.85 + 0.075 * zs / 1000
     inner = count(k -> daily[k] && any(0.0 < 1 - sw[i, 1, k] / (toa[k] * tau) < 1.0
                                        for i in axes(sw, 1)), 1:nt)
-    tsrf(path) = NCDataset(dc -> read_canonical(dc, "Tsrf")[1], path)
-    ts, ts_g = tsrf(ch), tsrf(ch_graybody)
-    moved = maximum(abs(Float64(x)) for x in skipmissing(ts .- ts_g))
     println()
     println("      $(count(daily)) days on the shortwave proxy, $(nt - count(daily)) on the " *
-            "night cloudiness; $(inner) days with an unclamped cloudiness; " *
-            "max |Tsrf - Tsrf(graybody)| = $(round(moved; digits=2)) K")
+            "night cloudiness; $(inner) days with an unclamped cloudiness")
     checks = [("cloud proxy: days on the shortwave cloudiness proxy", count(daily) > 0),
               ("cloud proxy: polar-night days on the night cloudiness", count(.!daily) > 0),
-              ("cloud proxy: cloudiness unclamped on some days", inner > 0),
-              ("cloud proxy: result differs from the graybody run", moved > 0.1)]
+              ("cloud proxy: cloudiness unclamped on some days", inner > 0)]
     println()
     println("--- coverage assertions (cloud-proxy longwave) ---")
     for (label, ok) in checks
         println(ok ? "  ok   : $label" : "  FAIL : $label")
         ok || (nfail += 1)
     end
-    return nfail
+    return nfail + check_moved(ch, ch_graybody, "cloud-proxy longwave", "the graybody run")
+end
+
+"""
+BESSI with `seb_scheme = :semix` and `turbulent_flux_scheme = :bessi` (Chion.jl
+d0146e1 split, plan C6): the longwave absorbed with the surface emissivity
+(`eps_snow`, `eps_ice` on bare ice), BESSI's turbulence. Gated like the default
+configuration (dp+legacy, every BESSI field, same forcing); coverage: the
+result differs from the `:bessi` longwave run `ch_bessi`.
+"""
+function run_bessi_seb_semix(fbessi::AbstractString, ch_bessi::AbstractString)
+    jl = run_julia_bessi(; forcing=fbessi, outfile="julia_bessi_seb_semix.nc", workdir=WORKDIR,
+                         ntot=15, years=1, overrides=(seb_scheme=:semix,))
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
+                   outfile="chion_bessi_seb_semix_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0, nml_extra=const_nml(seb_scheme="semix"))
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, seb_scheme = semix, turbulence bessi: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity (seb_scheme = semix, turbulent_flux_scheme = bessi)")
+    return nfail + check_moved(ch, ch_bessi, "seb_scheme = semix", "the bessi longwave run")
+end
+
+"""
+Coverage helper: assert that a configuration's chion output `ch` differs from
+the run `ch_ref` without its switch (max |Tsrf difference| > 0.1 K), so a gate
+pass cannot come from a switch that silently did nothing on either side.
+"""
+function check_moved(ch::AbstractString, ch_ref::AbstractString, label::AbstractString,
+                     reflabel::AbstractString)
+    tsrf(path) = NCDataset(dc -> read_canonical(dc, "Tsrf")[1], path)
+    moved = maximum(abs(Float64(x)) for x in skipmissing(tsrf(ch) .- tsrf(ch_ref)))
+    ok = moved > 0.1
+    println()
+    println("--- coverage assertions ($label) ---")
+    println((ok ? "  ok   : " : "  FAIL : ") * "$label: result differs from $reflabel " *
+            "(max |dTsrf| = $(round(moved; digits=2)) K)")
+    return ok ? 0 : 1
 end
 
 """
@@ -614,6 +645,7 @@ function main()
     nfail += run_bessi_fine(fbessi)
     nfail += run_bessi_fine_substrate(nstep)
     nfail += run_bessi_cloud_proxy(fbessi, ch_legacy)
+    nfail += run_bessi_seb_semix(fbessi, ch_legacy)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

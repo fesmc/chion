@@ -7,7 +7,7 @@ module snow_vapor
     ! snow_surface_fluxes (exact fluxes at a known temperature), snow_energy
     ! (the linearized surface row) and snow_seb_semix (the SEMIX aerodynamic
     ! scheme) all sit on top of them, and snow_seb_semix must compile BELOW
-    ! snow_surface_fluxes so the latter can dispatch on seb_scheme.
+    ! snow_surface_fluxes so the latter can dispatch on the turbulent scheme.
     !
     ! All coefficients here are magic numbers carried over verbatim from
     ! Chion.jl; none of them live in the constants struct. See docs/PLAN.md

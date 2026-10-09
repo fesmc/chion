@@ -148,6 +148,7 @@ contains
         write(io,"(a)") "&chion_const"
         write(io,"(a)") "    alpha_dry          = 0.85"
         write(io,"(a)") "    seb_scheme         = 'semix'"
+        write(io,"(a)") "    turbulent_flux_scheme = 'climberx'"
         write(io,"(a)") "/"
         close(io)
 
@@ -177,6 +178,10 @@ contains
         call check_val("const: alpha_dry overridden",c%alpha_dry,0.85_wp,nfail)
         call check("const: seb_scheme overridden -> semix flag", &
                    c%seb_scheme .eq. CHION_SEB_SEMIX, nfail)
+        call check("const: turbulent_flux_scheme overridden -> climberx flag", &
+                   c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX, nfail)
+        call check("const: longwave_scheme from defaults -> graybody", &
+                   c%longwave_scheme .eq. CHION_LONGWAVE_GRAYBODY, nfail)
         call check_val("const: alpha_wet from defaults",c%alpha_wet,0.70_wp,nfail)
         call check_val("const: sigma_sb from defaults",c%sigma_sb,5.670373e-8_wp,nfail)
         call check("const: shared fields not read from &chion_const", &

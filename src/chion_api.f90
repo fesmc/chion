@@ -72,7 +72,7 @@ module chion_api
                            chion_albedo_scheme_flag, &
                            chion_semix_snow_albedo_flag, &
                            chion_seb_scheme_flag, chion_longwave_scheme_flag, &
-                           chion_semix_qsat_flag, &
+                           chion_turbulent_flux_scheme_flag, chion_climberx_qsat_flag, &
                            chion_fresh_snow_density_scheme_flag, &
                            chion_densify_scheme_flag, &
                            chion_check_enum, chion_check_file
@@ -118,7 +118,8 @@ module chion_api
     character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "warren_wiscombe|dang"
     character(len=*), parameter :: CHION_SEB_CHOICES     = "bessi|semix"
     character(len=*), parameter :: CHION_LONGWAVE_CHOICES = "graybody|cloud_proxy"
-    character(len=*), parameter :: CHION_SEMIX_QSAT_CHOICES = "semix|bessi"
+    character(len=*), parameter :: CHION_TURB_CHOICES    = "bessi|climberx"
+    character(len=*), parameter :: CHION_CLIMBERX_QSAT_CHOICES = "climberx|bessi"
     character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized"
     character(len=*), parameter :: CHION_DENSIFY_CHOICES = "bessi|htessel"
     character(len=*), parameter :: CHION_PDD_CHOICES     = "simple|pism"
@@ -1032,7 +1033,8 @@ contains
         character(len=56) :: semix_snow_albedo
         character(len=56) :: seb_scheme
         character(len=56) :: longwave_scheme
-        character(len=56) :: semix_qsat
+        character(len=56) :: turbulent_flux_scheme
+        character(len=56) :: climberx_qsat
         character(len=56) :: fresh_snow_density_scheme
         character(len=56) :: low_density_densification
 
@@ -1055,6 +1057,7 @@ contains
         call nml_read(filename,group,"D_sh",                     c%D_sh,                    init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"seb_scheme",               seb_scheme,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"turbulent_flux_scheme",    turbulent_flux_scheme,     init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"z0m_snow",                 c%z0m_snow,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"z0m_ice",                  c%z0m_ice,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"zm_to_zh",                 c%zm_to_zh,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
@@ -1063,7 +1066,7 @@ contains
         call nml_read(filename,group,"R_dry",                    c%R_dry,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"l_neutral",                c%l_neutral,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"l_dew",                    c%l_dew,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
-        call nml_read(filename,group,"semix_qsat",               semix_qsat,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"climberx_qsat",            climberx_qsat,             init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"alpha_dry",                c%alpha_dry,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"alpha_wet",                c%alpha_wet,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
@@ -1114,7 +1117,8 @@ contains
         call chion_check_enum(group,"semix_snow_albedo",        semix_snow_albedo,        CHION_SEMIX_SNOW_ALB_CHOICES)
         call chion_check_enum(group,"seb_scheme",               seb_scheme,               CHION_SEB_CHOICES)
         call chion_check_enum(group,"longwave_scheme",          longwave_scheme,          CHION_LONGWAVE_CHOICES)
-        call chion_check_enum(group,"semix_qsat",               semix_qsat,               CHION_SEMIX_QSAT_CHOICES)
+        call chion_check_enum(group,"turbulent_flux_scheme",    turbulent_flux_scheme,    CHION_TURB_CHOICES)
+        call chion_check_enum(group,"climberx_qsat",            climberx_qsat,            CHION_CLIMBERX_QSAT_CHOICES)
         call chion_check_enum(group,"fresh_snow_density_scheme",fresh_snow_density_scheme,CHION_RHOS_CHOICES)
         call chion_check_enum(group,"low_density_densification",low_density_densification,CHION_DENSIFY_CHOICES)
 
@@ -1122,7 +1126,8 @@ contains
         c%semix_snow_albedo         = chion_semix_snow_albedo_flag(semix_snow_albedo)
         c%seb_scheme                = chion_seb_scheme_flag(seb_scheme)
         c%longwave_scheme           = chion_longwave_scheme_flag(longwave_scheme)
-        c%semix_qsat                = chion_semix_qsat_flag(semix_qsat)
+        c%turbulent_flux_scheme     = chion_turbulent_flux_scheme_flag(turbulent_flux_scheme)
+        c%climberx_qsat             = chion_climberx_qsat_flag(climberx_qsat)
         c%fresh_snow_density_scheme = chion_fresh_snow_density_scheme_flag(fresh_snow_density_scheme)
         c%low_density_densification = chion_densify_scheme_flag(low_density_densification)
 
@@ -1143,7 +1148,7 @@ contains
         !   ci              cp_ice
         !   cw              cp_w
         !   Lm              L_ice
-        !   grav            g            (SEMIX SEB only)
+        !   grav            g            (CLIMBER-X turbulence only)
         !   T0              T0
         !
         ! Densification's DENSIFY_GRAVITY is deliberately NOT taken from g: it

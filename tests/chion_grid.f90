@@ -354,17 +354,17 @@ program chion_grid
 
     ! Uniform relative humidity. No domain loader carries a humidity field yet,
     ! so without this knob has_relative_humidity is false everywhere and the
-    ! turbulent latent flux is identically zero -- under BOTH surface schemes.
-    ! That is the standing state of every GRL benchmark to date, and it is why
-    ! the seb_scheme comparison in docs/semix_port_scope.md is a
+    ! turbulent latent flux is identically zero -- under every turbulence
+    ! scheme. That is the standing state of every GRL benchmark to date, and it
+    ! is why the SEMIX-vs-BESSI comparison in docs/semix_port_scope.md is a
     ! sensible-heat-only result.
     !
     ! Left flagged OFF at zero so existing par files are unaffected. Note the
-    ! two schemes read the same number differently: BESSI takes it relative to
-    ! saturation over WATER (energy_flux.jl:57-60), SEMIX over ICE
-    ! (semi.f90:201). Both are their own source's reading, so a run that varies
-    ! rh_default across seb_scheme is not a controlled comparison of the
-    ! turbulent exchange alone.
+    ! schemes read the same number differently: BESSI takes it relative to
+    ! saturation over WATER (energy_flux.jl:57-60), CLIMBER-X and Chion.jl's
+    ! semix over ICE (semi.f90:201). Each is its own source's reading, so a run
+    ! that varies rh_default across turbulent_flux_scheme is not a controlled
+    ! comparison of the turbulent exchange alone.
     chn%forc%relative_humidity     = rh_default
     chn%forc%has_relative_humidity = (rh_default .gt. 0.0_wp)
 

@@ -13,6 +13,17 @@ Ganopolski) is characterized in the memory note and in
 [docs/steady_state_snowpack.md](steady_state_snowpack.md) (model comparison
 section). This document is the *how*.
 
+> **Naming since chion C6/C7 (Chion.jl `d0146e1`/`03bb445`).** Chion.jl split its
+> surface scheme into `seb_scheme` (longwave only) and `turbulent_flux_scheme`, and
+> its `:semix` turbulence is its own bulk scheme, not CLIMBER-X's. chion follows:
+> the CLIMBER-X configuration this document calls `seb_scheme=semix` is now
+> `seb_scheme = "semix"` (CLIMBER-X's emissivity longwave, unchanged) **plus**
+> `turbulent_flux_scheme = "climberx"` (the aerodynamic exchange of rungs 2–3,
+> unchanged, bit-identical); `semix_qsat` is now `climberx_qsat` (`"climberx"` |
+> `"bessi"`). `turbulent_flux_scheme = "semix"` is Chion.jl's bulk turbulence.
+> The SEMIX albedo keeps its name, `albedo_scheme = "semix"`, as in Chion.jl. The
+> history below keeps the names of its time.
+
 ## Design: orthogonal flags, not a model list
 
 Layering and surface scheme are independent axes. `model = bessi` becomes the
@@ -22,7 +33,8 @@ bulk melt-parameterization family (no energy balance), unchanged.
 | axis | flag | values | status |
 |---|---|---|---|
 | column structure | `Ntot` *(exists)* | `1` (single layer) … `N` (firn column) | ✅ works today |
-| surface energy balance | `seb_scheme` *(new)* | `bessi` \| `semix` | ✅ rungs 2–3 done |
+| longwave (surface energy balance) | `seb_scheme` *(new)* | `bessi` \| `semix` | ✅ rung 3 done |
+| turbulent exchange | `turbulent_flux_scheme` *(C6)* | `bessi` \| `climberx` \| `semix` (Chion.jl) | ✅ rung 2 done (`climberx`) |
 | albedo | `albedo_scheme` *(extend enum)* | `constant` \| `dynamic` \| `prescribed` \| `semix` | ✅ rung 1 done |
 | net shortwave | `has_q_sw_net` *(exists)* + internal spectral | prescribed **or** chion-owns | ⚠️ broadband collapse, not spectral |
 | background ice albedo | `alb_ice_host` *(new, optional)* | chion's own **or** passed | ✅ rung 1 done |
