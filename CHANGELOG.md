@@ -42,6 +42,12 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- BESSI surface boundary is Robin (Chion.jl `03bb445`): `Tsrf` is the snow-air
+  interface temperature, eliminated through the top cell's half-thickness
+  conductance `2K1/dz1`; no surface heat capacity, no one-layer closed form;
+  melt energy `Q(T0) − Gs(T0 − T1)`; fluxes linearized and the vapour flux
+  evaluated at `Tsrf`; melt sets `Tsrf = T0`. Changes default BESSI results
+  (and `seb_scheme = "semix"`, which shares the solver).
 - BESSI dynamic albedo wetness relaxation `α_wet + (α − α_wet)(1 − r)^dt`,
   `r = clamp(lwc/max_lwc_albedo, 0, 1)` (Chion.jl `03bb445`): substep-invariant;
   same as the linear law at daily steps up to round-off.

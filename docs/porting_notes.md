@@ -815,6 +815,11 @@ tightened without moving the layer mass arrays to `dp`.**
     (`thickness`, `wet_mass`, `bulk_density`, `liquid_water`) that
     `_initialize_bessi_state_kernel!` does, so a deactivated column carries stale diagnostics
     into output. Preserved, not fixed.
+27. **(B) `_continuous_bottom_deplete!` (run by the depth cap) still sets `Tsrf = T(1)`**
+    (`layer_structure.jl`, `03bb445`), while every other path treats `Tsrf` as the Robin interface temperature
+    (vapour flux at `Tsrf`, melt and an emptied column set `T0`). On a column at the depth
+    cap the next step's linearization point is the top cell's centre, not the interface.
+    chion ports it as is (`snow_layers.f90:continuous_bottom_deplete`). Found in Stage C2.
 
 ### C — doc and cosmetic
 

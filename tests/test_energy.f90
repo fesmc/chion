@@ -7,13 +7,17 @@ program test_energy
     !   2. Pure diffusion: a uniform profile is preserved, and total sensible
     !      energy is conserved  (Chion.jl/docs/src/tests/test_energy_flux_analytical.md).
     !   3. Steady-state conduction under a constant surface flux: the converged
-    !      profile reproduces the analytic conductive flux profile.
+    !      profile reproduces the analytic conductive flux profile, and the
+    !      Robin interface temperature is the analytic T1 + F dz1/(2 K1).
     !   4. Energy conservation in the non-melting case.
-    !   5. The melting case: surface pinned exactly at T0, residual melt
-    !      energy non-negative.
-    !   6. The single-layer shortcut vs a 2-layer column whose second layer is
-    !      thermally negligible.
+    !   5. The melting case (Robin, Chion.jl 03bb445): interface pinned exactly
+    !      at T0 over a subfreezing top cell, melt energy non-negative, and
+    !      sum m ci dT + melt energy == Q(T0) dt (subsurface conduction kept).
+    !   6. One layer goes through the same matrix: it agrees with a 2-layer
+    !      column whose second layer is thermally negligible, and an insulated
+    !      equilibrium is preserved down to a 1e-8 kg m-2 top cell.
     !   7. The n <= 0 and mass(1) <= 0 early exits write nothing.
+    !  11. Two-layer diffusion step against its closed form (Chion.jl 03bb445).
     !   8. seb_scheme = "semix": the surface row picks up SEMIX's f_sh and the
     !      ebal num_lh/denom_lh decomposition, and nothing below row 1 moves.
     !   9. Harmonic interface conductance (Chion.jl 81034fa/d0146e1): equals
@@ -53,6 +57,7 @@ program test_energy
     call test_semix_surface_row(nfail)
     call test_interface_conductance(nfail)
     call test_conductivity_calonne(nfail)
+    call test_two_layer_diffusion(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -340,6 +345,14 @@ contains
                    worst .lt. 1.0e-2_wp, nfail)
         write(*,"(a,g14.6)") "         worst relative deviation = ", worst
 
+        ! Robin interface: with Q_lin = 0 the whole flux F crosses the top
+        ! half cell, so Ts - T1 = F dz1/(2 K1) (K1 at the top cell's T).
+        drop        = t_srf - temperature(1)
+        drop_expect = F*dz/(2.0_wp*conductivity(rho,temperature(1),c))
+        call check("interface temperature is T1 + F dz1/(2 K1) (1e-3 rel)", &
+                   abs(drop - drop_expect)/drop_expect .lt. 1.0e-3_wp, nfail)
+        write(*,"(a,g14.6,a,g14.6)") "         Ts - T1 = ", drop, "  analytic ", drop_expect
+
         return
 
     end subroutine test_steady_state
@@ -443,13 +456,14 @@ contains
         type(chion_step_forcing_class) :: forc
         type(snow_energy_result_class) :: res
 
-        real(wp) :: mass(Ntot), density(Ntot), temperature(Ntot)
-        real(wp) :: t_srf, dt
-        integer  :: k
-        logical  :: all_clamped
+        real(wp)     :: mass(Ntot), density(Ntot), temperature(Ntot), t_old(Ntot)
+        real(wp)     :: t_srf, dt
+        real(wp_acc) :: de
+        integer      :: k
+        logical      :: all_clamped
 
         write(*,*)
-        write(*,"(a)") "--- Melting case (two-pass re-solve) ---"
+        write(*,"(a)") "--- Melting case (Robin interface held at T0) ---"
 
         call chion_const_init(c)
         call quiet_forcing(forc)
@@ -473,19 +487,20 @@ contains
 
         t_srf = 272.0_wp
         dt    = 3600.0_wp
+        t_old(1:n) = temperature(1:n)
 
         call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,0.7_wp, &
                               0.0_wp,0.0_wp,dt,res)
 
         call check("needs_melt is flagged", res%needs_melt, nfail)
-        call check("surface is pinned EXACTLY at T0", t_srf .eq. c%T0, nfail)
-        call check("temperature(1) equals t_srf", temperature(1) .eq. c%T0, nfail)
-        call check("melt_energy_available >= 0", &
-                   res%melt_energy_available .ge. 0.0_wp_acc, nfail)
+        call check("interface is pinned EXACTLY at T0", t_srf .eq. c%T0, nfail)
+        call check("top cell stays subfreezing (T1 < T0 = Ts)", temperature(1) .lt. c%T0, nfail)
         call check("melt_energy_available > 0 under strong forcing", &
                    res%melt_energy_available .gt. 0.0_wp_acc, nfail)
-        call check("heating == energy_to_melting in the melting branch", &
-                   res%heating .eq. res%energy_to_melting, nfail)
+        call check_rel("heating == Q(T0) dt in the melting branch", res%heating, &
+                       real(dt,wp_acc)*(real(res%surface_flux_constant,wp_acc) &
+                       - real(res%surface_flux_linear,wp_acc)*real(c%T0,wp_acc)), &
+                       1.0e-12_wp_acc, nfail)
 
         all_clamped = .TRUE.
         do k = 1, n
@@ -493,10 +508,20 @@ contains
         end do
         call check("all layers clamped to <= T0", all_clamped, nfail)
 
-        write(*,"(a,g16.8)") "         energy_to_melting     = ", res%energy_to_melting
+        ! Conservation: what the interface does not conduct into the column
+        ! is exactly the melt energy.
+        de = 0.0_wp_acc
+        do k = 1, n
+            de = de + real(mass(k),wp_acc)*real(c%ci,wp_acc) &
+                      *(real(temperature(k),wp_acc) - real(t_old(k),wp_acc))
+        end do
+        call check_rel("sum m ci dT + melt energy == Q(T0) dt", &
+                       de + res%melt_energy_available, res%heating, 1.0e-4_wp_acc, nfail)
+
+        write(*,"(a,g16.8)") "         conducted into column = ", de
         write(*,"(a,g16.8)") "         melt_energy_available = ", res%melt_energy_available
 
-        ! Single-layer melting branch, same expectations.
+        ! One layer: same expectations (it goes through the same matrix).
         mass        = 0.0_wp
         density     = 0.0_wp
         temperature = 0.0_wp
@@ -508,23 +533,34 @@ contains
         call snow_energy_flux(mass,density,temperature,t_srf,1,c,forc,0.7_wp, &
                               0.0_wp,0.0_wp,dt,res)
 
+        de = real(mass(1),wp_acc)*real(c%ci,wp_acc) &
+             *(real(temperature(1),wp_acc) - 272.0_wp_acc)
+
         call check("single layer: needs_melt flagged", res%needs_melt, nfail)
-        call check("single layer: surface pinned exactly at T0", t_srf .eq. c%T0, nfail)
-        call check("single layer: melt_energy_available >= 0", &
-                   res%melt_energy_available .ge. 0.0_wp_acc, nfail)
+        call check("single layer: interface pinned exactly at T0", t_srf .eq. c%T0, nfail)
+        call check("single layer: melt_energy_available > 0", &
+                   res%melt_energy_available .gt. 0.0_wp_acc, nfail)
+        call check_rel("single layer: m ci dT + melt energy == Q(T0) dt", &
+                       de + res%melt_energy_available, res%heating, 1.0e-4_wp_acc, nfail)
+
+        call test_robin_melt_julia(nfail)
 
         return
 
     end subroutine test_melting
 
     ! =====================================================================
-    ! 6. Single-layer shortcut vs a 2-layer column with a negligible layer 2
+    ! 6. One layer through the matrix vs a 2-layer column, thin-layer limit
     ! =====================================================================
 
     subroutine test_single_layer_shortcut(nfail)
-        ! The n == 1 branch is a separate closed form, not the solver. It must
-        ! agree with the solver in the limit where the second layer carries no
-        ! heat capacity and starts at the same temperature.
+        ! Since Chion.jl 03bb445 there is no closed-form n == 1 branch: one
+        ! layer goes through the same matrix. It must agree with a 2-layer
+        ! column whose second layer carries no heat capacity and starts at the
+        ! same temperature. And with no surface forcing at all an isothermal
+        ! layer stays exactly put, also when it is vanishingly thin (Chion.jl
+        ! test_longwave_consistency.jl: the row-1 diagonal is written so that
+        ! it stays exactly 1 as m -> 0).
 
         implicit none
 
@@ -537,9 +573,12 @@ contains
 
         real(wp) :: mass(Ntot), density(Ntot), temperature(Ntot)
         real(wp) :: t_srf1, t_srf2, dt
+        integer  :: k
+        character(len=96) :: label
+        real(wp), parameter :: THIN_MASSES(2) = [100.0_wp, 1.0e-8_wp]
 
         write(*,*)
-        write(*,"(a)") "--- Single-layer shortcut vs 2-layer limit ---"
+        write(*,"(a)") "--- One layer vs 2-layer limit; thin-layer insulated equilibrium ---"
 
         call chion_const_init(c)
         call quiet_forcing(forc)
@@ -588,6 +627,31 @@ contains
         call check_val("surface_flux_linear identical", &
                        res2%surface_flux_linear, res1%surface_flux_linear, &
                        0.0_wp, nfail)
+
+        ! Insulated equilibrium: every flux prescribed zero, no emission.
+        call chion_const_init(c)
+        call quiet_forcing(forc)
+        c%eps_air  = 0.0_wp
+        c%eps_snow = 0.0_wp
+        c%D_sh     = 0.0_wp
+
+        do k = 1, 2
+            mass        = 0.0_wp
+            density     = 0.0_wp
+            temperature = 0.0_wp
+            mass(1)        = THIN_MASSES(k)
+            density(1)     = 300.0_wp
+            temperature(1) = 260.0_wp
+            t_srf1         = 260.0_wp
+
+            call snow_energy_flux(mass,density,temperature,t_srf1,1,c,forc,0.8_wp, &
+                                  0.0_wp,0.0_wp,10800.0_wp,res1)
+
+            write(label,"(a,es8.1,a)") "insulated equilibrium kept, m1 = ", THIN_MASSES(k), &
+                                        " (T1, Ts exact; no melt)"
+            call check(trim(label), temperature(1) .eq. 260.0_wp .and. t_srf1 .eq. 260.0_wp &
+                       .and. res1%melt_energy_available .eq. 0.0_wp_acc, nfail)
+        end do
 
         return
 
@@ -647,7 +711,6 @@ contains
         call check("n=0: temperature and t_srf untouched", untouched, nfail)
         call check("n=0: needs_melt false", .not. res%needs_melt, nfail)
         call check("n=0: all energies zero", &
-                   res%energy_to_melting .eq. 0.0_wp_acc .and. &
                    res%melt_energy_available .eq. 0.0_wp_acc .and. &
                    res%heating .eq. 0.0_wp_acc .and. &
                    res%surface_flux_constant .eq. 0.0_wp .and. &
@@ -876,6 +939,137 @@ contains
         return
 
     end subroutine test_conductivity_calonne
+
+    ! =====================================================================
+    ! 5b. Chion.jl 03bb445 Robin melt tests, ported
+    ! =====================================================================
+
+    subroutine test_robin_melt_julia(nfail)
+        ! test_case_api.jl "Robin surface boundary melts over a subfreezing
+        ! top-cell centre" and "Robin melting boundary retains subsurface
+        ! conduction": no emission, no sensible exchange, LW down, q_sh and
+        ! q_lh prescribed zero.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_const_class)        :: c
+        type(chion_step_forcing_class) :: forc
+        type(snow_energy_result_class) :: res
+
+        real(wp)     :: mass(Ntot), density(Ntot), temperature(Ntot), t_old(Ntot)
+        real(wp)     :: t_srf, dt, input_flux
+        real(wp_acc) :: de
+
+        call chion_const_init(c)
+        call quiet_forcing(forc)
+        c%eps_snow = 0.0_wp
+        c%D_sh     = 0.0_wp
+
+        ! (a) one layer, 400 W m-2 of shortwave at albedo 0.81, one day.
+        forc%air_temperature = 280.0_wp
+        forc%has_q_sw_net    = .FALSE.
+        forc%shortwave_down  = 400.0_wp
+
+        mass = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        mass(1) = 100.0_wp; density(1) = 300.0_wp; temperature(1) = 270.0_wp
+        t_srf   = 270.0_wp
+
+        call snow_energy_flux(mass,density,temperature,t_srf,1,c,forc,0.81_wp, &
+                              0.0_wp,0.0_wp,86400.0_wp,res)
+
+        call check("Julia (a): Tsrf == T0", t_srf .eq. c%T0, nfail)
+        call check("Julia (a): top-cell centre stays below T0", temperature(1) .lt. c%T0, nfail)
+        call check("Julia (a): melt energy > 0", res%melt_energy_available .gt. 0.0_wp_acc, nfail)
+
+        ! (b) two layers, 100 W m-2 net shortwave prescribed, one day.
+        forc%has_q_sw_net = .TRUE.
+        input_flux        = 100.0_wp
+        forc%q_sw_net     = input_flux
+        dt                = 86400.0_wp
+
+        mass = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        mass(1:2)        = [100.0_wp, 300.0_wp]
+        density(1:2)     = [300.0_wp, 500.0_wp]
+        temperature(1:2) = [270.0_wp, 260.0_wp]
+        t_srf            = 270.0_wp
+        t_old(1:2)       = temperature(1:2)
+
+        call snow_energy_flux(mass,density,temperature,t_srf,2,c,forc,0.81_wp, &
+                              0.0_wp,0.0_wp,dt,res)
+
+        de = sum(real(mass(1:2),wp_acc)*real(c%ci,wp_acc) &
+                 *(real(temperature(1:2),wp_acc) - real(t_old(1:2),wp_acc)))
+
+        call check("Julia (b): Tsrf == T0", t_srf .eq. c%T0, nfail)
+        call check("Julia (b): top-cell centre stays below T0", temperature(1) .lt. c%T0, nfail)
+        call check_rel("Julia (b): sum m ci dT + melt energy == input flux * dt", &
+                       de + res%melt_energy_available, &
+                       real(input_flux,wp_acc)*real(dt,wp_acc), 1.0e-4_wp_acc, nfail)
+
+        return
+
+    end subroutine test_robin_melt_julia
+
+    ! =====================================================================
+    ! 11. Two-layer diffusion step, closed form
+    ! =====================================================================
+
+    subroutine test_two_layer_diffusion(nfail)
+        ! test_case_api.jl "Energy-flux two-layer diffusion uses physical
+        ! interface conductance": with no surface flux at all (Q = 0, Q_lin =
+        ! 0) the Robin boundary carries nothing, and two equal layers (m = 300,
+        ! rho = 300, dz = 1 m) relax as
+        !     T1' = T1 - a dT/(1 + 2a),  T2' = T2 + a dT/(1 + 2a),
+        !     a = dt G/(ci m),  G = interface_conductance(K1,1,K2,1).
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_const_class)        :: c
+        type(chion_step_forcing_class) :: forc
+        type(snow_energy_result_class) :: res
+
+        real(wp) :: mass(Ntot), density(Ntot), temperature(Ntot)
+        real(wp) :: t_srf, dt, G, a, e1, e2
+
+        write(*,*)
+        write(*,"(a)") "--- 11. Two-layer diffusion step, closed form ---"
+
+        call chion_const_init(c)
+        call quiet_forcing(forc)
+        c%eps_snow = 0.0_wp
+        c%D_sh     = 0.0_wp
+        forc%air_temperature = 270.0_wp
+
+        mass = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        mass(1:2)        = 300.0_wp
+        density(1:2)     = 300.0_wp
+        temperature(1:2) = [270.0_wp, 260.0_wp]
+        t_srf            = 270.0_wp
+        dt               = 3600.0_wp
+
+        G = interface_conductance(conductivity(300.0_wp,270.0_wp,c),1.0_wp, &
+                                  conductivity(300.0_wp,260.0_wp,c),1.0_wp)
+        a = dt*G/(c%ci*300.0_wp)
+        e1 = 270.0_wp - a*10.0_wp/(1.0_wp + 2.0_wp*a)
+        e2 = 260.0_wp + a*10.0_wp/(1.0_wp + 2.0_wp*a)
+
+        call snow_energy_flux(mass,density,temperature,t_srf,2,c,forc,0.8_wp, &
+                              0.0_wp,0.0_wp,dt,res)
+
+        call check_val("layer 1 matches the closed form", temperature(1), e1, &
+                       64.0_wp*epsilon(1.0_wp)*270.0_wp, nfail)
+        call check_val("layer 2 matches the closed form", temperature(2), e2, &
+                       64.0_wp*epsilon(1.0_wp)*270.0_wp, nfail)
+
+        return
+
+    end subroutine test_two_layer_diffusion
 
     ! =====================================================================
     ! Helpers

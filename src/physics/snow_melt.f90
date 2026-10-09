@@ -29,9 +29,12 @@ module snow_melt
     ! gates "this layer has just been depleted, drop it". See docs/PLAN.md
     ! section 5, item 1.
     !
-    ! On exit the surface temperature diagnostic is refreshed, and a column
-    ! that has lost all its snow has its albedo reset to bare ice. Neither
-    ! happens on the early return or on the fast path -- also deliberate.
+    ! On exit of the general path the interface temperature is set to T0
+    ! (Chion.jl 03bb445: the surface is melting; it was layer 1's temperature
+    ! before), and a column that has lost all its snow has its albedo reset to
+    ! bare ice. Neither happens on the early return or on the fast path --
+    ! also deliberate: the energy solve has already set t_srf = T0 whenever
+    ! it requested melt.
     !
     ! The two restructuring operations live in snow_layers (WP4):
     ! remove_depleted_surface_and_route_water and merge_surface_layer. Julia
@@ -124,12 +127,9 @@ contains
 
         end do
 
-        if (n .gt. 0) then
-            t_srf = temperature(1)
-        else
-            t_srf = c%T0
-            albedo_dyn = c%alpha_ice
-        end if
+        t_srf = c%T0
+
+        if (n .eq. 0) albedo_dyn = c%alpha_ice
 
         return
 

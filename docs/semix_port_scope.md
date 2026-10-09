@@ -76,6 +76,19 @@ sub-daily. (Rejected: β, porting SEMIX's massless-skin + ground-flux boundary
 wholesale — deeper surgery, changes the conduction top BC, partly duplicates the
 existing top layer.)
 
+**Update (Stage C2, Chion.jl `03bb445`).** The shared solver now has a Robin
+surface boundary: `t_srf` is a massless interface temperature
+`Ts = (q_const + Gs·T1)/(q_lin + Gs)`, closed against the top cell's half-thickness
+conductance `Gs = 2K₁/dz₁`, with no surface heat capacity; melt is the surface
+energy at T0 not conducted into the snow, `Q(T0) − Gs(T0 − T1)`. That is
+structurally SEMIX's `ebal` (massless skin, ground flux
+`λ/(0.5·h_snow)·(t_skin − tsoil)`, melt as the T0 residual), with chion's top
+cell in place of SEMIX's bulk snow layer, so the `semix` scheme moved *closer* to
+CLIMBER-X: its exchange coefficients and the LW/latent linearization are now
+evaluated at the interface temperature, as SEMIX evaluates them at `t_skin`.
+Still not ported: SEMIX's `t_skin_old`-based second correction and the diurnal
+statistical melt (rung 4). The conduction below the top cell is chion's.
+
 ## Extension mechanics (reference for every rung)
 
 **New optional forcing field** — ~7–8 templated lines across two files
@@ -294,12 +307,12 @@ together — but the asymmetry does:
 coupling α, not an omission.** SEMIX solves its massless skin node *before* the
 subsurface step, so once `smb_temp` has updated `t_prof` the skin temperature is
 stale and must be re-diagnosed against the new ground flux with `flx_melt`
-removed. chion has no separate skin node: `t_srf` is `temperature(1)`, which
-comes out of the *same* implicit solve as the conduction, simultaneously — there
-is nothing to go stale. The melting-point re-solve
-(`snow_energy.f90:400-454`) already plays the role of `update_tskin`'s
-`- flx_melt` term, dropping the surface-flux feedback from row 1 and pinning it
-at T0. Confirmed, not ported.
+removed. chion's `t_srf` (since C2 the Robin interface temperature, eliminated
+algebraically) comes out of the *same* implicit solve as the conduction,
+simultaneously — there is nothing to go stale. The melting re-solve
+(`snow_energy.f90`, step 5) already plays the role of `update_tskin`'s
+`- flx_melt` term, holding the interface at T0 behind the half-cell
+conductance. Confirmed, not ported.
 
 ### Cumulative rungs 2+3
 

@@ -1,8 +1,9 @@
 module snow_energy
-    ! Implicit (backward-Euler) snow temperature solve: linearized surface
-    ! energy balance on the top row, vertical heat conduction below, zero-flux
-    ! bottom, solved with the Thomas algorithm, plus a two-pass melting-point
-    ! re-solve.
+    ! Implicit (backward-Euler) snow temperature solve: a Robin surface
+    ! boundary (linearized surface energy balance closed against the top
+    ! cell's half-thickness conductance), vertical heat conduction below,
+    ! zero-flux bottom, solved with the Thomas algorithm, plus a melting
+    ! re-solve with the interface held at T0 (Chion.jl 03bb445).
     !
     ! Port of Chion.jl/src/processes/energy_flux.jl:
     !   _go_energy_flux_resolved!            -> snow_energy_flux
@@ -10,7 +11,6 @@ module snow_energy
     !   _snow_thermal_conductivity           -> snow_thermal_conductivity
     !   interface_conductance                -> interface_conductance
     !   _clamp_to_melt!                      -> inlined (clamp loop)
-    !   _residual_melt_energy                -> inlined (step 6)
     !   shortwave_absorbed                   -> inlined (step 2; see note below)
     ! Prose reference: Chion.jl/docs/src/processes/energy.md.
     !
@@ -38,14 +38,16 @@ module snow_energy
     ! unchanged -- the same expression, evaluated once, in the same order.
     !
     ! TRAP 2 (docs/PLAN.md section 5): the surface fluxes here are linearized
-    ! about the OLD surface temperature T^n, while snow_surface_fluxes
+    ! about the OLD interface temperature Ts^n, while snow_surface_fluxes
     ! evaluates the same physics exactly at a known temperature (T0 for bare
-    ! ice, T^{n+1} for the post-solve vapor mass). The energy and mass budgets
-    ! therefore use slightly different latent fluxes. This is deliberate in
-    ! Chion.jl and is NOT to be reconciled.
+    ! ice, Ts^{n+1} for the post-solve vapor mass). The energy and mass
+    ! budgets therefore use slightly different latent fluxes. This is
+    ! deliberate in Chion.jl and is NOT to be reconciled.
     !
-    ! TRAP 6 (docs/PLAN.md section 5): the melting-point re-solve is NOT a
-    ! Dirichlet row -- see the comment at step 5 below.
+    ! TRAP 6 (docs/PLAN.md section 5): the melting re-solve does not turn
+    ! row 1 into a Dirichlet row: T0 is imposed on the INTERFACE, behind the
+    ! half-cell conductance, and row 1 keeps its coupling to row 2 -- see
+    ! step 5 below.
 
     use chion_defs, only : wp, wp_acc, CHION_SEB_SEMIX, &
                            chion_const_class, chion_step_forcing_class
@@ -76,15 +78,16 @@ module snow_energy
 
     type snow_energy_result_class
         ! Mirrors the named tuple built by _energy_flux_result
-        ! (energy_flux.jl:197-239), field for field and in the same order.
+        ! (energy_flux.jl, 9ec6cc7), in the same order, minus the longwave and
+        ! sensible components chion does not use. energy_to_melting is gone
+        ! with the surface heat capacity (03bb445).
         !
-        ! The three energies are wp_acc: they are differences of large numbers
-        ! (T0 - T)*ci*m and Q*dt, and they feed the melt mass directly.
-        ! See docs/PLAN.md section 3.1.
+        ! The two energies are wp_acc: they are differences of large numbers
+        ! (Q*dt against the conducted Gs*(T0 - T1)*dt) and they feed the melt
+        ! mass directly. See docs/PLAN.md section 3.1.
 
-        logical      :: needs_melt                       ! surface reached T0 this step
-        real(wp_acc) :: energy_to_melting                ! [J m-2] spent reaching T0
-        real(wp_acc) :: melt_energy_available            ! [J m-2] left over for melting
+        logical      :: needs_melt                       ! interface reached T0 this step
+        real(wp_acc) :: melt_energy_available            ! [J m-2] surface energy not conducted
         real(wp_acc) :: heating                          ! [J m-2] net energy into the column
         real(wp)     :: surface_flux_constant            ! [W m-2] Q_const
         real(wp)     :: surface_flux_linear              ! [W m-2 K-1] Q_lin
@@ -210,7 +213,25 @@ contains
                                 latent_heat_linear_coefficient, &
                                 latent_heat_constant_term,dt_seconds,res)
         ! Advance the temperature profile of one column over one step.
-        ! Chion.jl/src/processes/energy_flux.jl:315-526.
+        ! Chion.jl/src/processes/energy_flux.jl _go_energy_flux_resolved!
+        ! (main 9ec6cc7 = 03bb445), without the ice substrate rows.
+        !
+        ! ROBIN SURFACE BOUNDARY (03bb445). t_srf is the physical
+        ! atmosphere-snow interface temperature Ts, a state of its own; the
+        ! first numerical temperature T1 = temperature(1) sits at the centre
+        ! of the top finite-volume cell. The linearized surface energy balance
+        ! Q(Ts) = q_const - q_lin*Ts is closed against the half-cell
+        ! conductance Gs = 2 K1/dz1:
+        !     Q(Ts) = Gs*(Ts - T1)  =>  Ts = a + b*T1,
+        !     den = q_lin + Gs,  a = q_const/den,  b = Gs/den.
+        ! Eliminating Ts leaves no surface heat capacity: row 1 is a regular
+        ! cell whose top face carries Gs*(Ts - T1) = Q(Ts). One layer goes
+        ! through the same matrix (no closed-form special case).
+        !
+        ! Melting: if Ts = a + b*T1^{n+1} > T0, the column is re-solved with
+        ! Ts = T0 held behind Gs, Tsrf = T0 and
+        !     melt energy = max((Q(T0) - Gs*(T0 - T1^{n+1}))*dt, 0),
+        ! the surface energy not conducted into the snow.
         !
         ! Deviation from Julia, structural only: Julia flattens the forcing
         ! into fifteen positional scalars plus use_* flags because the kernel
@@ -223,8 +244,8 @@ contains
 
         real(wp), intent(IN)    :: mass(:)        ! (Ntot) [kg m-2] solid mass
         real(wp), intent(IN)    :: density(:)     ! (Ntot) [kg m-3] layer density
-        real(wp), intent(INOUT) :: temperature(:) ! (Ntot) [K] layer temperature
-        real(wp), intent(INOUT) :: t_srf          ! [K] surface temperature
+        real(wp), intent(INOUT) :: temperature(:) ! (Ntot) [K] layer (cell-centre) temperature
+        real(wp), intent(INOUT) :: t_srf          ! [K] interface temperature Ts
         integer,  intent(IN)    :: n              ! number of active layers
 
         type(chion_const_class),        intent(IN) :: c
@@ -243,14 +264,15 @@ contains
 
         ! Local variables
         integer  :: k
-        real(wp) :: m1, Tn, lambda
-        real(wp) :: Tn_sq, Tn_cube, Tn_fourth
+        real(wp) :: m1, Ts_n, T1_n
+        real(wp) :: Ts_sq, Ts_cube, Ts_fourth
         real(wp) :: sw_abs, lw_const, lw_lin, sh_const, sh_lin
         real(wp) :: lh_turb_const, lh_turb_lin, lh_const, lh_lin
-        real(wp) :: q_const, q_lin, rhs_surf, diag_surf
+        real(wp) :: q_const, q_lin
         real(wp) :: dz_prev, dz_k, K_prev, K_k, G_k
-        real(wp) :: beta_scale, beta_km1, beta_k
-        real(wp) :: t_new
+        real(wp) :: beta_scale, beta_1, beta_km1, beta_k
+        real(wp) :: G_s, surface_den, surface_const, surface_coef, boundary_term
+        real(wp) :: ts_new
 
         logical  :: uses_semix_seb
 
@@ -259,14 +281,13 @@ contains
         type(semix_flux_lin_class)        :: lw_coef
 
         ! === Step 0: early exit ==============================================
-        ! energy_flux.jl:343-355. NOTE the threshold is mass(1) <= 0, NOT
-        ! TOL_EMPTY_LAYER as in surface_has_snow. The two guards differ
-        ! deliberately -- see docs/PLAN.md section 5, item 1.
-        ! Nothing is written: temperature and t_srf are left untouched, and the
-        ! two precipitation latent coefficients are echoed through unchanged.
+        ! energy_flux.jl: n_snow = n if n > 0 and mass(1) > 0, else 0. NOTE the
+        ! threshold is mass(1) <= 0, NOT TOL_EMPTY_LAYER as in surface_has_snow.
+        ! The two guards differ deliberately -- see docs/PLAN.md section 5,
+        ! item 1. Nothing is written: temperature and t_srf are left untouched,
+        ! and the two precipitation latent coefficients are echoed through.
 
         res%needs_melt                     = .FALSE.
-        res%energy_to_melting              = 0.0_wp_acc
         res%melt_energy_available          = 0.0_wp_acc
         res%heating                        = 0.0_wp_acc
         res%surface_flux_constant          = 0.0_wp
@@ -277,31 +298,33 @@ contains
         if (n .le. 0) return
         if (mass(1) .le. 0.0_wp) return
 
-        ! === Step 1: surface layer scalars ===================================
+        ! === Step 1: surface scalars =========================================
+        ! The fluxes are linearized about the previous INTERFACE temperature
+        ! Ts^n; the top cell's conductivity is taken at its own T1^n.
 
-        m1     = safe_positive(mass(1))
-        Tn     = temperature(1)
-        lambda = dt_seconds/c%ci/m1
+        m1   = safe_positive(mass(1))
+        Ts_n = t_srf
+        T1_n = temperature(1)
 
-        Tn_sq     = Tn*Tn
-        Tn_cube   = Tn_sq*Tn
-        Tn_fourth = Tn_sq*Tn_sq
+        Ts_sq     = Ts_n*Ts_n
+        Ts_cube   = Ts_sq*Ts_n
+        Ts_fourth = Ts_sq*Ts_sq
 
         ! SEMIX exchange coefficients, built ONCE at the linearization point
-        ! T^n, which is the temperature the whole of step 2 linearizes about.
+        ! Ts^n, which is the temperature the whole of step 2 linearizes about.
         uses_semix_seb = (c%seb_scheme .eq. CHION_SEB_SEMIX)
 
         if (uses_semix_seb) then
             sx = semix_turbulent_exchange(c,semix_snow_depth(mass,density,n), &
-                                          forc%air_temperature,Tn, &
+                                          forc%air_temperature,Ts_n, &
                                           forc%wind_speed,forc%air_pressure, &
                                           forc%relative_humidity, &
                                           forc%has_relative_humidity)
         end if
 
         ! === Step 2: linearized surface energy balance =======================
-        ! energy_flux.jl:370-392. Each term is either taken from the forcing
-        ! (has_* true) or parameterized internally.
+        ! Each term is either taken from the forcing (has_* true) or
+        ! parameterized internally.
 
         ! Shortwave. NOTE there is deliberately NO max(shortwave_down,0) here,
         ! while surface_fluxes.jl:74 (the bare-ice twin) does apply one. The
@@ -312,9 +335,9 @@ contains
             sw_abs = (1.0_wp - min(max(albedo,0.0_wp),1.0_wp))*forc%shortwave_down
         end if
 
-        ! Longwave. The emitted term eps_snow*sigma*T^4 is linearized about Tn
-        ! as T^4 ~ 4*Tn^3*T - 3*Tn^4, so +3*sigma*eps_snow*Tn^4 goes to the
-        ! constant part and 4*sigma*eps_snow*Tn^3 to the linear part.
+        ! Longwave. The emitted term eps_snow*sigma*Ts^4 is linearized about
+        ! Ts^n as Ts^4 ~ 4*Ts_n^3*Ts - 3*Ts_n^4, so +3*sigma*eps_snow*Ts_n^4 goes
+        ! to the constant part and 4*sigma*eps_snow*Ts_n^3 to the linear part.
         !
         ! Under semix the same linearization applies but the DOWNWELLING flux
         ! is absorbed with the surface emissivity too (ebal num_lw/denom_lw),
@@ -330,17 +353,17 @@ contains
                           semix_surface_emissivity(c,.TRUE.), &
                           semix_longwave_down(c,forc%q_lw_down,forc%has_q_lw_down, &
                                               forc%air_temperature), &
-                          Tn)
+                          Ts_n)
             lw_const = lw_coef%constant
             lw_lin   = lw_coef%linear
         else if (forc%has_q_lw_down) then
-            lw_const = forc%q_lw_down + c%sigma_sb*c%eps_snow*3.0_wp*Tn_fourth
+            lw_const = forc%q_lw_down + c%sigma_sb*c%eps_snow*3.0_wp*Ts_fourth
         else
             lw_const = c%sigma_sb*(c%eps_air*forc%air_temperature**4 &
-                                   + c%eps_snow*3.0_wp*Tn_fourth)
+                                   + c%eps_snow*3.0_wp*Ts_fourth)
         end if
 
-        if (.not. uses_semix_seb) lw_lin = c%sigma_sb*c%eps_snow*4.0_wp*Tn_cube
+        if (.not. uses_semix_seb) lw_lin = c%sigma_sb*c%eps_snow*4.0_wp*Ts_cube
 
         ! Sensible heat. A prescribed flux still wins over either scheme.
         if (forc%has_q_sh) then
@@ -356,7 +379,7 @@ contains
             sh_lin   = c%D_sh
         end if
 
-        ! Turbulent latent heat. Three-way, in this order (energy_flux.jl:379).
+        ! Turbulent latent heat. Three-way, in this order (energy_flux.jl).
         if (forc%has_q_lh) then
             lh_turb_const = forc%q_lh
             lh_turb_lin   = 0.0_wp
@@ -369,10 +392,10 @@ contains
             ! No third branch is needed for missing humidity forcing:
             ! semix_turbulent_exchange already zeroes f_lh in that case, which
             ! collapses both terms to zero exactly as the BESSI selection does.
-            lh_turb_const = -sx%f_lh*(sx%qsat - sx%dqsatdT*Tn - sx%q_air)
+            lh_turb_const = -sx%f_lh*(sx%qsat - sx%dqsatdT*Ts_n - sx%q_air)
             lh_turb_lin   =  sx%f_lh*sx%dqsatdT
         else if (forc%has_relative_humidity) then
-            lh_coef       = latent_vapor_flux_linearized(Tn,c,forc%air_temperature, &
+            lh_coef       = latent_vapor_flux_linearized(Ts_n,c,forc%air_temperature, &
                                                          forc%relative_humidity, &
                                                          forc%air_pressure)
             lh_turb_const = lh_coef%constant
@@ -384,49 +407,17 @@ contains
 
         ! The precipitation heat coefficients passed in by the caller are ADDED
         ! to the turbulent term, not replaced by it: a prescribed q_lh is an
-        ! ADDITIONAL flux (energy_flux.jl:386-387, docs energy.md).
+        ! ADDITIONAL flux (energy_flux.jl, docs energy.md).
         lh_const = latent_heat_constant_term + lh_turb_const
         lh_lin   = latent_heat_linear_coefficient + lh_turb_lin
 
         q_const = sh_const + lw_const + sw_abs + lh_const
         q_lin   = sh_lin + lw_lin + lh_lin
 
-        rhs_surf  = lambda*q_const
-        diag_surf = lambda*q_lin
-
         res%surface_flux_constant = q_const
         res%surface_flux_linear   = q_lin
 
-        ! === Step 3a: single-layer closed form ===============================
-        ! energy_flux.jl:398-429. A separate branch, NOT the solver with n = 1.
-
-        if (n .eq. 1) then
-
-            t_new = (Tn + rhs_surf)/safe_positive(1.0_wp + diag_surf)
-
-            if (t_new .gt. c%T0) then
-                res%needs_melt        = .TRUE.
-                res%energy_to_melting = (real(c%T0,wp_acc) - real(Tn,wp_acc)) &
-                                        *real(c%ci,wp_acc)*real(m1,wp_acc)
-                t_new                 = c%T0
-                res%heating           = res%energy_to_melting
-            else
-                res%heating = real(dt_seconds,wp_acc) &
-                              *(real(q_const,wp_acc) - real(q_lin,wp_acc)*real(t_new,wp_acc))
-            end if
-
-            t_new          = min(t_new,c%T0)
-            temperature(1) = t_new
-            t_srf          = t_new
-
-            call residual_melt_energy(res,q_const,q_lin,t_srf,dt_seconds)
-
-            return
-
-        end if
-
-        ! === Step 3b: multilayer matrix assembly =============================
-        ! energy_flux.jl:432-477.
+        ! === Step 3: matrix assembly =========================================
         !
         ! Julia stores the interface conductances in their own array and
         ! assembles in a second pass. Here each interface value is consumed
@@ -440,18 +431,24 @@ contains
         rhs   = 0.0_wp
 
         ! -dt G/(ci m) off the diagonal: G is the full centre-to-centre
-        ! conductance (energy_flux.jl:586-591). The factor 2 of the former
-        ! arithmetic half-conductance is gone with it.
+        ! conductance (energy_flux.jl, physical interface conductance).
         beta_scale = -dt_seconds/c%ci
 
         ! NOTE the surface layer thickness uses the SAFE-POSITIVE mass m1,
-        ! while every other layer uses its raw mass (energy_flux.jl:433 vs 439).
+        ! while every other layer uses its raw mass. Each layer's conductivity
+        ! is at its own start-of-step temperature.
         dz_prev = m1/safe_positive(density(1))
-        ! Each layer's conductivity at its own start-of-step temperature; the
-        ! surface layer's is T^n, the linearization point (energy_flux.jl:557-569).
-        K_prev  = snow_thermal_conductivity(density(1),Tn,c%rho_i)
+        K_prev  = snow_thermal_conductivity(density(1),T1_n,c%rho_i)
 
-        rhs(1) = Tn + rhs_surf
+        ! Robin boundary terms from the top cell's half-thickness.
+        G_s           = 2.0_wp*K_prev/safe_positive(dz_prev)
+        surface_den   = safe_positive(q_lin + G_s)
+        surface_const = q_const/surface_den
+        surface_coef  = G_s/surface_den
+        beta_1        = beta_scale/m1
+        boundary_term = beta_1*G_s
+
+        rhs(1) = T1_n - boundary_term*surface_const
 
         do k = 2, n
 
@@ -473,10 +470,16 @@ contains
 
         end do
 
-        ! Diagonal. Row 1 carries the linearized surface flux; row n is
-        ! zero-flux at the bottom (no lower(n), no upper(n)).
-        diag(1) = 1.0_wp - upper(1) + diag_surf
-        diag(n) = 1.0_wp - lower(n-1)
+        ! Diagonal. Row 1 is 1 - bt*(1 - b), written as 1 - bt*(q_lin/den) so
+        ! that a vanishing top cell (bt and b both huge/near 1) keeps an exact
+        ! 1 when q_lin = 0 instead of the difference of two enormous terms.
+        ! Row n is zero-flux at the bottom (no lower(n), no upper(n)).
+        diag(1) = 1.0_wp - boundary_term*(q_lin/surface_den)
+
+        if (n .gt. 1) then
+            diag(1) = diag(1) - upper(1)
+            diag(n) = 1.0_wp - lower(n-1)
+        end if
 
         do k = 2, n-1
             diag(k) = 1.0_wp - lower(k-1) - upper(k)
@@ -487,25 +490,17 @@ contains
         solver_diag(1:n) = diag(1:n)
         call solve_tridiagonal_thomas(lower,solver_diag,upper,rhs,n)
 
-        ! === Step 5: melting-point re-solve ==================================
-        ! energy_flux.jl:482-501.
-        !
-        ! TRAP 6 (docs/PLAN.md section 5): this is NOT a strict Dirichlet row.
-        ! Row 1 keeps its conduction coupling to row 2 -- only the surface FLUX
-        ! feedback diag_surf is removed from the diagonal, and the rhs is
-        ! replaced by T0. Turning it into a true Dirichlet row (diag = 1,
-        ! upper = 0) would change the physics and is explicitly not allowed
-        ! without asking (docs/PLAN.md section 4.1).
-        !
-        ! energy_to_melting is accumulated in two contributions: what pass 1
-        ! spent bringing the surface from Tn up to T0, plus what pass 2's
-        ! conduction removes from the pinned surface.
+        ts_new = surface_const + surface_coef*rhs(1)
 
-        if (rhs(1) .gt. c%T0) then
+        ! === Step 5: melting re-solve ========================================
+        ! The interface is held at T0 as a Dirichlet value BEHIND the
+        ! half-cell conductance: rhs(1) gains -bt*T0 and the diagonal loses
+        ! the eliminated Robin coefficient bt*b, while row 1 KEEPS its
+        ! conduction coupling to row 2.
 
-            res%needs_melt        = .TRUE.
-            res%energy_to_melting = (real(c%T0,wp_acc) - real(Tn,wp_acc)) &
-                                    *real(c%ci,wp_acc)*real(m1,wp_acc)
+        if (ts_new .gt. c%T0) then
+
+            res%needs_melt = .TRUE.
 
             ! Rebuild the rhs from the ORIGINAL temperatures. temperature() has
             ! not been written yet, which is exactly why it is only updated at
@@ -513,24 +508,27 @@ contains
             do k = 1, n
                 rhs(k) = temperature(k)
             end do
-            rhs(1) = c%T0
+            rhs(1) = rhs(1) - boundary_term*c%T0
 
             solver_diag(1:n) = diag(1:n)
-            solver_diag(1)   = solver_diag(1) - diag_surf
+            solver_diag(1)   = diag(1) - boundary_term*surface_coef
 
             call solve_tridiagonal_thomas(lower,solver_diag,upper,rhs,n)
-
-            res%energy_to_melting = res%energy_to_melting &
-                                    + (real(c%T0,wp_acc) - real(rhs(1),wp_acc)) &
-                                      *real(c%ci,wp_acc)*real(m1,wp_acc)
-
-            rhs(1) = c%T0
 
             do k = 1, n
                 if (rhs(k) .gt. c%T0) rhs(k) = c%T0
             end do
 
-            res%heating = res%energy_to_melting
+            ts_new = c%T0
+
+            res%heating = real(dt_seconds,wp_acc) &
+                          *(real(q_const,wp_acc) - real(q_lin,wp_acc)*real(c%T0,wp_acc))
+
+            ! Surface energy at T0 not conducted into the top cell.
+            res%melt_energy_available = &
+                max((real(q_const,wp_acc) - real(q_lin,wp_acc)*real(c%T0,wp_acc) &
+                     - real(G_s,wp_acc)*(real(c%T0,wp_acc) - real(rhs(1),wp_acc))) &
+                    *real(dt_seconds,wp_acc), 0.0_wp_acc)
 
         else
 
@@ -539,48 +537,20 @@ contains
             end do
 
             res%heating = real(dt_seconds,wp_acc) &
-                          *(real(q_const,wp_acc) - real(q_lin,wp_acc)*real(rhs(1),wp_acc))
+                          *(real(q_const,wp_acc) - real(q_lin,wp_acc)*real(ts_new,wp_acc))
 
         end if
 
-        ! === Step 6: write state and diagnose residual melt energy ===========
+        ! === Step 6: write state =============================================
 
         do k = 1, n
             temperature(k) = rhs(k)
         end do
 
-        t_srf = rhs(1)
-
-        call residual_melt_energy(res,q_const,q_lin,t_srf,dt_seconds)
+        t_srf = ts_new
 
         return
 
     end subroutine snow_energy_flux
-
-    subroutine residual_melt_energy(res,q_const,q_lin,t_surface,dt_seconds)
-        ! Chion.jl/src/processes/energy_flux.jl:247-274.
-        ! Energy left over once the surface has been brought to the melting
-        ! point. Zero unless the step actually reached melting.
-
-        implicit none
-
-        type(snow_energy_result_class), intent(INOUT) :: res
-        real(wp),                       intent(IN)    :: q_const     ! [W m-2]
-        real(wp),                       intent(IN)    :: q_lin       ! [W m-2 K-1]
-        real(wp),                       intent(IN)    :: t_surface   ! [K]
-        real(wp),                       intent(IN)    :: dt_seconds  ! [s]
-
-        if (.not. res%needs_melt) then
-            res%melt_energy_available = 0.0_wp_acc
-            return
-        end if
-
-        res%melt_energy_available = &
-            max((real(q_const,wp_acc) - real(q_lin,wp_acc)*real(t_surface,wp_acc)) &
-                *real(dt_seconds,wp_acc) - res%energy_to_melting, 0.0_wp_acc)
-
-        return
-
-    end subroutine residual_melt_energy
 
 end module snow_energy

@@ -566,6 +566,26 @@ contains
         call check_close("prescribed q_lh at T0: vapor_mass = q_lh*dt/Lv", vflux%vapor_mass, &
                          -20.0_wp*dt/c%Lv, 1.0e-5_wp, nfail)
 
+        ! Chion.jl 03bb445: the flux and the reservoir follow the INTERFACE
+        ! temperature t_srf, not the top cell's centre temperature(1), and
+        ! t_srf is left as the energy solve set it. Interface at T0 over a
+        ! subfreezing cell centre: liquid branch, E(T0).
+        fv%has_q_lh = .FALSE.
+        mass = 0.0_wp; mass_w = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        n = 2
+        mass(1:2) = 200.0_wp; density(1:2) = 350.0_wp; temperature(1:2) = 265.0_wp
+        mass_w(1) = 5.0_wp
+        t_srf = c%T0; runoff = 0.0_wp_acc
+
+        E = vapor_mass_flux(c%T0,c,fv%air_temperature,fv%relative_humidity,fv%air_pressure)
+        call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n,runoff, &
+                                                t_srf,albedo,c,fv,dt,300.0_wp,100.0_wp,vflux)
+        call check_close("interface at T0 over T1 < T0: vapor_mass = E(Tsrf)*dt", &
+                         vflux%vapor_mass, E*dt, 1.0e-5_wp, nfail)
+        call check("interface at T0 over T1 < T0: liquid reservoir, solid untouched", &
+                   mass(1) .eq. 200.0_wp .and. mass_w(1) .lt. 5.0_wp, nfail)
+        call check("t_srf is not reset to temperature(1)", t_srf .eq. c%T0, nfail)
+
         return
 
     end subroutine test_snow_vapor_mass

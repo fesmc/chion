@@ -148,7 +148,7 @@ module snow_bessi
         real(wp_acc), allocatable :: latent_heat_flux_sum(:)  ! [W m-2 d]
 
         ! Instantaneous per-column scalars
-        real(wp), allocatable :: t_srf(:)          ! (ncol) [K]
+        real(wp), allocatable :: t_srf(:)          ! (ncol) [K] snow-air interface temperature
         real(wp), allocatable :: albedo(:)         ! (ncol) [1]
 
         ! Time since the latest snowfall (albedo_scheme = "aging"); 0 on a
@@ -774,8 +774,9 @@ contains
                               lh_coef%linear,lh_coef%constant,dt_seconds,energy)
 
         ! === Step 10: post-solve surface vapor mass flux =====================
-        ! Evaluated exactly at the NEW surface temperature, deliberately
-        ! inconsistent with the linearization used inside the solve (trap 2).
+        ! Evaluated exactly at the NEW interface temperature t_srf (Chion.jl
+        ! 03bb445), deliberately inconsistent with the linearization used
+        ! inside the solve (trap 2).
 
         call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n, &
                                                 runoff,t_srf,albedo,c,forc,dt_seconds, &

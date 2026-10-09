@@ -421,12 +421,15 @@ contains
                                                   mass_split,mass_min,vflux)
         ! Chion.jl/src/processes/surface_fluxes.jl:210-269.
         !
-        ! Called AFTER the implicit energy solve, so temperature(1) is the NEW
-        ! surface temperature T^{n+1}. The latent heat flux is therefore
-        ! re-evaluated EXACTLY at T^{n+1}, while the energy solve used the
-        ! linearization about T^n -- trap 2 again, deliberate.
+        ! Called AFTER the implicit energy solve, so t_srf is the NEW interface
+        ! temperature Ts^{n+1} (Chion.jl 03bb445: the flux is evaluated at Tsrf,
+        ! no longer at the top cell's centre temperature(1)). The latent heat
+        ! flux is therefore re-evaluated EXACTLY at Ts^{n+1}, while the energy
+        ! solve used the linearization about Ts^n -- trap 2 again, deliberate.
+        ! t_srf is left as the solve set it, except that an emptied column
+        ! resets it to T0.
         !
-        ! Two branches, on the NEW surface temperature:
+        ! Two branches, on the NEW interface temperature:
         !   Ts <  T0  solid exchange,  applied to mass(1)
         !   Ts >= T0  liquid exchange, applied to mass_w(1)
         ! The vapour MASS (surface_fluxes.jl:294-309, dev_nils d0146e1):
@@ -481,7 +484,7 @@ contains
 
         if (.not. surface_has_snow(mass,n)) return
 
-        surface_temperature = temperature(1)
+        surface_temperature = t_srf
         h_snow              = semix_snow_depth(mass,density,n)
 
         q_lh = resolved_turbulent_latent_heat_flux(c,forc,surface_temperature,h_snow)
@@ -542,13 +545,10 @@ contains
 
         vflux%sublimation_mass = max(-vflux%vapor_mass,0.0_wp)
 
-        if (n .gt. 0) then
-            t_srf = temperature(1)
-        else
-            t_srf = c%T0
+        if (n .eq. 0) then
+            t_srf  = c%T0
+            albedo = c%alpha_ice
         end if
-
-        if (n .eq. 0) albedo = c%alpha_ice
 
         return
 
