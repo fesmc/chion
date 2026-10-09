@@ -188,11 +188,10 @@ module chion_defs
     real(wp), parameter, public :: DEF_DENSITY_INIT     = 300.0_wp
     real(wp), parameter, public :: DEF_TEMPERATURE_INIT = 273.0_wp
 
-    ! Depth cap reference values. NOTE: the cap uses this hard-coded layer
-    ! count, NOT the configured Ntot. Chion.jl/src/constants.jl:37-38 and
-    ! processes/layer_structure.jl. See docs/PLAN.md section 5, item 11.
-    integer,  parameter, public :: BESSI_REFERENCE_LAYER_COUNT   = 15
-    real(wp), parameter, public :: BESSI_REFERENCE_DEPTH_DENSITY = 300.0_wp
+    ! Depth cap: a fixed total solid depth, independent of Ntot and of
+    ! mass_split (Chion.jl 03bb445, src/constants.jl:39). It replaces the
+    ! former 15*mass_split*1.5/300, identical at mass_split = 300.
+    real(wp), parameter, public :: BESSI_REFERENCE_SNOW_DEPTH_M = 22.5_wp
 
     ! === Physical constants ==================================================
 
@@ -978,14 +977,13 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("ww","warren","warren_wiscombe")
+            case("warren_wiscombe")
                 flag = SEMIX_SNOW_ALBEDO_WW
             case("dang")
                 flag = SEMIX_SNOW_ALBEDO_DANG
             case DEFAULT
                 write(io_unit_err,*) "chion_semix_snow_albedo_flag:: Error: scheme not recognized."
-                write(io_unit_err,*) "semix_snow_albedo should be one of: ['ww','dang'] &
-                                     &(aliases: 'warren','warren_wiscombe' -> 'ww')"
+                write(io_unit_err,*) "semix_snow_albedo should be one of: ['warren_wiscombe','dang']"
                 write(io_unit_err,*) "semix_snow_albedo = ", trim(name)
                 stop "Program stopped."
         end select
@@ -1027,14 +1025,13 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("semix","climberx")
+            case("semix")
                 flag = SEMIX_QSAT_SEMIX
-            case("bessi","chion")
+            case("bessi")
                 flag = SEMIX_QSAT_BESSI
             case DEFAULT
                 write(io_unit_err,*) "chion_semix_qsat_flag:: Error: scheme not recognized."
-                write(io_unit_err,*) "semix_qsat should be one of: ['semix','bessi'] &
-                                     &(aliases: 'climberx' -> 'semix', 'chion' -> 'bessi')"
+                write(io_unit_err,*) "semix_qsat should be one of: ['semix','bessi']"
                 write(io_unit_err,*) "semix_qsat = ", trim(name)
                 stop "Program stopped."
         end select
@@ -1044,9 +1041,8 @@ contains
     end function chion_semix_qsat_flag
 
     function chion_albedo_scheme_flag(name) result(flag)
-        ! Map a namelist string onto an albedo scheme flag.
-        ! Chion.jl aliases :bessi and :legacy to :constant
-        ! (src/constants.jl:151-165); those aliases are preserved.
+        ! Map a namelist string onto an albedo scheme flag. Canonical names
+        ! only: Chion.jl 03bb445 dropped the aliases :bessi and :legacy.
 
         implicit none
 
@@ -1054,7 +1050,7 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("constant","bessi","legacy")
+            case("constant")
                 flag = CHION_ALBEDO_CONSTANT
             case("dynamic")
                 flag = CHION_ALBEDO_DYNAMIC
@@ -1067,8 +1063,7 @@ contains
             case DEFAULT
                 write(io_unit_err,*) "chion_albedo_scheme_flag:: Error: albedo scheme not recognized."
                 write(io_unit_err,*) "albedo_scheme should be one of: &
-                                     &['constant','dynamic','prescribed','semix','aging'] &
-                                     &(aliases: 'bessi','legacy' -> 'constant')"
+                                     &['constant','dynamic','prescribed','semix','aging']"
                 write(io_unit_err,*) "albedo_scheme = ", trim(name)
                 stop "Program stopped."
         end select
@@ -1078,8 +1073,8 @@ contains
     end function chion_albedo_scheme_flag
 
     function chion_fresh_snow_density_scheme_flag(name) result(flag)
-        ! Chion.jl aliases :bessi -> :constant and :htessel -> :parameterized
-        ! (src/constants.jl:131-147).
+        ! Canonical names only: Chion.jl 03bb445 dropped the aliases
+        ! :bessi -> :constant and :htessel -> :parameterized.
 
         implicit none
 
@@ -1087,16 +1082,15 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("constant","bessi")
+            case("constant")
                 flag = CHION_FRESH_SNOW_DENSITY_CONSTANT
-            case("parameterized","htessel")
+            case("parameterized")
                 flag = CHION_FRESH_SNOW_DENSITY_PARAMETERIZED
             case DEFAULT
                 write(io_unit_err,*) "chion_fresh_snow_density_scheme_flag:: Error: &
                                      &fresh snow density scheme not recognized."
                 write(io_unit_err,*) "fresh_snow_density_scheme should be one of: &
-                                     &['constant','parameterized'] &
-                                     &(aliases: 'bessi','htessel')"
+                                     &['constant','parameterized']"
                 write(io_unit_err,*) "fresh_snow_density_scheme = ", trim(name)
                 stop "Program stopped."
         end select

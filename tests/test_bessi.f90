@@ -52,16 +52,13 @@ program test_bessi
     !   * defect 11 -- rain falling on a column with mass(1) <= 0 was silently
     !     dropped upstream. chion now routes it to runoff (D29), so every
     !     kilogram offered is accepted and no rain is withheld.
-    !   * defect  1 -- apply_snow_surface_vapor_mass_flux returns the
+    !   * defect  1 -- apply_snow_surface_vapor_mass_flux returned the
     !     unclipped vapor_mass while applying a clipped one, so when
-    !     sublimation demand exceeds the surface layer the diagnostic
-    !     overstates the mass removed. The closure runs therefore leave the
-    !     humidity forcing off (has_relative_humidity = .FALSE., has_q_lh =
-    !     .FALSE.), which makes the latent flux identically zero. A separate
-    !     non-asserting probe reports the residual WITH humidity on, which is
-    !     a direct measurement of defect 1. The identity itself does hold with
-    !     humidity on wherever the demand never exceeds the surface layer;
-    !     test 1b asserts it on a cold, snow-rich column that sublimates.
+    !     sublimation demand exceeded the surface layer the diagnostic
+    !     overstated the mass removed. Fixed upstream in Chion.jl 03bb445 and
+    !     ported (C1): the diagnostic is the change actually applied. Test 1b
+    !     asserts the identity with humidity on where nothing is clipped,
+    !     test 1c where the surface layer is exhausted every step.
     !
     ! Measured behaviour of the residual (gfortran -O2, wp = sp): the RELATIVE
     ! residual saturates rather than growing with run length --
@@ -95,14 +92,15 @@ program test_bessi
 
     call test_mass_closure(nfail)
     call test_mass_closure_humid(nfail)
+    call test_mass_closure_exhausted(nfail)
     call test_cold_dry_column(nfail)
     call test_bare_and_recover(nfail)
     call test_capacity(nfail)
     call test_bare_ice_skips_water(nfail)
     call test_bare_rain_routed_once(nfail)
+    call test_fresh_snow_split_on_bare(nfail)
     call test_diurnal(nfail)
     call test_scheme_matrix(nfail)
-    call probe_defect_1(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -681,9 +679,7 @@ contains
         call check("bottom export occurred (merge and/or depth cap)", &
                    bsi%now%mass_base(1) .gt. 0.0_wp_acc, nfail)
         call check("depth cap bounded the column", &
-                   thickness .lt. 2.0_wp_acc*real(BESSI_REFERENCE_LAYER_COUNT,wp_acc) &
-                                  *real(bsi%par%mass_split,wp_acc) &
-                                  /real(BESSI_REFERENCE_DEPTH_DENSITY,wp_acc), nfail)
+                   thickness .lt. 2.0_wp_acc*real(BESSI_REFERENCE_SNOW_DEPTH_M,wp_acc), nfail)
         call check_close("closure holds at capacity", &
                          closure_lhs(bsi,1),precip,1.0e-6_wp_acc,nfail)
 
@@ -879,6 +875,58 @@ contains
         return
 
     end subroutine test_bare_rain_routed_once
+
+    ! =====================================================================
+    ! Test 5c -- fresh snow on a bare column, split in the same step
+    ! =====================================================================
+
+    subroutine test_fresh_snow_split_on_bare(nfail)
+        ! Chion.jl 03bb445: snow falling on a bare column takes the air
+        ! temperature in EVERY new layer. A snowfall above mass_max splits in
+        ! accumulation; before the fix the split copied the reset slot
+        ! temperature (temperature_init = 273 K) into layer 2.
+        !
+        ! Cold air, no sunlight: nothing can warm the new layers above T_a
+        ! within the step beyond the small conductive/longwave exchange.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        integer :: n
+
+        write(*,"(a)") "--- 5c. fresh snow split on a bare column takes T_a in every layer ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+        bsi%now%n_lay(1) = 0
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 250.0_wp
+        forc%dt_days         = 1.0_wp
+        forc%snowfall_rate   = 1.5_wp*bsi%par%mass_max/real(sec_day,wp)
+        forc%wind_speed      = 2.0_wp
+
+        call bessi_column_step(bsi,1,forc,c)
+
+        n = bsi%now%n_lay(1)
+        call check("snowfall above mass_max split into >= 2 layers", n .ge. 2, nfail)
+        call check("every new layer is near the air temperature, none at temperature_init", &
+                   all(abs(bsi%now%temperature(1:n,1) - forc%air_temperature) .lt. 2.0_wp), nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_fresh_snow_split_on_bare
 
     ! =====================================================================
     ! Test 6 -- diurnal substepping
@@ -1162,16 +1210,19 @@ contains
     end subroutine run_annual_cycle_albedo
 
     ! =====================================================================
-    ! Probe -- upstream defect 1, measured rather than asserted
+    ! Test 1c -- mass closure when sublimation exhausts the surface layer
     ! =====================================================================
 
-    subroutine probe_defect_1(nfail)
-        ! With humidity forcing on, apply_snow_surface_vapor_mass_flux clips
-        ! the mass it removes but reports the unclipped demand, so the closure
-        ! identity acquires a residual exactly equal to the over-reported
-        ! sublimation. This is an upstream defect, not a port bug, so it is
-        ! measured and printed rather than asserted. The check that DOES run
-        ! is a sign check: the residual can only ever go one way.
+    subroutine test_mass_closure_exhausted(nfail)
+        ! Very dry air and barely any snowfall: every step's sublimation
+        ! demand exceeds the surface layer, so the solid exchange is clipped
+        ! at zero mass. Upstream defect 1 reported the unclipped demand and
+        ! left a closure residual equal to the over-reported sublimation;
+        ! since Chion.jl 03bb445 (ported in C1) the diagnostic is the change
+        ! actually applied, and the identity holds to round-off.
+        !
+        ! Tolerance: 4 roundings of half an ulp of the precipitation total
+        ! per step, as in test 1b (the layer masses here are far smaller).
 
         implicit none
 
@@ -1182,9 +1233,9 @@ contains
         type(chion_const_class) :: c
         type(chion_step_forcing_class) :: forc
         integer      :: istep
-        real(wp_acc) :: precip, residual
+        real(wp_acc) :: precip, demand, reltol
 
-        write(*,"(a)") "--- probe. defect 1 (vapor-mass diagnostics not mass-closed) ---"
+        write(*,"(a)") "--- 1c. mass closure, sublimation exhausts the surface layer ---"
 
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
@@ -1206,17 +1257,21 @@ contains
             call bessi_column_step(bsi,1,forc,c)
         end do
 
-        residual = closure_lhs(bsi,1) - precip
+        ! The unclipped demand of one step on the initial T, for the coverage
+        ! check below: sublimation must have been limited by the mass available.
+        demand = real(forc%snowfall_rate*forc%dt_days*real(sec_day,wp),wp_acc)
 
         write(*,"(a,g16.8)") "         precip            = ", precip
         write(*,"(a,g16.8)") "         sublimation       = ", bsi%now%sublimation(1)
-        write(*,"(a,g16.8)") "         closure residual  = ", residual
+        write(*,"(a,g16.8)") "         closure residual  = ", closure_lhs(bsi,1) - precip
 
-        call check("residual is non-negative (over-reported sublimation only)", &
-                   residual .ge. -1.0e-6_wp_acc*max(precip,1.0_wp_acc), nfail)
-        call check("residual is bounded by the reported sublimation", &
-                   residual .le. bsi%now%sublimation(1) &
-                                 + 1.0e-6_wp_acc*max(precip,1.0_wp_acc), nfail)
+        call check("the column is stripped bare (sublimation clipped)", &
+                   bsi%now%n_lay(1) .eq. 0 .or. bsi%now%mass(1,1) .lt. demand, nfail)
+        call check("sublimation removed (nearly) all the snowfall", &
+                   bsi%now%sublimation(1) .gt. 0.9_wp_acc*precip, nfail)
+        reltol = 4.0_wp_acc*500.0_wp_acc*0.5_wp_acc*real(spacing(real(precip,wp)),wp_acc)/precip
+        call check_close("closure with an exhausted surface layer (defect 1 fixed)", &
+                         closure_lhs(bsi,1),precip,reltol,nfail)
 
         call bessi_dealloc(bsi)
 
@@ -1224,7 +1279,7 @@ contains
 
         return
 
-    end subroutine probe_defect_1
+    end subroutine test_mass_closure_exhausted
 
     ! =====================================================================
     ! Check helpers (style follows tests/test_column_utils.f90)

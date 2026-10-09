@@ -72,8 +72,10 @@ routines for no behavioural gain.
 `integer` parameters (`CHION_ALBEDO_*` etc.) and converts from namelist strings via
 `chion_albedo_scheme_flag` and friends.
 **Why:** Integer branching in inner loops; readable, validatable namelist input.
-**Impact:** None. The Chion.jl aliases are preserved: albedo `bessi`/`legacy` -> `constant`;
-fresh-snow-density `bessi` -> `constant`, `htessel` -> `parameterized`.
+**Impact:** None. Canonical names only, as in Chion.jl since `03bb445` (chion C1): the former
+aliases (albedo `bessi`/`legacy`, fresh-snow density `bessi`/`htessel`, SEMIX snow albedo
+`ww`/`warren` -> `warren_wiscombe`, PDD `calov_greve`/`calov-greve`, and chion's own
+`semix_qsat` `climberx`/`chion`) are rejected with the list of valid names.
 
 ### D5. Unrecognized densification scheme is an error, not a silent fallback
 **What:** Chion.jl dispatches densification with `if _uses_htessel_densification(c) ... else`
@@ -169,8 +171,9 @@ These are listed in full in `docs/PLAN.md` section 5. Restated here as they are 
 - **Three distinct empty-layer thresholds** (`> 0`, `> TOL_TINY`, `> TOL_EMPTY_LAYER`) gate
   different physics and are not interchangeable. `chion_defs` defines both tolerances and
   comments the hazard at the declaration.
-- **`BESSI_REFERENCE_LAYER_COUNT = 15`** is used by the depth cap regardless of the configured
-  `Ntot`. Preserved and flagged at the declaration.
+- **The depth cap ignores the configured `Ntot`.** Since Chion.jl `03bb445` (chion C1) it is the
+  constant `BESSI_REFERENCE_SNOW_DEPTH_M = 22.5` m, no longer `15*mass_split*1.5/300`
+  (`BESSI_REFERENCE_LAYER_COUNT` and `_DEPTH_DENSITY` removed).
 
 ---
 
@@ -698,8 +701,10 @@ separately double-counts. Worth knowing before writing any conservation check in
 
 Two conditions were required for it to close, both upstream defects rather than port
 artefacts: rain had to be withheld on steps beginning with `mass(1) <= 0` (defect 11, fixed in
-chion by D29), and humidity forcing must be off (defect 1). With dry air over a thin pack, defect 1 alone leaves
-a 105 kg m-2 residual against 192 kg m-2 of reported sublimation.
+chion by D29), and humidity forcing had to be off (defect 1). With dry air over a thin pack, defect 1 alone left
+a 105 kg m-2 residual against 192 kg m-2 of reported sublimation. Defect 1 is fixed since
+Chion.jl `03bb445` (ported in Stage C1): `tests/test_bessi.f90` test 1c now asserts closure
+with the surface layer exhausted every step.
 
 Measured relative residual: 9.2e-7 (BESSI densification), 8.8e-7 (HTESSEL), 6.9e-7 to 9.0e-7
 across all twelve scheme combinations.
@@ -745,6 +750,7 @@ tightened without moving the layer mass arrays to `dp`.**
    `_apply_snow_surface_vapor_mass_flux!` returns the *unclipped* `vapor_mass` while the mass
    it applies is clipped by `max(..., 0)`. When sublimation demand exceeds the surface layer,
    the cumulative `vapor_mass`/`sublimation` diagnostics overstate what was removed.
+   **Fixed upstream in `03bb445` (both branches); chion ported the fix in Stage C1.**
 2. **(A) `free_slot_for_surface_split` reads index 0** when the column has no active layers —
    `_get_layer(mass, _n_active(...), idx)` with no guard. chion raises an explicit error.
 3. **(A) `_htessel_thermal_metamorphism` is dead above ~150 kg m-3.**

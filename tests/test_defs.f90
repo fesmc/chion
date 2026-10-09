@@ -103,19 +103,16 @@ program test_defs
     call check("default low_density_densification = bessi", &
                c%low_density_densification .eq. CHION_DENSIFY_BESSI, nfail)
 
-    ! --- Scheme name mapping, including the Chion.jl aliases -------------
+    ! --- Scheme name mapping (canonical names only since Chion.jl 03bb445) ---
     call check("albedo 'constant'",   chion_albedo_scheme_flag("constant")   .eq. CHION_ALBEDO_CONSTANT,   nfail)
     call check("albedo 'dynamic'",    chion_albedo_scheme_flag("dynamic")    .eq. CHION_ALBEDO_DYNAMIC,    nfail)
     call check("albedo 'prescribed'", chion_albedo_scheme_flag("prescribed") .eq. CHION_ALBEDO_PRESCRIBED, nfail)
-    call check("albedo alias 'bessi'  -> constant", &
-               chion_albedo_scheme_flag("bessi")  .eq. CHION_ALBEDO_CONSTANT, nfail)
-    call check("albedo alias 'legacy' -> constant", &
-               chion_albedo_scheme_flag("legacy") .eq. CHION_ALBEDO_CONSTANT, nfail)
+    call check("albedo 'aging'",      chion_albedo_scheme_flag("aging")      .eq. CHION_ALBEDO_AGING,      nfail)
 
     call check("fresh snow 'constant'", &
                chion_fresh_snow_density_scheme_flag("constant") .eq. CHION_FRESH_SNOW_DENSITY_CONSTANT, nfail)
-    call check("fresh snow alias 'htessel' -> parameterized", &
-               chion_fresh_snow_density_scheme_flag("htessel") .eq. CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, nfail)
+    call check("fresh snow 'parameterized'", &
+               chion_fresh_snow_density_scheme_flag("parameterized") .eq. CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, nfail)
 
     call check("densify 'bessi'",   chion_densify_scheme_flag("bessi")   .eq. CHION_DENSIFY_BESSI,   nfail)
     call check("densify 'htessel'", chion_densify_scheme_flag("htessel") .eq. CHION_DENSIFY_HTESSEL, nfail)

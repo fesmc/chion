@@ -435,9 +435,10 @@ contains
         !       of the latent heat; the energy flux Q = L(Ts)*E carries it
         !   prescribed q_lh: vapor = q_lh*dt/L(Ts), Lv+Lm below T0, Lv at it,
         !       so the prescribed flux controls its own mass exchange
-        ! Both take max(...,0) on the updated layer value, so a sublimation
-        ! demand larger than the available surface mass is silently truncated
-        ! and the vapor_mass returned is NOT reduced to match. Preserved as-is.
+        ! Both take max(...,0) on the updated layer value, and the vapor_mass
+        ! returned is then the change actually applied, so a sublimation demand
+        ! larger than the available surface mass reports what was removed
+        ! (Chion.jl 03bb445; closes our upstream defect 1).
         !
         ! Only the solid branch can empty the surface layer, so only it runs
         ! the depleted-surface removal and surface-merge loops.
@@ -471,6 +472,7 @@ contains
 
         ! Local variables
         real(wp)     :: surface_temperature, q_lh, h_snow, L_exchange
+        real(wp)     :: previous_mass
         real(wp_acc) :: vapor
 
         vflux%vapor_mass       = 0.0_wp
@@ -502,13 +504,16 @@ contains
                     *real(dt_seconds,wp_acc)
         end if
 
-        vflux%vapor_mass       = real(vapor,wp)
-        vflux%sublimation_mass = max(-vflux%vapor_mass,0.0_wp)
+        vflux%vapor_mass = real(vapor,wp)
 
         if (surface_temperature .lt. c%T0) then
 
             ! Solid exchange: sublimation/deposition of the surface snow layer.
-            mass(1) = max(mass(1) + vflux%vapor_mass,0.0_wp)
+            ! The exchange diagnosed to the atmosphere is the mass actually
+            ! available, not the unconstrained demand.
+            previous_mass    = mass(1)
+            mass(1)          = max(previous_mass + vflux%vapor_mass,0.0_wp)
+            vflux%vapor_mass = mass(1) - previous_mass
 
             ! Peel off any surface layer that sublimation has emptied, routing
             ! its liquid water to runoff.
@@ -529,9 +534,13 @@ contains
 
             ! Liquid exchange: evaporation/condensation of surface liquid water.
             ! This branch cannot change the layer structure.
-            mass_w(1) = max(mass_w(1) + vflux%vapor_mass,0.0_wp)
+            previous_mass    = mass_w(1)
+            mass_w(1)        = max(previous_mass + vflux%vapor_mass,0.0_wp)
+            vflux%vapor_mass = mass_w(1) - previous_mass
 
         end if
+
+        vflux%sublimation_mass = max(-vflux%vapor_mass,0.0_wp)
 
         if (n .gt. 0) then
             t_srf = temperature(1)

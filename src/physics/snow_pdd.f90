@@ -218,7 +218,7 @@ contains
         select case(trim(adjustl(name)))
             case("simple")
                 flag = CHION_PDD_SIMPLE
-            case("pism","calov_greve","calov-greve")
+            case("pism")
                 flag = CHION_PDD_PISM
             case DEFAULT
                 write(io_unit_err,*) "pdd_method_flag:: Error: pdd method not recognized."

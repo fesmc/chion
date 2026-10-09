@@ -233,7 +233,12 @@ contains
         !   2. a = clamp(a_prev, alpha_wet, alpha_dry)
         !   3. aging   a = min(a, a - (1.35e-3*(Ts-T0) + 0.0278)*dt_days)
         !   4. floor   a = max(a, alpha_wet)
-        !   5. wetness a = max(alpha_wet, min(a, a - (a-alpha_wet)*lwc/max_lwc))
+        !   5. wetness, if dt_days > 0 (Chion.jl 03bb445):
+        !        r = clamp(lwc/max_lwc, 0, 1)
+        !        a = max(alpha_wet, min(a, alpha_wet + (a-alpha_wet)*(1-r)**dt_days))
+        !      The one-day relaxation of the former linear law
+        !      a - (a-alpha_wet)*r, but composing exactly across substeps at
+        !      fixed wetness; saturated snow reaches alpha_wet directly.
         !   6. clamp   a = clamp(a, alpha_wet, alpha_dry)
         !
         ! Step 3's min() makes the law non-brightening whenever the bracket is
@@ -254,7 +259,7 @@ contains
 
         ! Local variables
         real(wp)     :: alb, t_srf
-        real(wp_acc) :: lwc, alb_wet_adj
+        real(wp_acc) :: lwc, wet_fraction, retention, alb_wet_adj
 
         ! Step 0: bare surface. Threshold TOL_EMPTY_LAYER (not TOL_TINY).
         if (n .le. 0) then
@@ -283,13 +288,15 @@ contains
         ! Step 4
         alb = max(alb,c%alpha_wet)
 
-        ! Step 5: wetness relaxation towards alpha_wet.
+        ! Step 5: wetness relaxation towards alpha_wet, dt-consistent.
         lwc = surface_liquid_water_content(mass,mass_w,density,n,c)
 
-        if (lwc .gt. 0.0_wp_acc .and. real(c%max_lwc_albedo,wp_acc) .gt. TOL_TINY) then
-            alb_wet_adj = real(alb,wp_acc) &
-                        - (real(alb,wp_acc) - real(c%alpha_wet,wp_acc)) &
-                          *(lwc/real(c%max_lwc_albedo,wp_acc))
+        if (dt_days .gt. 0.0_wp .and. lwc .gt. 0.0_wp_acc .and. &
+            real(c%max_lwc_albedo,wp_acc) .gt. TOL_TINY) then
+            wet_fraction = min(max(lwc/real(c%max_lwc_albedo,wp_acc),0.0_wp_acc),1.0_wp_acc)
+            retention    = (1.0_wp_acc - wet_fraction)**real(dt_days,wp_acc)
+            alb_wet_adj  = real(c%alpha_wet,wp_acc) &
+                         + (real(alb,wp_acc) - real(c%alpha_wet,wp_acc))*retention
             alb = max(c%alpha_wet, min(alb,real(alb_wet_adj,wp)))
         end if
 

@@ -13,7 +13,8 @@ module snow_accumulation
     ! apply_accumulation, so a change to those signatures touches nothing else
     ! in this module. Two of them differ from the Julia argument lists: WP4
     ! dropped Ntot from merge_surface_layer, and Ntot and dt_seconds from
-    ! enforce_snow_depth_cap, because neither body uses them.
+    ! enforce_snow_depth_cap, because neither body uses them; C1 also dropped
+    ! mass_split from the latter (the cap is a constant depth since 03bb445).
     !
     ! PRESERVED QUIRKS:
     !   * Rain alone never creates a snow layer, and rain is only added to
@@ -248,8 +249,7 @@ contains
 
         ! --- Step 5: depth cap ----------------------------------------------
         call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    mass_split,c)
+                                    mass_base,smb_ice,runoff,t_srf,albedo,c)
 
         return
 

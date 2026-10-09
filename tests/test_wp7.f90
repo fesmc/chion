@@ -161,10 +161,11 @@ contains
         ! Local variables
         type(chion_const_class) :: cc
         real(wp) :: mass(Ntot), mass_w(Ntot), density(Ntot), temperature(Ntot)
-        real(wp) :: alb, alb_prev, alb_a, alb_b, span
+        real(wp) :: alb, alb_prev, alb_a, alb_b, alb_exp, span, wet_r
         real(wp) :: age   ! snow age; untouched outside the aging scheme
-        integer  :: k
+        integer  :: k, i
         logical  :: ok
+        real(wp), parameter :: WET_RS(6) = [0.0_wp, 0.1_wp, 0.5_wp, 0.99_wp, 1.0_wp, 2.0_wp]
 
         write(*,"(a)") "--- albedo: bounds, monotonicity, saturation, memorylessness ---"
 
@@ -273,6 +274,54 @@ contains
                            0.0_wp_acc, nfail)
         density(1) = 350.0_wp
         mass_w(1)  = 0.0_wp
+
+        ! === wetness relaxation composes across substeps ===================
+        ! Port of Chion.jl test/test_albedo_timestep.jl (03bb445): at fixed
+        ! wetness r, (1-r)**dt makes one daily step, 24 hourly steps, three
+        ! uneven steps and two steps of one day vs one of two days agree.
+        ! T0 - 30 K disables the temperature aging (its bracket is negative).
+        temperature(1) = cc%T0 - 30.0_wp
+        density(1)     = 300.0_wp
+        mass(1)        = 100.0_wp
+        ok = .TRUE.
+        do k = 1, 6
+            wet_r = WET_RS(k)
+            mass_w(1) = wet_r*cc%max_lwc_albedo &
+                        *(mass(1)/density(1) - mass(1)/cc%rho_i)*cc%rho_w
+
+            alb_a = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
+            alb_exp = cc%alpha_dry - (cc%alpha_dry - cc%alpha_wet)*min(max(wet_r,0.0_wp),1.0_wp)
+            if (abs(alb_a - alb_exp) .gt. 64.0_wp*epsilon(1.0_wp)) ok = .FALSE.
+
+            alb_b = cc%alpha_dry
+            do i = 1, 24
+                call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp/24.0_wp,alb_b)
+            end do
+            if (abs(alb_b - alb_a) .gt. 64.0_wp*epsilon(1.0_wp)) ok = .FALSE.
+
+            alb_b = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,0.1_wp,alb_b)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,0.2_wp,alb_b)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,0.7_wp,alb_b)
+            if (abs(alb_b - alb_a) .gt. 64.0_wp*epsilon(1.0_wp)) ok = .FALSE.
+
+            alb_a = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,2.0_wp,alb_a)
+            alb_b = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
+            if (abs(alb_b - alb_a) .gt. 64.0_wp*epsilon(1.0_wp)) ok = .FALSE.
+
+            alb_b = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,0.0_wp,alb_b)
+            if (alb_b .ne. cc%alpha_dry) ok = .FALSE.
+        end do
+        call check("dynamic, wetness relaxation is substep-invariant ((1-r)**dt)", ok, nfail)
+        temperature(1) = 265.0_wp
+        density(1)     = 350.0_wp
+        mass(1)        = 200.0_wp
+        mass_w(1)      = 0.0_wp
 
         ! === snowfall brightening =========================================
         ! Saturates at alpha_dry, however large the event.

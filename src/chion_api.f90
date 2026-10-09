@@ -111,13 +111,13 @@ module chion_api
     character(len=*), parameter :: def_const = "chion_const"
 
     ! Allowed values, in one place so the error messages and the validation
-    ! can never disagree. Aliases are included because chion_defs' *_flag
-    ! functions accept them (docs/porting_notes.md D4).
-    character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|aging|bessi|legacy"
-    character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "ww|dang|warren|warren_wiscombe"
+    ! can never disagree. Canonical names only, as in Chion.jl since 03bb445
+    ! (docs/porting_notes.md D4).
+    character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|aging"
+    character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "warren_wiscombe|dang"
     character(len=*), parameter :: CHION_SEB_CHOICES     = "bessi|semix"
-    character(len=*), parameter :: CHION_SEMIX_QSAT_CHOICES = "semix|bessi|climberx|chion"
-    character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized|bessi|htessel"
+    character(len=*), parameter :: CHION_SEMIX_QSAT_CHOICES = "semix|bessi"
+    character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized"
     character(len=*), parameter :: CHION_DENSIFY_CHOICES = "bessi|htessel"
     character(len=*), parameter :: CHION_PDD_CHOICES     = "simple|pism"
 

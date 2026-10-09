@@ -29,7 +29,9 @@ program test_seb
                              DEF_SEA_LEVEL_AIR_PRESSURE, &
                              SEMIX_QSAT_SEMIX, SEMIX_QSAT_BESSI, &
                              CHION_SEB_BESSI, CHION_SEB_SEMIX, &
-                             chion_seb_scheme_flag, chion_semix_qsat_flag
+                             SEMIX_SNOW_ALBEDO_WW, &
+                             chion_seb_scheme_flag, chion_semix_qsat_flag, &
+                             chion_semix_snow_albedo_flag
     use snow_seb_semix
 
     implicit none
@@ -67,10 +69,12 @@ program test_seb
                chion_seb_scheme_flag("bessi") .eq. CHION_SEB_BESSI, nfail)
     call check("flag('semix') = CHION_SEB_SEMIX", &
                chion_seb_scheme_flag("semix") .eq. CHION_SEB_SEMIX, nfail)
-    call check("qsat flag('chion') = SEMIX_QSAT_BESSI", &
-               chion_semix_qsat_flag("chion") .eq. SEMIX_QSAT_BESSI, nfail)
-    call check("qsat flag('climberx') = SEMIX_QSAT_SEMIX", &
-               chion_semix_qsat_flag("climberx") .eq. SEMIX_QSAT_SEMIX, nfail)
+    call check("qsat flag('bessi') = SEMIX_QSAT_BESSI", &
+               chion_semix_qsat_flag("bessi") .eq. SEMIX_QSAT_BESSI, nfail)
+    call check("qsat flag('semix') = SEMIX_QSAT_SEMIX", &
+               chion_semix_qsat_flag("semix") .eq. SEMIX_QSAT_SEMIX, nfail)
+    call check("snow albedo flag('warren_wiscombe') = SEMIX_SNOW_ALBEDO_WW", &
+               chion_semix_snow_albedo_flag("warren_wiscombe") .eq. SEMIX_SNOW_ALBEDO_WW, nfail)
 
     ! === Aerodynamic resistance ==========================================
     ! Hand-computed for h_snow = 1 m, wind = 5 m s-1, z0m_ice = 0.002,

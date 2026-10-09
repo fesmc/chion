@@ -643,11 +643,14 @@ contains
                                 forc%air_temperature,forc%wind_speed)
 
         ! === Step 3: fresh snow onto a column that started bare ==============
-        ! Nested ifs: n > 0 must be established before layer 1 is meaningful.
+        ! Every active layer takes the air temperature (Chion.jl 03bb445), not
+        ! only layer 1: a snowfall above mass_max splits in accumulation and
+        ! copies the reset slot temperature into layer 2, and a column with
+        ! 0 < mass(1) <= TOL_EMPTY_LAYER already had layers below.
 
         if (forc%snowfall_rate .gt. 0.0_wp) then
             if (started_without_surface_snow) then
-                if (n .gt. 0) temperature(1) = forc%air_temperature
+                temperature(1:n) = forc%air_temperature
             end if
         end if
 

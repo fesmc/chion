@@ -44,14 +44,12 @@ module snow_layers
     !   < TOL_EMPTY_LAYER  merge_surface_layer single-layer collapse,
     !                      continuous_bottom_deplete empty-layer skip and trim
     !
-    ! DEPTH CAP: enforce_snow_depth_cap uses the hard-coded
-    ! BESSI_REFERENCE_LAYER_COUNT = 15 and BESSI_REFERENCE_DEPTH_DENSITY = 300
-    ! with a 1.5 factor, INDEPENDENT of the configured Ntot. Preserved
-    ! deliberately -- see docs/PLAN.md section 5, item 11. Making the cap
-    ! respect Ntot is listed in section 4.1 as "not allowed without asking".
+    ! DEPTH CAP: enforce_snow_depth_cap caps the total solid depth at the
+    ! constant BESSI_REFERENCE_SNOW_DEPTH_M = 22.5 m (Chion.jl 03bb445),
+    ! INDEPENDENT of the configured Ntot and of mass_split.
 
     use chion_defs, only : wp, wp_acc, io_unit_err, TOL_TINY, TOL_EMPTY_LAYER, &
-                           BESSI_REFERENCE_LAYER_COUNT, BESSI_REFERENCE_DEPTH_DENSITY, &
+                           BESSI_REFERENCE_SNOW_DEPTH_M, &
                            chion_const_class
 
     implicit none
@@ -699,18 +697,15 @@ contains
     ! =====================================================================
 
     subroutine enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                      mass_base,smb_ice,runoff,t_srf,albedo, &
-                                      mass_split,c)
+                                      mass_base,smb_ice,runoff,t_srf,albedo,c)
         ! Cap the total active snow depth after accumulation, exporting the
         ! excess from the base of the column.
         !
-        ! THE CAP IGNORES THE CONFIGURED Ntot. reference_depth is built from
-        ! the hard-coded BESSI_REFERENCE_LAYER_COUNT = 15 and
-        ! BESSI_REFERENCE_DEPTH_DENSITY = 300 with a factor 1.5, so a column
-        ! configured with Ntot = 2 is still capped at the depth 15 reference
-        ! layers would occupy. This is trap 11 in docs/PLAN.md section 5;
-        ! changing it is explicitly listed in section 4.1 as a modelling
-        ! decision that may not be taken inside a work package.
+        ! THE CAP IGNORES THE CONFIGURED Ntot AND mass_split: reference_depth
+        ! is the constant BESSI_REFERENCE_SNOW_DEPTH_M = 22.5 m (Chion.jl
+        ! 03bb445). It replaced 15*mass_split*1.5/300 (trap 11 in
+        ! docs/PLAN.md section 5), which equals 22.5 m at the default
+        ! mass_split = 300.
         !
         ! PORTING NOTE: the Julia signature also carries Ntot and dt_seconds,
         ! neither of which its body uses. Both dropped rather than carried as
@@ -733,7 +728,6 @@ contains
         real(wp_acc), intent(INOUT) :: runoff
         real(wp), intent(INOUT) :: t_srf
         real(wp), intent(INOUT) :: albedo
-        real(wp), intent(IN)    :: mass_split       ! [kg m-2] target layer mass
         type(chion_const_class), intent(IN) :: c
 
         ! Local variables
@@ -753,9 +747,7 @@ contains
             end if
         end do
 
-        reference_depth = real(BESSI_REFERENCE_LAYER_COUNT,wp_acc) &
-                        * real(mass_split,wp_acc) * 1.5_wp_acc &
-                        / real(BESSI_REFERENCE_DEPTH_DENSITY,wp_acc)
+        reference_depth = real(BESSI_REFERENCE_SNOW_DEPTH_M,wp_acc)
 
         excess_depth = total_active_snow_depth - reference_depth
 

@@ -34,9 +34,23 @@ tag is the port itself, summarised rather than enumerated.
   Daily runs bit-identical.
 - ITM per-step `tsrf`: `melt_net` scaled to the annual rate `firn_fac` is
   calibrated on (360-day year); firn warming was ~360x too small (D27).
+- BESSI vapour exchange: `vapor_mass`/`sublimation` report the mass actually
+  removed when sublimation exhausts the surface layer (Chion.jl `03bb445`;
+  upstream defect 1). Diagnostics only.
+- BESSI fresh snow on a bare column takes the air temperature in every new
+  layer, not only layer 1 (Chion.jl `03bb445`).
 
 ### Changed
 
+- BESSI dynamic albedo wetness relaxation `α_wet + (α − α_wet)(1 − r)^dt`,
+  `r = clamp(lwc/max_lwc_albedo, 0, 1)` (Chion.jl `03bb445`): substep-invariant;
+  same as the linear law at daily steps up to round-off.
+- BESSI depth cap is a constant 22.5 m (Chion.jl `03bb445`), no longer
+  `15*mass_split*1.5/300`; identical at the default `mass_split`.
+- Scheme names: aliases removed, canonical names only (Chion.jl `03bb445`):
+  `semix_snow_albedo = "warren_wiscombe"` (was `"ww"`/`"warren"`); albedo
+  `"bessi"`/`"legacy"`, fresh-snow density `"bessi"`/`"htessel"`, PDD
+  `"calov_greve"`, `semix_qsat` `"climberx"`/`"chion"` are rejected.
 - BESSI heat conduction: interface conductance is harmonic (half-layer
   resistances in series), `2KiKj/(Kj dzi + Ki dzj)`, with `beta = -dt/ci`
   (Chion.jl `81034fa`, `d0146e1`). Identical on uniform columns; changes

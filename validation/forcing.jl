@@ -14,9 +14,9 @@ the ITM file, and RHZ and PS in the humidity-on BESSI file, see below).
 LWD / SHF / LHF / RHZ by their default names whenever they are present, while
 `chion_grid.x` reads none of them, so writing any of those would silently hand
 Chion.jl forcing that chion never sees. Omitting RHZ additionally keeps humidity
-forcing off, which is required for the BESSI mass-closure identity to hold at
-all -- with humidity on, the vapour diagnostic is unclosed by ~105 kg m-2
-against 192 kg m-2 reported (upstream Chion.jl defect 1).
+forcing off in the default configurations (before Chion.jl 03bb445 this was
+required for the BESSI mass-closure identity: upstream defect 1, the unclipped
+vapour diagnostic, left ~105 kg m-2 unclosed against 192 kg m-2 reported).
 
 The humidity-on BESSI configuration (WP11) gets a file of its own carrying RHZ
 and PS, both uniform: chion_grid.x has no humidity or pressure reader, only

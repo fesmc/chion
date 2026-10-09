@@ -16,7 +16,7 @@ program test_layers
     ! in merge_bottom_layer.
 
     use chion_defs,  only : wp, wp_acc, chion_const_class, chion_const_init, &
-                            BESSI_REFERENCE_LAYER_COUNT, BESSI_REFERENCE_DEPTH_DENSITY
+                            BESSI_REFERENCE_SNOW_DEPTH_M
     use snow_layers
 
     implicit none
@@ -485,10 +485,9 @@ program test_layers
     write(*,*)
     write(*,"(a)") "--- enforce_snow_depth_cap ---"
 
-    ! reference_depth = 15 * 300 * 1.5 / 300 = 22.5 m
-    call check_acc("reference depth is 22.5 m for mass_split = 300", &
-                   real(BESSI_REFERENCE_LAYER_COUNT,wp_acc)*300.0_wp_acc*1.5_wp_acc &
-                   /real(BESSI_REFERENCE_DEPTH_DENSITY,wp_acc), 22.5_wp_acc, nfail)
+    ! reference_depth is a constant 22.5 m (Chion.jl 03bb445)
+    call check_acc("reference depth is 22.5 m", &
+                   real(BESSI_REFERENCE_SNOW_DEPTH_M,wp_acc), 22.5_wp_acc, nfail)
 
     ! Below the cap -> no-op.
     call clear_column()
@@ -498,7 +497,7 @@ program test_layers
     density(1:4) = 300.0_wp      ! 4 m total
     total_ref = column_total()
     call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                mass_base,smb_ice,runoff,t_srf,albedo,mass_split,c)
+                                mass_base,smb_ice,runoff,t_srf,albedo,c)
     call check("shallow column untouched", n .eq. 4, nfail)
     call check_acc("no basal export below the cap", mass_base, 0.0_wp_acc, nfail)
     call check_conserve("depth cap no-op conserves mass", total_ref, nfail)
@@ -517,7 +516,7 @@ program test_layers
     total_ref = column_total()
 
     call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                mass_base,smb_ice,runoff,t_srf,albedo,mass_split,c)
+                                mass_base,smb_ice,runoff,t_srf,albedo,c)
 
     call check_acc("exported exactly the excess mass", mass_base, 750.0_wp_acc, nfail)
     call check_acc("smb_ice credited identically", smb_ice, mass_base, nfail)
@@ -537,7 +536,7 @@ program test_layers
     total_ref = column_total()
 
     call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                mass_base,smb_ice,runoff,t_srf,albedo,mass_split,c)
+                                mass_base,smb_ice,runoff,t_srf,albedo,c)
 
     ! Depth is 8 * 3 = 24 m, cap 22.5 m -> excess 1.5 m.
     ! Reverse pass: layer 9 (rho = 0) exports 300 in full, then layer 8 covers
@@ -578,7 +577,7 @@ program test_layers
         end if
 
         call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo,mass_split,c)
+                                    mass_base,smb_ice,runoff,t_srf,albedo,c)
 
         ! Melt-like conversion of solid to liquid every third step. Mass moves
         ! between mass and mass_w, so the conserved total is unchanged.
@@ -639,7 +638,7 @@ program test_layers
         end do
 
         call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo,mass_split,c)
+                                    mass_base,smb_ice,runoff,t_srf,albedo,c)
 
         call check_conserve_quiet("Ntot=2 sequence conserves mass", total_ref, nfail, istep)
 
@@ -698,7 +697,7 @@ program test_layers
 
         ! --- Depth cap.
         call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo,mass_split,c)
+                                    mass_base,smb_ice,runoff,t_srf,albedo,c)
 
         ! --- Melt-like water production every 5th step: convert solid to
         !     liquid in place (mass leaves `mass`, appears in `mass_w`), which

@@ -154,10 +154,10 @@ The humidity-on configuration (WP11) agrees field for field, worst 0.47 ulp
 (`temperature`), including `sublimation` (0.34 ulp) and
 `latent_heat_flux_sum` (0.44 ulp); every column has a non-zero latent flux and
 the `melting` column sublimates. Defect 1 (the unclipped vapour diagnostic)
-does not split the two models: chion reproduces it, so it is gated rather than
-reported. It still breaks mass closure wherever sublimation exceeds the
-surface layer, which `tests/test_bessi.f90` measures (probe) and avoids (test
-1b, humidity-on closure without clipping).
+did not split the two models at `27113b6`: chion reproduced it, so it was gated
+rather than reported. Both sides fix it since Chion.jl `03bb445` / chion C1
+(the diagnostic is the change applied); `tests/test_bessi.f90` test 1c asserts
+closure with the surface layer exhausted every step.
 
 Reported, not gated:
 
