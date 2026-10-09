@@ -183,7 +183,10 @@ Order rationale: harness first so every physics WP has a gate; Stage A changes a
 
 Decided (user, via the yelmox session, 2026-10-09): T1 linear `min(1, SWE/SWE_crit)`; T2 surface-layer mass; T3 `swe_crit_albedo` = 10 kg m-2, on by default; T4 dynamic/aging/constant blend, SEMIX uses CLIMBER-X f_snow with orography, prescribed untouched; T5 separate `albedo_snow` with a restart field; T6 continuous snowfall rejuvenation (WP6b); T7 land background where `H_ice = 0`.
 
-Open:
+Decided 2026-10-09 (user accepted the proposals): T8 constant `alpha_land` = 0.2; T9 skip ice ablation on bare land columns (`H_ice = 0`), inside WP17; T10 `aging_snowfall_ref` = 10 kg m-2, separate parameter; T11 linear; T12 dynamic refresh unchanged (Chion.jl parity).
+Levante test failures under ifx `-Ofast` (test_layers miscompiled, sp 1-ulp in test_energy/test_itm): option (a) — tests and validation builds use `-O2 -fp-model precise`; production stays `-Ofast`.
+
+Former open questions (kept for the record):
 - **T8 Land background:** a constant `alpha_land` (e.g. 0.2), or ITM's PDD-dependent land/forest blend `alb_land·(1000 − PDD)/1000 + alb_forest·PDD/1000`? The latter needs annual PDDs in the BESSI step forcing (yelmox already computes them for ITM).
 - **T9 Bare land columns:** with `H_ice = 0` the bare branch still computes ice melt and credits `smb_ice`. Skip ice ablation on land columns, i.e. no ice to melt, the surface energy goes nowhere? Separate fix, or part of WP17?
 - **T10 `aging_snowfall_ref` default:** 10 kg m-2 (≈ 3 cm of fresh snow; Oerlemans & Knap 1998 e-folding depth)? Same value as `swe_crit_albedo`, or tied to it (one parameter)?
