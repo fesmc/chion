@@ -17,10 +17,14 @@ module snow_accumulation
     !
     ! PRESERVED QUIRKS:
     !   * Rain alone never creates a snow layer, and rain is only added to
-    !     mass_w(1) when mass(1) > 0 STRICTLY (not > TOL_TINY). A column that
-    !     is bare and receives only rain routes nothing here: the rain is
-    !     simply dropped by this routine, and the bare-ice branch of the column
-    !     step handles it. Preserved as-is; flagged upstream.
+    !     mass_w(1) when mass(1) > 0 STRICTLY (not > TOL_TINY).
+    !
+    ! DEVIATION (docs/porting_notes.md D29): rain with no layer to hold it
+    ! goes to runoff HERE, so every kilogram of rain is routed exactly once.
+    ! Chion.jl dropped it (upstream defect 11) until dev_nils 8fff530, which
+    ! instead adds the step's rain to runoff in the bare-ice branch; that
+    ! counts it twice when 0 < mass(1) <= TOL_EMPTY_LAYER, where the rain is
+    ! already in mass_w(1). Totals are otherwise identical.
     !   * The split loop's out-of-slots branch is asymmetric: with Ntot <= 2 it
     !     calls free_slot_for_surface_split, otherwise merge_bottom_layer. The
     !     Ntot <= 2 case cannot merge a bottom layer without destroying the only
@@ -119,10 +123,10 @@ contains
         !
         ! Flow:
         !   0. empty column: create a surface layer only if snowfall > 0,
-        !      otherwise set albedo = alpha_ice and return.
+        !      otherwise rain -> runoff, albedo = alpha_ice, and return.
         !   1. snowfall: add mass to layer 1, mix its density by volume, and
         !      brighten the albedo.
-        !   2. rainfall: add to mass_w(1) if mass(1) > 0.
+        !   2. rainfall: add to mass_w(1) if mass(1) > 0, else to runoff.
         !   3. split loop  while mass(1) > mass_max
         !   4. merge loop  while n > 1 and mass(1) < mass_min
         !   5. depth cap.
@@ -163,6 +167,8 @@ contains
             if (snowfall_rate .gt. 0.0_wp) then
                 n = 1
             else
+                if (rainfall_rate .gt. 0.0_wp) &
+                    runoff = runoff + real(rainfall_rate*dt_seconds,wp_acc)
                 albedo = c%alpha_ice
                 return
             end if
@@ -198,9 +204,14 @@ contains
         end if
 
         ! --- Step 2: rainfall -----------------------------------------------
-        ! Strict mass(1) > 0, and only into the surface layer.
-        if (mass(1) .gt. 0.0_wp .and. rainfall_rate .gt. 0.0_wp) then
-            mass_w(1) = mass_w(1) + rainfall_rate*dt_seconds
+        ! Strict mass(1) > 0, and only into the surface layer; otherwise there
+        ! is nothing to hold it and it runs off (D29).
+        if (rainfall_rate .gt. 0.0_wp) then
+            if (mass(1) .gt. 0.0_wp) then
+                mass_w(1) = mass_w(1) + rainfall_rate*dt_seconds
+            else
+                runoff = runoff + real(rainfall_rate*dt_seconds,wp_acc)
+            end if
         end if
 
         ! --- Step 3: split loop ---------------------------------------------

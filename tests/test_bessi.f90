@@ -46,13 +46,12 @@ program test_bessi
     ! with P the cumulative precipitation mass actually accepted by the
     ! column. Note mass_base does NOT appear: it is already inside smb_ice.
     !
-    ! Two upstream defects would break this identity, and the test is set up
-    ! to avoid both rather than to hide them:
+    ! Two upstream defects would break this identity; chion fixes the first
+    ! and the test avoids the second rather than hiding it:
     !
-    !   * defect 11 -- rain falling on a column with mass(1) <= 0 is silently
-    !     dropped, and rain is ignored entirely on the bare-ice path. The
-    !     driver therefore withholds rain on any step that begins with
-    !     mass(1) <= 0, so every kilogram offered is a kilogram accepted.
+    !   * defect 11 -- rain falling on a column with mass(1) <= 0 was silently
+    !     dropped upstream. chion now routes it to runoff (D29), so every
+    !     kilogram offered is accepted and no rain is withheld.
     !   * defect  1 -- apply_snow_surface_vapor_mass_flux returns the
     !     unclipped vapor_mass while applying a clipped one, so when
     !     sublimation demand exceeds the surface layer the diagnostic
@@ -97,6 +96,7 @@ program test_bessi
     call test_bare_and_recover(nfail)
     call test_capacity(nfail)
     call test_bare_ice_skips_water(nfail)
+    call test_bare_rain_routed_once(nfail)
     call test_diurnal(nfail)
     call test_scheme_matrix(nfail)
     call probe_defect_1(nfail)
@@ -210,12 +210,8 @@ contains
 
     subroutine run_annual_cycle(bsi,c,nyears,icol,precip)
         ! Drive one column through nyears of the synthetic annual cycle,
-        ! accumulating the precipitation mass the column actually accepted.
-        !
-        ! Rain is withheld on any step that begins with mass(1) <= 0, because
-        ! apply_accumulation would drop it (upstream defect 11) and the
-        ! closure identity would then be measuring that defect rather than
-        ! the assembly.
+        ! accumulating the precipitation mass offered. All of it is accepted:
+        ! rain with no layer to hold it runs off (D29).
 
         implicit none
 
@@ -228,19 +224,12 @@ contains
         ! Local variables
         integer  :: iyr, iday
         real(wp) :: dt_seconds
-        logical  :: rain_would_land
         type(chion_step_forcing_class) :: forc
 
         do iyr = 1, nyears
             do iday = 1, NDAY_YEAR
 
                 call annual_forcing(iday,c,forc)
-
-                rain_would_land = .FALSE.
-                if (bsi%now%n_lay(icol) .gt. 0) then
-                    if (bsi%now%mass(1,icol) .gt. 0.0_wp) rain_would_land = .TRUE.
-                end if
-                if (.not. rain_would_land) forc%rainfall_rate = 0.0_wp
 
                 dt_seconds = forc%dt_days*real(sec_day,wp)
 
@@ -730,6 +719,81 @@ contains
 
     end subroutine test_bare_ice_skips_water
 
+    subroutine test_bare_rain_routed_once(nfail)
+        ! Rain on a bare column runs off exactly once (D29). Two bare columns
+        ! with only rain falling:
+        !
+        !   1. n = 0: nothing can hold the rain, so it must reach runoff.
+        !   2. a surface layer below TOL_EMPTY_LAYER: bare by surface_has_snow,
+        !      but mass(1) > 0, so the rain lands in mass_w(1) and must NOT
+        !      also reach runoff. Chion.jl dev_nils 8fff530 counts it twice.
+        !
+        ! The bare-ice branch adds its own ice melt to runoff, so the rain's
+        ! share is runoff - melt.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp_acc) :: rain_mass
+
+        write(*,"(a)") "--- 5b. rain on a bare column is routed exactly once ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        bsi%par%mass_min = 1.0e-12_wp
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,2)
+        call bessi_init_state(bsi,c)
+
+        ! Column 1: no layers.
+        bsi%now%n_lay(1) = 0
+
+        ! Column 2: a sliver of a surface layer over a dry layer.
+        bsi%now%n_lay(2)         = 2
+        bsi%now%mass(1,2)        = 1.0e-11_wp
+        bsi%now%mass(2,2)        = 100.0_wp
+        bsi%now%mass_w(:,2)      = 0.0_wp
+        bsi%now%density(1:2,2)   = 400.0_wp
+        bsi%now%temperature(1:2,2) = 263.0_wp
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 275.0_wp
+        forc%dt_days         = 1.0_wp
+        forc%rainfall_rate   = 2.0e-5_wp
+        forc%shortwave_down  = 200.0_wp
+        forc%wind_speed      = 2.0_wp
+
+        rain_mass = real(forc%rainfall_rate,wp_acc)*real(forc%dt_days,wp_acc) &
+                   *real(sec_day,wp_acc)
+
+        call bessi_column_step(bsi,1,forc,c)
+        call bessi_column_step(bsi,2,forc,c)
+
+        call check("n = 0: still bare", bsi%now%n_lay(1) .eq. 0, nfail)
+        call check_close("n = 0: rain reaches runoff once", &
+                         bsi%now%runoff(1) - bsi%now%melt(1), &
+                         rain_mass, 1.0e-6_wp_acc, nfail)
+
+        call check("sliver: still bare", &
+                   .not. surface_has_snow(bsi%now%mass(:,2),bsi%now%n_lay(2)), nfail)
+        call check_close("sliver: rain held in mass_w(1)", &
+                         real(bsi%now%mass_w(1,2),wp_acc), rain_mass, 1.0e-6_wp_acc, nfail)
+        call check("sliver: rain not also in runoff", &
+                   abs(bsi%now%runoff(2) - bsi%now%melt(2)) .le. 1.0e-9_wp_acc, nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_bare_rain_routed_once
+
     ! =====================================================================
     ! Test 6 -- diurnal substepping
     ! =====================================================================
@@ -996,12 +1060,6 @@ contains
                     forc%has_prescribed_albedo = .TRUE.
                     forc%prescribed_albedo     = 0.65_wp
                 end if
-
-                rain_would_land = .FALSE.
-                if (bsi%now%n_lay(icol) .gt. 0) then
-                    if (bsi%now%mass(1,icol) .gt. 0.0_wp) rain_would_land = .TRUE.
-                end if
-                if (.not. rain_would_land) forc%rainfall_rate = 0.0_wp
 
                 dt_seconds = forc%dt_days*real(sec_day,wp)
 

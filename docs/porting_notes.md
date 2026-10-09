@@ -475,6 +475,19 @@ in the SEMIX SEB. Universal constants with no
     runoff +0.22%, refreezing −0.31% and liquid water −1.9% (smaller pore space); `cp_w` is
     negligible (<0.01%).
 
+### D29. Rain with no layer to hold it runs off, exactly once
+**What:** `apply_accumulation` sends rain to `runoff` when `n = 0` or `mass(1) <= 0`;
+otherwise it goes to `mass_w(1)` as before. Nothing is added in the bare-ice branch.
+
+**Why:** Chion.jl dropped that rain (defects 11 and 20). dev_nils `8fff530` fixed it by
+adding the step's rain to `runoff` in the bare-ice branch. When `0 < mass(1) <=
+TOL_EMPTY_LAYER`, though, accumulation has already put the rain in `mass_w(1)`, so it is
+counted twice. Routing it where it falls counts it once.
+
+**Impact:** `runoff` on bare-ice steps with rain; `smb_ice` and the snowpack are unchanged.
+Identical to Chion.jl except in the sliver window above (tested in `test_bessi` 5b). The
+BESSI closure identity no longer needs rain withheld. Reported upstream.
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was
@@ -632,9 +645,9 @@ total_snow_water_mass + runoff + smb_ice - vapor_mass  ==  cumulative accepted p
 (`smb_ice = mass_base + vapor_bare - melt_bare - melt_ice` by construction), so including it
 separately double-counts. Worth knowing before writing any conservation check in WP11 or WP16.
 
-Two conditions are required for it to close, both of which are upstream defects rather than
-port artefacts: rain must be withheld on steps beginning with `mass(1) <= 0` (defect 11), and
-humidity forcing must be off (defect 1). With dry air over a thin pack, defect 1 alone leaves
+Two conditions were required for it to close, both upstream defects rather than port
+artefacts: rain had to be withheld on steps beginning with `mass(1) <= 0` (defect 11, fixed in
+chion by D29), and humidity forcing must be off (defect 1). With dry air over a thin pack, defect 1 alone leaves
 a 105 kg m-2 residual against 192 kg m-2 of reported sublimation.
 
 Measured relative residual: 9.2e-7 (BESSI densification), 8.8e-7 (HTESSEL), 6.9e-7 to 9.0e-7
@@ -706,7 +719,8 @@ tightened without moving the layer mass arrays to `dp`.**
     albedo scheme, not merely the shortwave resolution. Found in WP8.
 20. **(A) The bare-ice path uses `rainfall_rate` in the energy budget but discards its mass.**
     Extends defect 11: rain is a genuine mass leak on *any* bare column, not only on
-    massless-surface columns. Found in WP8.
+    massless-surface columns. Found in WP8. **Fixed upstream** in dev_nils `8fff530`
+    (double counts when `0 < mass(1) <= EPS_EMPTY_LAYER`); chion: D29.
 
 ### B — latent
 
@@ -721,7 +735,7 @@ tightened without moving the layer mass arrays to `dp`.**
     depletion request.
 11. **(B) Rain on a bare column is silently dropped.** `_apply_accumulation_resolved!` adds
     rain only when `mass[1] > 0` strictly and creates no layer for rain-only forcing, so the
-    routine is not mass-closed on its own.
+    routine is not mass-closed on its own. **Fixed** with defect 20 (see there).
 12. **(B) `_state_dict` divides `mass ./ density` with no guard** (diagnostics.jl:32), so a
     zero-density active layer yields `Inf` in `thickness` and `total_thickness`. The kernel
     path is guarded; only the snapshot path is exposed.
