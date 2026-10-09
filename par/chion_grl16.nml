@@ -39,6 +39,7 @@
     ! "transmissivity_seasonal" -> tau = trans_a + trans_b*z_srf + trans_c*tcc,
     !     with the coefficients below set to the melt-season (JJA) fit from
     !     diagnostics/transmissivity.jl. tau is clamped to [0,1] and * S_toa.
+    ! trans_a/b/c are read only by the source that uses them.
     swd_source          = "file"
     trans_a             = 0.768            ! [1]   JJA fit intercept
     trans_b             = 6.99e-5          ! [m-1] JJA fit elevation term

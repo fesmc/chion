@@ -75,8 +75,8 @@ program chion_grid
     !       n_years        = 50            ! annual cycles to repeat
     !       swd_source     = "file"        ! "file" | "transmissivity" | "transmissivity_seasonal"
     !       trans_a        = 0.46          ! tau = trans_a + trans_b*z_srf (+ trans_c*tcc)
-    !       trans_b        = 6.0e-5        ! [m-1]
-    !       trans_c        = 0.0           ! [1] cloud term, used by transmissivity_seasonal
+    !       trans_b        = 6.0e-5        ! [m-1]   trans_a/b: transmissivity* only
+    !       trans_c        = 0.0           ! [1] cloud term, transmissivity_seasonal only
     !       H_ice_default  = 1000.0        ! [m] ice thickness set on every column (ITM; BESSI ice substrate)
     !   /
 
@@ -177,11 +177,31 @@ program chion_grid
         path_racmo = ""
         if (trim(domain) .eq. "antarctica") &
             call nml_read(path_par,"ctrl","path_racmo", path_racmo)
-        call nml_read(path_par,"ctrl","swd_source",    swd_source)
-        call nml_read(path_par,"ctrl","trans_a",       trans_a)
-        call nml_read(path_par,"ctrl","trans_b",       trans_b)
-        call nml_read(path_par,"ctrl","trans_c",       trans_c)
         call nml_read(path_par,"ctrl","H_ice_default", H_ice_default)
+
+        ! The transmissivity coefficients are read only by the shortwave
+        ! sources that use them, so a par file with swd_source = "file" need
+        ! not carry them.
+        call nml_read(path_par,"ctrl","swd_source",    swd_source)
+        trans_a = 0.0_wp
+        trans_b = 0.0_wp
+        trans_c = 0.0_wp
+        select case(trim(swd_source))
+            case("file")
+                ! ERA5 / RACMO shortwave from the domain loader.
+            case("transmissivity")
+                call nml_read(path_par,"ctrl","trans_a", trans_a)
+                call nml_read(path_par,"ctrl","trans_b", trans_b)
+            case("transmissivity_seasonal")
+                call nml_read(path_par,"ctrl","trans_a", trans_a)
+                call nml_read(path_par,"ctrl","trans_b", trans_b)
+                call nml_read(path_par,"ctrl","trans_c", trans_c)
+            case DEFAULT
+                write(io_unit_err,*) "chion_grid:: Error: swd_source must be 'file', "// &
+                    "'transmissivity' or 'transmissivity_seasonal', got '"// &
+                    trim(swd_source)//"'."
+                stop "Program stopped."
+        end select
     else
         call nml_read(path_par,"ctrl","file_forcing",      file_forcing)
         call nml_read(path_par,"ctrl","name_x",            name_x)
@@ -494,11 +514,6 @@ program chion_grid
                     chn%forc%shortwave_down = max(0.0_wp, min(1.0_wp, &
                         trans_a + trans_b*chn%forc%surface_height + trans_c*fday)) &
                         * S_toa_c(:,doy)
-                case DEFAULT
-                    write(io_unit_err,*) "chion_grid:: Error: swd_source must be 'file', "// &
-                        "'transmissivity' or 'transmissivity_seasonal', got '"// &
-                        trim(swd_source)//"'."
-                    stop "Program stopped."
             end select
 
             ! Solar longitude from Chion.jl's calendar-day formula, with the

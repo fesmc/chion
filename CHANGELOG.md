@@ -105,6 +105,8 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Fixed
 
+- `chion_grid.x` reads `&ctrl trans_a/b/c` only for the `swd_source` that uses them
+  (`par/chion_grl8.nml` lacked `trans_c`); grl8 takes grl16's coefficient block.
 - `chion_column.x` and `chion_grid.x` derive the solar longitude with Chion.jl's
   calendar formula; it was `360*(doy-1)/year_length`, i.e. 0 (the March equinox)
   on 1 January. Affects only diurnal substeps, SEMIX `coszm` and the cloud proxy.
