@@ -1143,11 +1143,14 @@ contains
         write(*,"(a)") "--- 5. bare-ice branch skips percolation and refreezing ---"
 
         ! No fine near-surface layers (the default since C11): their remesh
-        ! would fill the sliver surface layer from below.
+        ! would fill the sliver surface layer from below. No ice substrate:
+        ! its energy solve would take the sliver and the layer below with it
+        ! (test 5b covers the bare branch over the substrate).
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
         bsi%par%mass_min = 1.0e-12_wp
         bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
+        bsi%par%ice_substrate_layers = 0
         call bessi_par_validate(bsi%par)
         call bessi_alloc(bsi,2)
         call bessi_init_state(bsi,c)
