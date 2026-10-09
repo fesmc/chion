@@ -189,7 +189,8 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
     )
 
     # Albedo constants pinned to chion's defaults: Chion.jl's have moved
-    # (alpha_ice 0.3 -> 0.4 -> 0.3, alpha_wet 0.70 -> 0.60 on dev_nils).
+    # (alpha_ice 0.3 -> 0.4 -> 0.3 -> 0.4 on main 9ec6cc7, alpha_wet
+    # 0.70 -> 0.60 on dev_nils -> 0.70 on main).
     aging = albedo === :aging ? AGING_PARAMS : (;)
     model = BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
                        alpha_ice=0.3, alpha_wet=0.70, aging..., BESSI_SCHEME_PINS...,
@@ -210,18 +211,32 @@ end
 """
 BESSI options the reference may or may not have, pinned to chion's physics
 when it does, so the same runner drives either reference environment
-(`CHION_VALIDATION_PROJECT`) unedited. dev_nils (27113b6) added them, with
-defaults that differ from chion's: turbulent sensible/latent heat
-`turbulent_flux_scheme = :semix` (Julia's modified SEMIX, not ported: plan
-1c.1) and `seb_scheme`, both pinned to `:bessi`; `refreezing_correction`
-(default 1, neutral; pinned so a default change upstream cannot slip in).
-Detected from the reference's own types rather than from a commit hash.
+(`CHION_VALIDATION_PROJECT`) unedited. Detected from the reference's own types
+rather than from a commit hash.
+
+dev_nils (27113b6) added, with defaults that differ from chion's: turbulent
+sensible/latent heat `turbulent_flux_scheme = :semix` (Julia's modified SEMIX,
+not ported: plan 1c.1) and `seb_scheme`, both pinned to `:bessi`;
+`refreezing_correction` (default 1, neutral; pinned so a default change
+upstream cannot slip in).
+
+main (9ec6cc7 = 03bb445) added, all on by default upstream and absent in chion
+(plan Stage C3-C5): `longwave_scheme` pinned to `:graybody` (no cloud proxy),
+`ice_substrate_layers = 0` (no thermal ice substrate) and
+`near_surface_layer_max_thicknesses_m = Inf` (no fine near-surface layers).
+Diurnal substepping and the temperature cycle, also on by default at
+9ec6cc7, are switched off in `run_julia_bessi` for every reference. The Robin
+surface boundary of 03bb445 has no switch (plan C2).
 """
 const BESSI_SCHEME_PINS = let pc = fieldnames(Chion.SnowpackPhysicalConstants),
                               bp = fieldnames(Chion.BESSIParameters)
     merge(:turbulent_flux_scheme in pc ?
               (seb_scheme=:bessi, turbulent_flux_scheme=:bessi) : (;),
-          :refreezing_correction in bp ? (refreezing_correction=1.0,) : (;))
+          :refreezing_correction in bp ? (refreezing_correction=1.0,) : (;),
+          :longwave_scheme in pc ? (longwave_scheme=:graybody,) : (;),
+          :ice_substrate_layers in bp ? (ice_substrate_layers=0,) : (;),
+          :near_surface_layer_max_thicknesses_m in bp ?
+              (near_surface_layer_max_thicknesses_m=(Inf, Inf, Inf, Inf),) : (;))
 end
 
 """
