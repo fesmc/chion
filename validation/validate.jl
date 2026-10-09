@@ -30,8 +30,9 @@ See README.md for the tolerance derivations.
 
 using Pkg
 # CHION_VALIDATION_PROJECT selects another environment, e.g. one that
-# develops a Chion.jl checkout on a different machine, so the committed
-# Manifest.toml is left untouched.
+# develops a Chion.jl checkout on a different machine or at another commit
+# (the reference is whatever Chion.jl that environment develops), so the
+# committed Manifest.toml is left untouched.
 Pkg.activate(get(ENV, "CHION_VALIDATION_PROJECT", @__DIR__))
 
 include("forcing.jl")
@@ -306,6 +307,8 @@ function main()
 
     println("="^72)
     println(" chion WP16 validation: chion vs Chion.jl")
+    println(" reference: ", reference_id())
+    isempty(BESSI_SCHEME_PINS) || println(" BESSI pins: ", BESSI_SCHEME_PINS)
     println("="^72)
 
     # =================================================================

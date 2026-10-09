@@ -188,7 +188,7 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
     # (alpha_ice 0.3 -> 0.4 -> 0.3, alpha_wet 0.70 -> 0.60 on dev_nils).
     aging = albedo === :aging ? AGING_PARAMS : (;)
     model = BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
-                       alpha_ice=0.3, alpha_wet=0.70, aging...,
+                       alpha_ice=0.3, alpha_wet=0.70, aging..., BESSI_SCHEME_PINS...,
                        densification=:bessi, fresh_snow_density=:constant,
                        mass_max=500.0, mass_split=300.0, mass_min=100.0,
                        density_init=300.0, temperature_init=273.0,
@@ -201,6 +201,37 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
                      name="wp16_bessi")
     run!(sim)
     return out
+end
+
+"""
+BESSI options the reference may or may not have, pinned to chion's physics
+when it does, so the same runner drives either reference environment
+(`CHION_VALIDATION_PROJECT`) unedited. dev_nils (27113b6) added them, with
+defaults that differ from chion's: turbulent sensible/latent heat
+`turbulent_flux_scheme = :semix` (Julia's modified SEMIX, not ported: plan
+1c.1) and `seb_scheme`, both pinned to `:bessi`; `refreezing_correction`
+(default 1, neutral; pinned so a default change upstream cannot slip in).
+Detected from the reference's own types rather than from a commit hash.
+"""
+const BESSI_SCHEME_PINS = let pc = fieldnames(Chion.SnowpackPhysicalConstants),
+                              bp = fieldnames(Chion.BESSIParameters)
+    merge(:turbulent_flux_scheme in pc ?
+              (seb_scheme=:bessi, turbulent_flux_scheme=:bessi) : (;),
+          :refreezing_correction in bp ? (refreezing_correction=1.0,) : (;))
+end
+
+"""
+The reference model actually loaded: its source directory and git commit,
+printed at the top of every run so a log records what it was gated against.
+"""
+function reference_id()
+    dir = pkgdir(Chion)
+    head = try
+        readchomp(`git -C $dir rev-parse --short HEAD`)
+    catch
+        "unknown commit"
+    end
+    return "$dir @ $head"
 end
 
 """
