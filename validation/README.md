@@ -204,6 +204,16 @@ see Chion.jl's unsplit layer 5 under `legacy_chion`. The chion behaviour is
 covered by `tests/test_layers` and `tests/test_bessi` (test 15) in the
 non-legacy builds.
 
+**After C5–C8 (main `9ec6cc7`):** every configuration green, worst 0.48 ulp. New
+configurations: cloud-proxy longwave (worst 0.48 ulp, `refreezing`; 241 days on the
+shortwave proxy, 124 on the night cloudiness, Tsrf up to 4.6 K from graybody);
+`seb_scheme = semix` with BESSI turbulence (0.47 ulp; 0.6 K); `seb = turbulent_flux_scheme =
+semix` with humidity on, alone (0.47 ulp; 2.7 K from BESSI turbulence) and over the
+substrate (0.47 ulp; 6.2 K), under `legacy_chion` (Julia's 287.05 and bare-ice `Lv`,
+D35/D38); diurnal substeps at the calibrated set (0.47 ulp; 330 column-days split into 8
+substeps, 240 unsplit polar-night days with shortwave on the D39 legacy path; 6.3 K from
+the daily run).
+
 Reported, not gated:
 
 - **`wp = sp` costs** ~4e-06 relative worst case, first divergence typically

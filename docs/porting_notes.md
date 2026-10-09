@@ -712,7 +712,8 @@ with the switch off it simply is the daily step.
 fixed-orbit geometry: synthetic or smoothed forcing (the harness' annual cosine, a
 monthly climatology interpolated to days) and calendar mismatches at the polar-night edge.
 Real daily reanalysis shortwave is zero there. The harness' diurnal configuration has it
-on 4 x ~50 column-days at 70 N and gates Julia's behaviour under `legacy_chion`.
+on 240 column-days at 70 N (4 columns x 60 polar-night days) and gates Julia's behaviour
+under `legacy_chion`.
 
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
