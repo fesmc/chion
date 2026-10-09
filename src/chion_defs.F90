@@ -156,6 +156,10 @@ module chion_defs
     !   * ITM_FIRN_DAYS_YEAR -> 1, i.e. ITM's tsrf applies firn_fac to the
     !     daily melt_net rate, as Chion.jl's ITMModel does (docs/porting_notes.md
     !     D27). chion scales it to the annual rate firn_fac is calibrated on.
+    !   * ALBEDO_AGING_BINARY_REFRESH -> .TRUE., i.e. the aging albedo scheme
+    !     resets to alpha_dry (age 0) on any snowfall, as Chion.jl does.
+    !     chion rejuvenates in proportion to the step's snowfall
+    !     (docs/porting_notes.md D30).
     !
     ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
     ! the plain build is gated against Chion.jl for PDD.
@@ -167,11 +171,13 @@ module chion_defs
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = 8.314_wp_acc
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc
     real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = 1.0_wp
+    logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .TRUE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = real(DEF_GRAVITY,wp_acc)
     real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = real(sec_year_360d/sec_day,wp)
+    logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .FALSE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
 #endif
 
@@ -259,6 +265,8 @@ module chion_defs
         ! relaxation towards alpha_wet, cold vs melting surface.
         real(wp) :: aging_cold_timescale_days     ! [d]
         real(wp) :: aging_melting_timescale_days  ! [d]
+        ! Step snowfall that fully rejuvenates the aging albedo (D30).
+        real(wp) :: aging_snowfall_ref            ! [kg m-2]
 
         ! SEMIX spectral albedo (CHION_ALBEDO_SEMIX). Warren & Wiscombe 1980
         ! bands, collapsed to broadband by the incoming-SW spectral weights.
@@ -553,6 +561,7 @@ contains
         ! dev_nils defaults (27113b6); 12407a3 had 5 d for the melting surface.
         c%aging_cold_timescale_days    = 20.0_wp
         c%aging_melting_timescale_days =  2.0_wp
+        c%aging_snowfall_ref           = 10.0_wp
 
         ! SEMIX spectral albedo defaults (CLIMBER-X smb_par / constants).
         c%frac_vu          = 0.45_wp
@@ -625,6 +634,7 @@ contains
         write(*,"(a25,i14)")     "albedo_scheme = ", c%albedo_scheme
         write(*,"(a25,g14.6,a)") "aging_cold_timescale_days = ",    c%aging_cold_timescale_days,    "  [d]"
         write(*,"(a25,g14.6,a)") "aging_melting_timescale_days = ", c%aging_melting_timescale_days, "  [d]"
+        write(*,"(a25,g14.6,a)") "aging_snowfall_ref = ", c%aging_snowfall_ref, "  [kg m-2]"
         write(*,"(a25,g14.6,a)") "eps_air  = ", c%eps_air,  "  [1]"
         write(*,"(a25,g14.6,a)") "eps_snow = ", c%eps_snow, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_ice  = ", c%eps_ice,  "  [1]"
@@ -639,7 +649,8 @@ contains
     subroutine chion_const_validate(c)
         ! Constraints Chion.jl's SnowpackPhysicalConstants constructor checks
         ! (src/constants.jl, 6d06af6): the aging timescales are positive, and
-        ! under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1.
+        ! under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1. Plus chion's
+        ! aging_snowfall_ref > 0 (D30).
 
         implicit none
 
@@ -650,6 +661,12 @@ contains
             write(io_unit_err,*) "chion_const_validate:: Error: aging timescales must be positive."
             write(io_unit_err,*) "aging_cold_timescale_days    = ", c%aging_cold_timescale_days
             write(io_unit_err,*) "aging_melting_timescale_days = ", c%aging_melting_timescale_days
+            stop "Program stopped."
+        end if
+
+        if (c%aging_snowfall_ref .le. 0.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: aging_snowfall_ref must be positive."
+            write(io_unit_err,*) "aging_snowfall_ref = ", c%aging_snowfall_ref
             stop "Program stopped."
         end if
 

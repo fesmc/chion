@@ -16,6 +16,9 @@ tag is the port itself, summarised rather than enumerated.
   `alpha_dry`, exponential relaxation to `alpha_wet` (`aging_cold_timescale_days`
   20 d, `aging_melting_timescale_days` 2 d); `snow_age_days` in output and
   restart. Default scheme unchanged.
+- Aging albedo: snowfall rejuvenates in proportion to its mass,
+  `f = min(1, S/aging_snowfall_ref)` (10 kg m-2), instead of Chion.jl's reset
+  on any snowfall (D30; reverted under `legacy_chion`).
 - `chion_get_surface_flux_totals`: cumulative melt/runoff/refrz/subl [kg m-2],
   so a host aggregating over many steps differences two calls.
 

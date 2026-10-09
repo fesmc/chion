@@ -1070,6 +1070,7 @@ contains
         call nml_read(filename,group,"albedo_scheme",            albedo_scheme,             init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"aging_cold_timescale_days",   c%aging_cold_timescale_days,   init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"aging_melting_timescale_days",c%aging_melting_timescale_days,init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"aging_snowfall_ref",       c%aging_snowfall_ref,      init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"frac_vu",                  c%frac_vu,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"alb_snow_vis_new",         c%alb_snow_vis_new,        init=init_pars,defaults_file=def_file,defaults_group=def_const)

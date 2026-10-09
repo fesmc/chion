@@ -607,7 +607,7 @@ contains
         ! === Step 2: accumulation ============================================
 
         call apply_accumulation(mass,mass_w,density,temperature,n, &
-                                mass_base,smb_ice,runoff,t_srf,albedo, &
+                                mass_base,smb_ice,runoff,t_srf,albedo,snow_age, &
                                 c,par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
                                 forc%snowfall_rate,forc%rainfall_rate,dt_seconds, &
                                 forc%air_temperature,forc%wind_speed)

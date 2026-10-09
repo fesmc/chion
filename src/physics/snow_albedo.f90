@@ -29,7 +29,8 @@ module snow_albedo
     ! (alpha_dry-alpha_wet)*(1-exp(-dm/3)) < (alpha_dry-alpha_wet).
 
     use chion_defs, only : wp, wp_acc, TOL_TINY, TOL_EMPTY_LAYER, &
-                           chion_const_class, CHION_ALBEDO_CONSTANT, CHION_ALBEDO_AGING
+                           chion_const_class, CHION_ALBEDO_CONSTANT, CHION_ALBEDO_AGING, &
+                           ALBEDO_AGING_BINARY_REFRESH
     use snow_column_utils, only : layer_lwc
 
     implicit none
@@ -47,6 +48,7 @@ module snow_albedo
     public :: constant_surface_albedo
     public :: surface_liquid_water_content
     public :: albedo_refresh_from_snowfall
+    public :: albedo_aging_rejuvenate
     public :: albedo_update
     public :: albedo_update_aging
 
@@ -117,7 +119,7 @@ contains
 
     end function surface_liquid_water_content
 
-    subroutine albedo_refresh_from_snowfall(albedo,c,snowfall_mass)
+    subroutine albedo_refresh_from_snowfall(albedo,snow_age_days,c,snowfall_mass)
         ! Chion.jl/src/processes/albedo.jl:61-81.
         ! Brightening by fresh snow, applied inside the accumulation step.
         !
@@ -126,8 +128,10 @@ contains
         ! No-op below TOL_TINY of added mass. Under the CONSTANT scheme the
         ! albedo is simply reset to alpha_dry (and then recomputed from scratch
         ! by albedo_update, since the constant scheme is memoryless). Under the
-        ! AGING scheme it is reset to alpha_dry too (6d06af6); the snow age is
-        ! reset by albedo_update_aging.
+        ! AGING scheme chion rejuvenates in proportion to the snowfall
+        ! (albedo_aging_rejuvenate, D30); Chion.jl, and legacy_chion builds,
+        ! reset to alpha_dry (6d06af6) and leave the snow age to
+        ! albedo_update_aging.
         !
         ! Trap 9: the test is on the CONSTANT scheme only, so PRESCRIBED lands
         ! in the dynamic branch here, exactly as in Julia.
@@ -135,6 +139,7 @@ contains
         implicit none
 
         real(wp),                intent(INOUT) :: albedo         ! [1] column albedo
+        real(wp),                intent(INOUT) :: snow_age_days  ! [d] aging scheme only
         type(chion_const_class), intent(IN)    :: c
         real(wp),                intent(IN)    :: snowfall_mass  ! [kg m-2] added this step
 
@@ -146,7 +151,11 @@ contains
         end if
 
         if (c%albedo_scheme .eq. CHION_ALBEDO_AGING) then
-            albedo = c%alpha_dry
+            if (ALBEDO_AGING_BINARY_REFRESH) then
+                albedo = c%alpha_dry
+            else
+                call albedo_aging_rejuvenate(albedo,snow_age_days,c,snowfall_mass)
+            end if
             return
         end if
 
@@ -156,6 +165,63 @@ contains
         return
 
     end subroutine albedo_refresh_from_snowfall
+
+    subroutine albedo_aging_rejuvenate(albedo,snow_age_days,c,snowfall_mass)
+        ! Partial rejuvenation of the aging albedo by fresh snow (chion
+        ! deviation, docs/porting_notes.md D30). With the refresh fraction
+        !
+        !   f = min(1, S/aging_snowfall_ref),   S = snowfall_mass,
+        !
+        ! the aging progress E = -ln((a - alpha_wet)/(alpha_dry - alpha_wet))
+        ! (= sum of dt/tau, exact for the aging scheme) and the snow age are
+        ! scaled by (1 - f). In albedo space, with no extra state:
+        !
+        !   a   <- alpha_wet + (alpha_dry - alpha_wet)*x**(1-f),
+        !          x = (a - alpha_wet)/(alpha_dry - alpha_wet)
+        !   age <- (1 - f)*age
+        !
+        ! S = 0 changes nothing, S >= aging_snowfall_ref is Chion.jl's reset,
+        ! and refreshes compose: E*(1-f1)*(1-f2).
+        !
+        ! Two limits are explicit rather than left to the power:
+        !   f = 1      -> alpha_dry, age 0      (x**0, also for x = 0)
+        !   x = 0      -> alpha_wet             (E infinite: only a full
+        !                                        refresh restores it)
+        ! The second also covers alpha_dry = alpha_wet, where x is undefined.
+
+        implicit none
+
+        real(wp),                intent(INOUT) :: albedo         ! [1]
+        real(wp),                intent(INOUT) :: snow_age_days  ! [d]
+        type(chion_const_class), intent(IN)    :: c
+        real(wp),                intent(IN)    :: snowfall_mass  ! [kg m-2] added this step
+
+        ! Local variables
+        real(wp) :: f_keep, alb, span
+
+        ! 1 - f: the fraction of the aging progress that survives.
+        f_keep = 1.0_wp - min(1.0_wp, max(snowfall_mass,0.0_wp)/c%aging_snowfall_ref)
+
+        if (f_keep .le. 0.0_wp) then
+            albedo        = c%alpha_dry
+            snow_age_days = 0.0_wp
+            return
+        end if
+
+        snow_age_days = f_keep*snow_age_days
+
+        alb  = min(max(albedo,c%alpha_wet),c%alpha_dry)
+        span = c%alpha_dry - c%alpha_wet
+
+        if (alb .gt. c%alpha_wet) then
+            albedo = c%alpha_wet + span*((alb - c%alpha_wet)/span)**f_keep
+        else
+            albedo = c%alpha_wet
+        end if
+
+        return
+
+    end subroutine albedo_aging_rejuvenate
 
     subroutine albedo_update(mass,mass_w,density,temperature,n,c,dt_days,albedo)
         ! Chion.jl/src/processes/albedo.jl:89-129 (dev_nils 6d077c5).
@@ -249,7 +315,11 @@ contains
         !   4. clamp   a = clamp(a, alpha_wet, alpha_dry)
         !
         ! Step 1 tests the RATE, so any snowfall at all fully rejuvenates the
-        ! surface, however little mass it adds. Liquid water plays no role.
+        ! surface, however little mass it adds. That is Chion.jl's form, kept
+        ! under legacy_chion only (ALBEDO_AGING_BINARY_REFRESH). chion instead
+        ! rejuvenates in proportion to the snowfall in the accumulation step
+        ! (albedo_aging_rejuvenate, D30), so step 1 is skipped and fresh snow
+        ! ages from the step it fell. Liquid water plays no role.
 
         implicit none
 
@@ -277,11 +347,13 @@ contains
             return
         end if
 
-        ! Step 1: fresh snow.
-        if (snowfall_rate .gt. 0.0_wp) then
-            albedo        = c%alpha_dry
-            snow_age_days = 0.0_wp
-            return
+        ! Step 1: fresh snow (Chion.jl's binary reset; legacy_chion only).
+        if (ALBEDO_AGING_BINARY_REFRESH) then
+            if (snowfall_rate .gt. 0.0_wp) then
+                albedo        = c%alpha_dry
+                snow_age_days = 0.0_wp
+                return
+            end if
         end if
 
         ! Step 2

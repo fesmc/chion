@@ -352,8 +352,8 @@ capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
 
 ### D24. `legacy_chion=1` build variant
 **What:** `make ... legacy_chion=1` defines `CHION_LEGACY`, which reverts the
-deliberate physics corrections (currently D22's R = 8.314, D25's g = 9.81 and D27's ITM
-`tsrf` scaling) to Chion.jl's values. Builds land in `libchion/{include,bin}[-dp]-legacy`
+deliberate physics corrections (currently D22's R = 8.314, D25's g = 9.81, D27's ITM
+`tsrf` scaling and D30's aging-albedo refresh) to Chion.jl's values. Builds land in `libchion/{include,bin}[-dp]-legacy`
 (`-legacy-fpsafe` for validation/).
 
 **Why:** "is the port faithful?" and "is the reference correct?" are different
@@ -493,6 +493,27 @@ counted twice. Routing it where it falls counts it once.
 **Impact:** `runoff` on bare-ice steps with rain; `smb_ice` and the snowpack are unchanged.
 Identical to Chion.jl except in the sliver window above (tested in `test_bessi` 5b). The
 BESSI closure identity no longer needs rain withheld. Reported upstream.
+
+### D30. Aging albedo: snowfall rejuvenates in proportion to its mass
+**What:** under `albedo_scheme = "aging"`, a step's snowfall `S` [kg m-2] scales the aging
+progress `E = -ln((a - alpha_wet)/(alpha_dry - alpha_wet))` and `snow_age_days` by
+`1 - f`, `f = min(1, S/aging_snowfall_ref)` (default 10 kg m-2, about 3 cm of fresh snow).
+In albedo space `a <- alpha_wet + (alpha_dry - alpha_wet)*x**(1-f)`. It acts in the
+accumulation step's snowfall refresh (`albedo_aging_rejuvenate`), before the step's
+aging relaxation, which then always runs. The dynamic scheme's refresh is unchanged.
+
+**Why:** Chion.jl (`6d06af6`) resets to `alpha_dry` and age 0 on any snowfall rate > 0,
+so a trace of snow fully rejuvenates the surface. With a host that spreads monthly
+precipitation over every day (yelmox), the ablation-zone albedo then never leaves
+`alpha_dry`. `E = sum(dt/tau)` for this scheme, so scaling `E` is exact even though `tau`
+switches between the cold and melting timescales.
+
+**Impact:** `S = 0`: no change; `S >= aging_snowfall_ref`: Chion.jl's reset, except that
+the step's relaxation follows (end-of-step age `dt`, not 0). Refreshes compose as
+`E*(1-f1)*(1-f2)`. Snow at exactly `alpha_wet` (infinite `E`, e.g. the first snow on a
+bare column, whose `alpha_ice` is clamped up to `alpha_wet`) is restored only by a full
+refresh. Reverted under `legacy_chion` (`ALBEDO_AGING_BINARY_REFRESH`), so the harness'
+aging configuration stays gated. To raise with Chion.jl (PLAN_dev_nils N5).
 
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its

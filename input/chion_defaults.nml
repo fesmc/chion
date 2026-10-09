@@ -124,6 +124,7 @@
     albedo_scheme             = "dynamic"   ! "constant" | "dynamic" | "prescribed" | "semix" | "aging" (aliases: "bessi", "legacy")
     aging_cold_timescale_days    = 20.0     ! [d] Aging e-folding time, surface below T0 (albedo_scheme = "aging")
     aging_melting_timescale_days = 2.0      ! [d] Aging e-folding time, surface at T0
+    aging_snowfall_ref        = 10.0        ! [kg m-2] Step snowfall that fully rejuvenates the aging albedo
 
     ! ## SEMIX spectral albedo (albedo_scheme = "semix"; CLIMBER-X) ##
     frac_vu                   = 0.45        ! [1]  Visible+UV fraction of incoming solar
@@ -169,11 +170,15 @@
 !   silently behaves as "dynamic" (docs/PLAN.md section 5 item 9).
 !
 ! albedo_scheme = "aging"
-!   Snowfall-age scheme (Chion.jl 6d06af6): snowfall resets the albedo
-!   to alpha_dry and snow_age_days to 0; otherwise
+!   Snowfall-age scheme (Chion.jl 6d06af6):
 !   alpha = alpha_wet + (alpha - alpha_wet)*exp(-dt/tau), tau = the
 !   melting timescale when the surface is at T0, else the cold one.
-!   Requires 0 <= alpha_wet <= alpha_dry <= 1.
+!   Requires 0 <= alpha_wet <= alpha_dry <= 1. Snowfall S [kg m-2] in a
+!   step rejuvenates it by f = min(1, S/aging_snowfall_ref): the aging
+!   progress -ln((alpha-alpha_wet)/(alpha_dry-alpha_wet)) and
+!   snow_age_days are scaled by (1-f), so S >= aging_snowfall_ref resets
+!   to alpha_dry and a trace of snow does almost nothing (D30). Chion.jl
+!   resets on any snowfall; legacy_chion builds do the same.
 !
 ! low_density_densification
 !   Selects only the rho < 550 kg m-3 branch. The mid and high branches

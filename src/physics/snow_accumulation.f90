@@ -114,7 +114,7 @@ contains
     end function fresh_snow_density
 
     subroutine apply_accumulation(mass,mass_w,density,temperature,n, &
-                                  mass_base,smb_ice,runoff,t_srf,albedo, &
+                                  mass_base,smb_ice,runoff,t_srf,albedo,snow_age_days, &
                                   c,Ntot,mass_max,mass_split,mass_min, &
                                   snowfall_rate,rainfall_rate,dt_seconds, &
                                   air_temperature,wind_speed)
@@ -146,6 +146,7 @@ contains
         real(wp_acc),            intent(INOUT) :: runoff          ! [kg m-2] cumulative
         real(wp),                intent(INOUT) :: t_srf           ! [K] surface temperature
         real(wp),                intent(INOUT) :: albedo          ! [1]
+        real(wp),                intent(INOUT) :: snow_age_days   ! [d] aging albedo only
         type(chion_const_class), intent(IN)    :: c
         integer,                 intent(IN)    :: Ntot            ! layer capacity
         real(wp),                intent(IN)    :: mass_max        ! [kg m-2] split trigger
@@ -198,7 +199,7 @@ contains
 
             mass(1) = m_new
 
-            call albedo_refresh_from_snowfall(albedo,c,m_added)
+            call albedo_refresh_from_snowfall(albedo,snow_age_days,c,m_added)
 
         end if
 
