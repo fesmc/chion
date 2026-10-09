@@ -55,6 +55,16 @@ module chion_model
     !
     ! default(shared) is stated explicitly rather than relied upon, so that a
     ! newly added local cannot silently become shared.
+    !
+    ! BESSI's columns differ in cost by an order of magnitude: a melting
+    ! column runs the diurnal substeps (8 core steps a day), a cold interior
+    ! or bare land column one or none, and the active list is ordered by grid
+    ! position, so a static split hands some threads mostly margin columns.
+    ! The BESSI loop is therefore scheduled dynamically in chunks of
+    ! BESSI_OMP_CHUNK columns (GRL-16KM, 16 threads: 69 s static, 44 s
+    ! dynamic,8; 45/46/50 s for chunks 32/64/128; guided,8 48 s). Results do
+    ! not depend on the schedule (no reductions). PDD and ITM cost the same
+    ! per column and keep the static default.
 
     use chion_defs, only : wp, wp_acc, io_unit_err, MV, &
                            chion_const_class, chion_param_class, &
@@ -73,6 +83,9 @@ module chion_model
     implicit none
 
     private
+
+    ! Columns per dynamic chunk of the BESSI column loop (see above).
+    integer, parameter :: BESSI_OMP_CHUNK = 8
 
     ! The allowed values of par%model, in one place. Used by the dispatcher's
     ! error messages and by chion_api's enum validation, so the two can never
@@ -388,7 +401,7 @@ contains
 
             case("bessi")
 
-                !$omp parallel do default(shared) private(i,icol,fc)
+                !$omp parallel do default(shared) private(i,icol,fc) schedule(dynamic,BESSI_OMP_CHUNK)
                 do i = 1, grd%n_active
                     icol = grd%active_idx(i)
                     call chion_pack_step_forcing(forc,icol,dt_days,fc)

@@ -55,6 +55,44 @@ module snow_diurnal
     real(wp), parameter, public :: DIURNAL_DT_DAYS_MIN = 0.75_wp   ! [d]
     real(wp), parameter, public :: DIURNAL_DT_DAYS_MAX = 1.25_wp   ! [d]
 
+    ! Solar geometry of one column and day: what the interval averages, the
+    ! peak flux, the substep criterion and the cloud-proxy TOA take from the
+    ! latitude and the solar longitude. A column-day evaluates it once
+    ! (diurnal_geometry) and passes it to the *_geom forms, instead of every
+    ! call -- three per day plus one per substep -- repeating the trigonometry
+    ! of diurnal_daylight_integral. The latitude/solar-longitude forms are
+    ! wrappers over the same code, so both give identical results.
+    type diurnal_geometry_class
+        logical      :: defined = .FALSE.        ! latitude and solar longitude finite
+        real(wp)     :: declination_deg = 0.0_wp ! [deg]
+        real(wp)     :: h0 = 0.0_wp              ! [rad] sunset hour angle
+        real(wp_acc) :: I_day = 0.0_wp_acc       ! [rad] daylight integral
+        real(wp_acc) :: A = 0.0_wp_acc           ! [1] sin(phi)*sin(delta)
+        real(wp_acc) :: B = 0.0_wp_acc           ! [1] cos(phi)*cos(delta)
+    end type diurnal_geometry_class
+
+    interface daily_toa_shortwave
+        module procedure daily_toa_shortwave_lat
+        module procedure daily_toa_shortwave_geom
+    end interface daily_toa_shortwave
+
+    interface diurnal_shortwave_interval_average
+        module procedure diurnal_shortwave_interval_average_lat
+        module procedure diurnal_shortwave_interval_average_geom
+    end interface diurnal_shortwave_interval_average
+
+    interface diurnal_shortwave_peak_flux
+        module procedure diurnal_shortwave_peak_flux_lat
+        module procedure diurnal_shortwave_peak_flux_geom
+    end interface diurnal_shortwave_peak_flux
+
+    interface diurnal_substep_count
+        module procedure diurnal_substep_count_lat
+        module procedure diurnal_substep_count_geom
+    end interface diurnal_substep_count
+
+    public :: diurnal_geometry_class
+    public :: diurnal_geometry
     public :: solar_declination_deg
     public :: sunset_hour_angle
     public :: diurnal_daylight_integral
@@ -167,16 +205,33 @@ contains
 
     end subroutine diurnal_daylight_integral
 
-    pure function daily_toa_shortwave(latitude_deg,solar_longitude_deg,day_of_year) result(toa)
-        ! Chion.jl/src/processes/surface_fluxes.jl:_daily_toa_shortwave
-        ! (03bb445), the daily-mean top-of-atmosphere shortwave of a fixed,
-        ! modern orbit:
-        !     TOA = S0*(1 + 0.033*cos(2*pi*doy/365))*max(I_day,0)/(2*pi)
-        ! with I_day the daylight integral of diurnal_daylight_integral. Only
-        ! the cloud-proxy longwave uses it, and only when the host supplies no
-        ! TOA of its own (docs/porting_notes.md D33).
-        !
-        ! The caller guarantees a finite latitude.
+    pure function diurnal_geometry(latitude_deg,solar_longitude_deg) result(geom)
+        ! The column-day's solar geometry (diurnal_geometry_class). Undefined
+        ! (all zero) when the latitude or the solar longitude is not finite,
+        ! which every *_geom consumer treats as "no daylight geometry", as the
+        ! latitude/solar-longitude forms do with their finiteness tests.
+
+        implicit none
+
+        real(wp), intent(IN) :: latitude_deg          ! [deg N]
+        real(wp), intent(IN) :: solar_longitude_deg   ! [deg]
+        type(diurnal_geometry_class) :: geom
+
+        if (.not. ieee_is_finite(latitude_deg))        return
+        if (.not. ieee_is_finite(solar_longitude_deg)) return
+
+        geom%defined = .TRUE.
+
+        call diurnal_daylight_integral(latitude_deg,solar_longitude_deg, &
+                                       geom%declination_deg,geom%h0, &
+                                       geom%I_day,geom%A,geom%B)
+
+        return
+
+    end function diurnal_geometry
+
+    pure function daily_toa_shortwave_lat(latitude_deg,solar_longitude_deg,day_of_year) result(toa)
+        ! daily_toa_shortwave from latitude and solar longitude.
 
         implicit none
 
@@ -185,22 +240,43 @@ contains
         real(wp), intent(IN) :: day_of_year           ! [d] fractional, 1-based
         real(wp) :: toa                               ! [W m-2]
 
-        ! Local variables
-        real(wp)     :: dec_deg, h0
-        real(wp_acc) :: I_day, A, B, eccentricity
+        toa = daily_toa_shortwave_geom(diurnal_geometry(latitude_deg,solar_longitude_deg), &
+                                       day_of_year)
 
-        call diurnal_daylight_integral(latitude_deg,solar_longitude_deg, &
-                                       dec_deg,h0,I_day,A,B)
+        return
+
+    end function daily_toa_shortwave_lat
+
+    pure function daily_toa_shortwave_geom(geom,day_of_year) result(toa)
+        ! Chion.jl/src/processes/surface_fluxes.jl:_daily_toa_shortwave
+        ! (03bb445), the daily-mean top-of-atmosphere shortwave of a fixed,
+        ! modern orbit:
+        !     TOA = S0*(1 + 0.033*cos(2*pi*doy/365))*max(I_day,0)/(2*pi)
+        ! with I_day the daylight integral of diurnal_daylight_integral. Only
+        ! the cloud-proxy longwave uses it, and only when the host supplies no
+        ! TOA of its own (docs/porting_notes.md D33).
+        !
+        ! An undefined geometry (non-finite latitude or solar longitude) has
+        ! I_day = 0 and gives 0; the cloud proxy does not ask for it then.
+
+        implicit none
+
+        type(diurnal_geometry_class), intent(IN) :: geom
+        real(wp),                     intent(IN) :: day_of_year   ! [d] fractional, 1-based
+        real(wp) :: toa                                           ! [W m-2]
+
+        ! Local variables
+        real(wp_acc) :: eccentricity
 
         eccentricity = 1.0_wp_acc + 0.033_wp_acc &
                        *cos(2.0_wp_acc*PI_ACC*real(day_of_year,wp_acc)/365.0_wp_acc)
 
-        toa = real(DIURNAL_SOLAR_CONSTANT*eccentricity*max(I_day,0.0_wp_acc) &
+        toa = real(DIURNAL_SOLAR_CONSTANT*eccentricity*max(geom%I_day,0.0_wp_acc) &
                    /(2.0_wp_acc*PI_ACC),wp)
 
         return
 
-    end function daily_toa_shortwave
+    end function daily_toa_shortwave_geom
 
     pure function calendar_solar_longitude_deg(day_of_year) result(lon)
         ! Chion.jl/src/forcing.jl:_solar_longitude_deg_from_calendar_day: the
@@ -236,9 +312,30 @@ contains
 
     end function calendar_solar_longitude_deg
 
-    pure function diurnal_shortwave_interval_average(shortwave_daily_mean, &
-                                                     latitude_deg,solar_longitude_deg, &
-                                                     hour_angle_start,hour_angle_end) result(q_sw)
+    pure function diurnal_shortwave_interval_average_lat(shortwave_daily_mean, &
+                                                         latitude_deg,solar_longitude_deg, &
+                                                         hour_angle_start,hour_angle_end) result(q_sw)
+        ! diurnal_shortwave_interval_average from latitude and solar longitude.
+
+        implicit none
+
+        real(wp), intent(IN) :: shortwave_daily_mean   ! [W m-2] Qbar
+        real(wp), intent(IN) :: latitude_deg           ! [deg N]
+        real(wp), intent(IN) :: solar_longitude_deg    ! [deg]
+        real(wp), intent(IN) :: hour_angle_start       ! [rad] h_a
+        real(wp), intent(IN) :: hour_angle_end         ! [rad] h_b
+        real(wp) :: q_sw                               ! [W m-2] interval mean
+
+        q_sw = diurnal_shortwave_interval_average_geom(shortwave_daily_mean, &
+                   diurnal_geometry(latitude_deg,solar_longitude_deg), &
+                   hour_angle_start,hour_angle_end)
+
+        return
+
+    end function diurnal_shortwave_interval_average_lat
+
+    pure function diurnal_shortwave_interval_average_geom(shortwave_daily_mean,geom, &
+                                                          hour_angle_start,hour_angle_end) result(q_sw)
         ! Chion.jl/src/processes/diurnal_shortwave.jl:37-66.
         !
         !     d_a  = max(h_a, -h0)
@@ -253,53 +350,46 @@ contains
 
         implicit none
 
-        real(wp), intent(IN) :: shortwave_daily_mean   ! [W m-2] Qbar
-        real(wp), intent(IN) :: latitude_deg           ! [deg N]
-        real(wp), intent(IN) :: solar_longitude_deg    ! [deg]
-        real(wp), intent(IN) :: hour_angle_start       ! [rad] h_a
-        real(wp), intent(IN) :: hour_angle_end         ! [rad] h_b
-        real(wp) :: q_sw                               ! [W m-2] interval mean
+        real(wp),                     intent(IN) :: shortwave_daily_mean   ! [W m-2] Qbar
+        type(diurnal_geometry_class), intent(IN) :: geom
+        real(wp),                     intent(IN) :: hour_angle_start       ! [rad] h_a
+        real(wp),                     intent(IN) :: hour_angle_end         ! [rad] h_b
+        real(wp) :: q_sw                                                   ! [W m-2] interval mean
 
         ! Local variables
-        real(wp)     :: dec_deg, h0
-        real(wp_acc) :: width, I_day, A, B, d_a, d_b, I_ab, scale
+        real(wp_acc) :: width, d_a, d_b, I_ab, scale
 
         q_sw = 0.0_wp
 
         width = real(hour_angle_end,wp_acc) - real(hour_angle_start,wp_acc)
 
-        if (shortwave_daily_mean .le. 0.0_wp)      return
-        if (width .le. 0.0_wp_acc)                 return
-        if (.not. ieee_is_finite(latitude_deg))        return
-        if (.not. ieee_is_finite(solar_longitude_deg)) return
-
-        call diurnal_daylight_integral(latitude_deg,solar_longitude_deg, &
-                                       dec_deg,h0,I_day,A,B)
+        if (shortwave_daily_mean .le. 0.0_wp) return
+        if (width .le. 0.0_wp_acc)            return
+        if (.not. geom%defined)               return
 
         ! Julia tests I_day against eps(Float64); the equivalent guard for the
         ! wp_acc arithmetic used here is epsilon(1.0_wp_acc). Polar night gives
         ! h0 = 0 exactly and is caught by the second test.
-        if (I_day .le. epsilon(1.0_wp_acc)) return
-        if (h0    .le. 0.0_wp)              return
+        if (geom%I_day .le. epsilon(1.0_wp_acc)) return
+        if (geom%h0    .le. 0.0_wp)              return
 
-        d_a = max(real(hour_angle_start,wp_acc),-real(h0,wp_acc))
-        d_b = min(real(hour_angle_end,wp_acc),   real(h0,wp_acc))
+        d_a = max(real(hour_angle_start,wp_acc),-real(geom%h0,wp_acc))
+        d_b = min(real(hour_angle_end,wp_acc),   real(geom%h0,wp_acc))
 
         if (d_b .le. d_a) return
 
-        I_ab  = (d_b - d_a)*A + B*(sin(d_b) - sin(d_a))
-        scale = real(shortwave_daily_mean,wp_acc)*2.0_wp_acc*PI_ACC/I_day
+        I_ab  = (d_b - d_a)*geom%A + geom%B*(sin(d_b) - sin(d_a))
+        scale = real(shortwave_daily_mean,wp_acc)*2.0_wp_acc*PI_ACC/geom%I_day
 
         q_sw = real(max(scale*I_ab/width,0.0_wp_acc),wp)
 
         return
 
-    end function diurnal_shortwave_interval_average
+    end function diurnal_shortwave_interval_average_geom
 
-    pure function diurnal_shortwave_peak_flux(shortwave_daily_mean, &
-                                              latitude_deg,solar_longitude_deg) result(q_peak)
-        ! Chion.jl/src/processes/diurnal_shortwave.jl:68-84.
-        !     Q_peak = S*(A + B)      the reconstructed local-noon flux
+    pure function diurnal_shortwave_peak_flux_lat(shortwave_daily_mean, &
+                                                  latitude_deg,solar_longitude_deg) result(q_peak)
+        ! diurnal_shortwave_peak_flux from latitude and solar longitude.
 
         implicit none
 
@@ -308,29 +398,41 @@ contains
         real(wp), intent(IN) :: solar_longitude_deg    ! [deg]
         real(wp) :: q_peak                             ! [W m-2]
 
-        ! Local variables
-        real(wp)     :: dec_deg, h0
-        real(wp_acc) :: I_day, A, B, scale
-
-        q_peak = 0.0_wp
-
-        if (shortwave_daily_mean .le. 0.0_wp)          return
-        if (.not. ieee_is_finite(latitude_deg))        return
-        if (.not. ieee_is_finite(solar_longitude_deg)) return
-
-        call diurnal_daylight_integral(latitude_deg,solar_longitude_deg, &
-                                       dec_deg,h0,I_day,A,B)
-
-        if (I_day .le. epsilon(1.0_wp_acc)) return
-        if (h0    .le. 0.0_wp)              return
-
-        scale = real(shortwave_daily_mean,wp_acc)*2.0_wp_acc*PI_ACC/I_day
-
-        q_peak = real(max(scale*(A + B),0.0_wp_acc),wp)
+        q_peak = diurnal_shortwave_peak_flux_geom(shortwave_daily_mean, &
+                     diurnal_geometry(latitude_deg,solar_longitude_deg))
 
         return
 
-    end function diurnal_shortwave_peak_flux
+    end function diurnal_shortwave_peak_flux_lat
+
+    pure function diurnal_shortwave_peak_flux_geom(shortwave_daily_mean,geom) result(q_peak)
+        ! Chion.jl/src/processes/diurnal_shortwave.jl:68-84.
+        !     Q_peak = S*(A + B)      the reconstructed local-noon flux
+
+        implicit none
+
+        real(wp),                     intent(IN) :: shortwave_daily_mean   ! [W m-2]
+        type(diurnal_geometry_class), intent(IN) :: geom
+        real(wp) :: q_peak                                                 ! [W m-2]
+
+        ! Local variables
+        real(wp_acc) :: scale
+
+        q_peak = 0.0_wp
+
+        if (shortwave_daily_mean .le. 0.0_wp) return
+        if (.not. geom%defined)               return
+
+        if (geom%I_day .le. epsilon(1.0_wp_acc)) return
+        if (geom%h0    .le. 0.0_wp)              return
+
+        scale = real(shortwave_daily_mean,wp_acc)*2.0_wp_acc*PI_ACC/geom%I_day
+
+        q_peak = real(max(scale*(geom%A + geom%B),0.0_wp_acc),wp)
+
+        return
+
+    end function diurnal_shortwave_peak_flux_geom
 
     pure function diurnal_temperature_amplitude(amplitude_base,gradient_per_km, &
                                                 reference_height,amplitude_max, &
@@ -409,9 +511,34 @@ contains
 
     end function diurnal_temperature_interval_average
 
-    pure function diurnal_substep_count(dt_days,shortwave_daily_mean,air_temperature, &
-                                        min_air_temperature,latitude_deg,solar_longitude_deg, &
-                                        threshold,max_substeps) result(n_substeps)
+    pure function diurnal_substep_count_lat(dt_days,shortwave_daily_mean,air_temperature, &
+                                            min_air_temperature,latitude_deg,solar_longitude_deg, &
+                                            threshold,max_substeps) result(n_substeps)
+        ! diurnal_substep_count from latitude and solar longitude.
+
+        implicit none
+
+        real(wp), intent(IN) :: dt_days                ! [d]
+        real(wp), intent(IN) :: shortwave_daily_mean   ! [W m-2]
+        real(wp), intent(IN) :: air_temperature        ! [K]
+        real(wp), intent(IN) :: min_air_temperature    ! [K]
+        real(wp), intent(IN) :: latitude_deg           ! [deg N]
+        real(wp), intent(IN) :: solar_longitude_deg    ! [deg]
+        real(wp), intent(IN) :: threshold              ! [W m-2] peak-minus-mean excess
+        integer,  intent(IN) :: max_substeps           ! [1]
+        integer :: n_substeps
+
+        n_substeps = diurnal_substep_count_geom(dt_days,shortwave_daily_mean,air_temperature, &
+                         min_air_temperature,diurnal_geometry(latitude_deg,solar_longitude_deg), &
+                         threshold,max_substeps)
+
+        return
+
+    end function diurnal_substep_count_lat
+
+    pure function diurnal_substep_count_geom(dt_days,shortwave_daily_mean,air_temperature, &
+                                             min_air_temperature,geom, &
+                                             threshold,max_substeps) result(n_substeps)
         ! Chion.jl/src/processes/diurnal_shortwave.jl:100-127.
         !
         ! Returns ONLY 1 or max_substeps. The eight gating conditions, in order:
@@ -427,19 +554,17 @@ contains
 
         implicit none
 
-        real(wp), intent(IN) :: dt_days                ! [d]
-        real(wp), intent(IN) :: shortwave_daily_mean   ! [W m-2]
-        real(wp), intent(IN) :: air_temperature        ! [K]
-        real(wp), intent(IN) :: min_air_temperature    ! [K]
-        real(wp), intent(IN) :: latitude_deg           ! [deg N]
-        real(wp), intent(IN) :: solar_longitude_deg    ! [deg]
-        real(wp), intent(IN) :: threshold              ! [W m-2] peak-minus-mean excess
-        integer,  intent(IN) :: max_substeps           ! [1]
+        real(wp),                     intent(IN) :: dt_days                ! [d]
+        real(wp),                     intent(IN) :: shortwave_daily_mean   ! [W m-2]
+        real(wp),                     intent(IN) :: air_temperature        ! [K]
+        real(wp),                     intent(IN) :: min_air_temperature    ! [K]
+        type(diurnal_geometry_class), intent(IN) :: geom
+        real(wp),                     intent(IN) :: threshold              ! [W m-2] peak-minus-mean excess
+        integer,                      intent(IN) :: max_substeps           ! [1]
         integer :: n_substeps
 
         ! Local variables
-        real(wp)     :: q_peak, dec_deg, h0
-        real(wp_acc) :: I_day, A, B
+        real(wp) :: q_peak
 
         n_substeps = 1
 
@@ -450,23 +575,19 @@ contains
         if (shortwave_daily_mean .le. 0.0_wp)          return
         if (air_temperature .le. min_air_temperature)  return
         if (.not. ieee_is_finite(air_temperature))     return
-        if (.not. ieee_is_finite(latitude_deg))        return
-        if (.not. ieee_is_finite(solar_longitude_deg)) return
+        if (.not. geom%defined)                        return
 
-        q_peak = diurnal_shortwave_peak_flux(shortwave_daily_mean,latitude_deg,solar_longitude_deg)
+        q_peak = diurnal_shortwave_peak_flux_geom(shortwave_daily_mean,geom)
 
         if (max(q_peak - shortwave_daily_mean,0.0_wp) .le. threshold) return
 
-        call diurnal_daylight_integral(latitude_deg,solar_longitude_deg, &
-                                       dec_deg,h0,I_day,A,B)
-
-        if (h0 .le. 0.0_wp) return
+        if (geom%h0 .le. 0.0_wp) return
 
         n_substeps = max_substeps
 
         return
 
-    end function diurnal_substep_count
+    end function diurnal_substep_count_geom
 
     subroutine diurnal_substep_bounds(substep_index,n_substeps,hour_angle_start,hour_angle_end)
         ! Chion.jl/src/step.jl:131-141. The day is tiled uniformly in hour angle

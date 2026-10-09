@@ -43,8 +43,9 @@ module snow_surface_fluxes
                            chion_const_class, chion_step_forcing_class
     use snow_column_utils, only : surface_has_snow
 
-    ! Daily-mean top-of-atmosphere shortwave for the cloud-proxy longwave.
-    use snow_diurnal, only : daily_toa_shortwave
+    ! Daily-mean top-of-atmosphere shortwave for the cloud-proxy longwave,
+    ! from the column-day's solar geometry.
+    use snow_diurnal, only : diurnal_geometry_class, diurnal_geometry, daily_toa_shortwave
 
     ! Vapour-pressure parameterizations and the BESSI latent flux built from
     ! them. Extracted to snow_vapor so that snow_seb_semix can share them
@@ -149,7 +150,19 @@ module snow_surface_fluxes
     public :: surface_vapor_flux_class
     public :: latent_heat_coeff_class
 
-    ! Parameterized downwelling longwave (longwave_scheme)
+    ! Parameterized downwelling longwave (longwave_scheme). The (c,forc) forms
+    ! derive the solar geometry from the forcing; bessi_column_step passes the
+    ! column-day's geometry it already holds.
+    interface cloud_proxy_emissivity
+        module procedure cloud_proxy_emissivity_forc
+        module procedure cloud_proxy_emissivity_geom
+    end interface cloud_proxy_emissivity
+
+    interface with_parameterized_longwave
+        module procedure with_parameterized_longwave_forc
+        module procedure with_parameterized_longwave_geom
+    end interface with_parameterized_longwave
+
     public :: cloud_proxy_emissivity
     public :: with_parameterized_longwave
 
@@ -169,7 +182,23 @@ contains
     ! Parameterized downwelling longwave
     ! =====================================================================
 
-    pure function cloud_proxy_emissivity(c,forc) result(emissivity)
+    pure function cloud_proxy_emissivity_forc(c,forc) result(emissivity)
+        ! cloud_proxy_emissivity with the solar geometry taken from the forcing.
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        real(wp) :: emissivity                                ! [1]
+
+        emissivity = cloud_proxy_emissivity_geom(c,forc, &
+                         diurnal_geometry(forc%latitude_deg,forc%solar_longitude_deg))
+
+        return
+
+    end function cloud_proxy_emissivity_forc
+
+    pure function cloud_proxy_emissivity_geom(c,forc,geom) result(emissivity)
         ! Chion.jl/src/processes/surface_fluxes.jl:_cloud_proxy_emissivity
         ! (03bb445). Effective atmospheric emissivity relative to the air
         ! temperature,
@@ -184,12 +213,14 @@ contains
         ! TOA is chion's fixed-orbit daily mean from latitude, solar longitude
         ! and day of year, as in Julia, unless the host supplies its own
         ! (has_toa_shortwave; chion only, docs/porting_notes.md D33). The
-        ! host's TOA needs no latitude.
+        ! host's TOA needs no latitude. geom is the column-day's solar geometry
+        ! (diurnal_geometry of the forcing's latitude and solar longitude).
 
         implicit none
 
         type(chion_const_class),        intent(IN) :: c
         type(chion_step_forcing_class), intent(IN) :: forc
+        type(diurnal_geometry_class),   intent(IN) :: geom
         real(wp) :: emissivity                                ! [1]
 
         ! Local variables
@@ -199,9 +230,8 @@ contains
         if (forc%has_toa_shortwave) then
             toa   = forc%toa_shortwave
             daily = .TRUE.
-        else if (ieee_is_finite(forc%latitude_deg)) then
-            toa   = daily_toa_shortwave(forc%latitude_deg,forc%solar_longitude_deg, &
-                                        forc%day_of_year)
+        else if (geom%defined) then
+            toa   = daily_toa_shortwave(geom,forc%day_of_year)
             daily = .TRUE.
         else
             toa   = 0.0_wp
@@ -238,9 +268,26 @@ contains
 
         return
 
-    end function cloud_proxy_emissivity
+    end function cloud_proxy_emissivity_geom
 
-    pure function with_parameterized_longwave(c,forc) result(fc)
+    pure function with_parameterized_longwave_forc(c,forc) result(fc)
+        ! with_parameterized_longwave with the solar geometry taken from the
+        ! forcing.
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        type(chion_step_forcing_class) :: fc
+
+        fc = with_parameterized_longwave_geom(c,forc, &
+                 diurnal_geometry(forc%latitude_deg,forc%solar_longitude_deg))
+
+        return
+
+    end function with_parameterized_longwave_forc
+
+    pure function with_parameterized_longwave_geom(c,forc,geom) result(fc)
         ! Chion.jl/src/processes/surface_fluxes.jl:_with_parameterized_longwave
         ! (03bb445), applied by bessi_column_step to the step forcing BEFORE
         ! the diurnal substeps. Under longwave_scheme = "cloud_proxy", and only
@@ -250,12 +297,14 @@ contains
         ! prescribed (has_q_lw_down), so every substep reuses the daily cloud
         ! proxy and every downstream site -- the snow energy solve, both
         ! bare-ice paths, either seb_scheme -- takes it as given. Prescribed
-        ! longwave and the graybody scheme pass through unchanged.
+        ! longwave and the graybody scheme pass through unchanged. geom is the
+        ! column-day's solar geometry, for the TOA.
 
         implicit none
 
         type(chion_const_class),        intent(IN) :: c
         type(chion_step_forcing_class), intent(IN) :: forc
+        type(diurnal_geometry_class),   intent(IN) :: geom
         type(chion_step_forcing_class) :: fc
 
         fc = forc
@@ -263,12 +312,12 @@ contains
         if (c%longwave_scheme .ne. CHION_LONGWAVE_CLOUD_PROXY) return
         if (forc%has_q_lw_down) return
 
-        fc%q_lw_down     = cloud_proxy_emissivity(c,forc)*c%sigma_sb*forc%air_temperature**4
+        fc%q_lw_down     = cloud_proxy_emissivity_geom(c,forc,geom)*c%sigma_sb*forc%air_temperature**4
         fc%has_q_lw_down = .TRUE.
 
         return
 
-    end function with_parameterized_longwave
+    end function with_parameterized_longwave_geom
 
     ! =====================================================================
     ! Resolved (exact-at-known-T) surface fluxes
@@ -654,8 +703,12 @@ contains
 
         if (.not. surface_has_snow(mass,n)) return
 
+        ! The snow depth enters only the CLIMBER-X exchange (its roughness
+        ! blend); the other schemes ignore the argument.
         surface_temperature = t_srf
-        h_snow              = semix_snow_depth(mass,density,n)
+        h_snow              = 0.0_wp
+        if (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX) &
+            h_snow = semix_snow_depth(mass,density,n)
 
         q_lh = resolved_turbulent_latent_heat_flux(c,forc,surface_temperature,h_snow,.TRUE.)
 

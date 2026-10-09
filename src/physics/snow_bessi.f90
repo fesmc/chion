@@ -101,7 +101,8 @@ module snow_bessi
     use snow_melt,          only : apply_melt
     use snow_percolation,   only : apply_percolation
     use snow_refreezing,    only : apply_refreezing
-    use snow_diurnal,       only : diurnal_substep_count, diurnal_substep_bounds, &
+    use snow_diurnal,       only : diurnal_geometry_class, diurnal_geometry, &
+                                   diurnal_substep_count, diurnal_substep_bounds, &
                                    diurnal_shortwave_interval_average, &
                                    diurnal_temperature_amplitude, &
                                    diurnal_temperature_interval_average
@@ -1266,6 +1267,11 @@ contains
         ! the daytime peak produces more melt than the daily mean does. That is
         ! the entire purpose of the option.
         !
+        ! The solar geometry of the column-day (declination, sunset hour
+        ! angle, daylight integral) is evaluated once, here, and shared by the
+        ! cloud-proxy TOA, the substep criterion and every substep's shortwave
+        ! average.
+        !
         ! A day the criterion does not split (n_substeps = 1) is stepped with
         ! its forcing as given. Chion.jl runs it as one [-pi, pi] interval,
         ! whose shortwave average is the daily mean again -- except where the
@@ -1287,8 +1293,11 @@ contains
         real(wp) :: amplitude
 
         type(chion_step_forcing_class) :: forc, subforc
+        type(diurnal_geometry_class)   :: geom
 
-        forc = with_parameterized_longwave(c,forc_in)
+        geom = diurnal_geometry(forc_in%latitude_deg,forc_in%solar_longitude_deg)
+
+        forc = with_parameterized_longwave(c,forc_in,geom)
 
         if (bsi%par%diurnal_shortwave_substeps) then
 
@@ -1303,7 +1312,7 @@ contains
             n_substeps = diurnal_substep_count(forc%dt_days,shortwave_for_criterion, &
                                                forc%air_temperature, &
                                                bsi%par%diurnal_shortwave_min_air_temperature, &
-                                               forc%latitude_deg,forc%solar_longitude_deg, &
+                                               geom, &
                                                bsi%par%diurnal_shortwave_threshold, &
                                                bsi%par%diurnal_shortwave_max_substeps)
 
@@ -1333,16 +1342,12 @@ contains
                     subforc%dt_days = forc%dt_days*fraction
 
                     subforc%shortwave_down = &
-                        diurnal_shortwave_interval_average(forc%shortwave_down, &
-                                                           forc%latitude_deg, &
-                                                           forc%solar_longitude_deg, &
+                        diurnal_shortwave_interval_average(forc%shortwave_down,geom, &
                                                            hour_angle_start,hour_angle_end)
 
                     if (forc%has_q_sw_net) then
                         subforc%q_sw_net = &
-                            diurnal_shortwave_interval_average(forc%q_sw_net, &
-                                                               forc%latitude_deg, &
-                                                               forc%solar_longitude_deg, &
+                            diurnal_shortwave_interval_average(forc%q_sw_net,geom, &
                                                                hour_angle_start,hour_angle_end)
                     end if
 

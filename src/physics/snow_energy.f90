@@ -362,6 +362,7 @@ contains
         real(wp) :: q_const, q_lin
         real(wp) :: dz_prev, dz_k, K_prev, K_k, G_k
         real(wp) :: beta_scale, beta_1, beta_km1, beta_k
+        real(wp) :: h_ice
         real(wp) :: G_s, surface_den, surface_const, surface_coef, boundary_term
         real(wp) :: ts_new
 
@@ -397,18 +398,21 @@ contains
 
         if (n_rows .le. 0) return
 
-        ! _thermal_row: the substrate layer thickness is ldexp(h0, k-1), i.e.
-        ! scale(h0, k-1), exact.
+        ! _thermal_row: the substrate layer thickness is ldexp(h0, k-1). It is
+        ! formed by doubling, which is exact (a power-of-two product), so it
+        ! equals ldexp bit for bit without a library call per row.
         do k = 1, n_snow
             row_mass(k)        = mass(k)
             row_density(k)     = density(k)
             row_temperature(k) = temperature(k)
         end do
 
+        h_ice = ice_top_thickness
         do k = 1, n_ice
-            row_mass(n_snow+k)        = c%rho_i*scale(ice_top_thickness,k-1)
+            row_mass(n_snow+k)        = c%rho_i*h_ice
             row_density(n_snow+k)     = c%rho_i
             row_temperature(n_snow+k) = ice_temperature(k)
+            h_ice = 2.0_wp*h_ice
         end do
 
         ! Bare ice: the top substrate layer is the surface.
