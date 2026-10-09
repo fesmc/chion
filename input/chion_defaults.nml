@@ -220,6 +220,8 @@
     ice_substrate_layers        = 0         ! [1] Thermal ice layers below the snow/firn column (0 = none)
     ice_substrate_top_thickness = 0.05      ! [m] Top substrate layer; each layer below is twice as thick
 
+    near_surface_layer_max_thicknesses = 0.0, 0.0, 0.0, 0.0   ! [m] Maximum thickness of layers 1-4 (0 = no limit)
+
     diurnal_shortwave_substeps            = False   ! [1] Resolve the diurnal cycle by substepping
     diurnal_shortwave_threshold           = 0.0     ! [W m-2] Peak-minus-mean excess required to substep
     diurnal_shortwave_max_substeps        = 3       ! [1] Substeps per day when enabled; 1..24
@@ -254,6 +256,15 @@
 !   chion only (D34): no substrate where forc%H_ice = 0 (land), so a host
 !   using it must fill H_ice for BESSI too; ice_temperature is reset with
 !   the column and is initialised to min(t_srf, T0) from an older restart.
+!
+! near_surface_layer_max_thicknesses
+!   Chion.jl 03bb445: the top four layers are held at these thicknesses
+!   (upstream default 0.02, 0.05, 0.10, 0.30 m) by a conservative remesh
+!   after accumulation and after refreezing, so the energy solve always
+!   sees a thin top cell. With layer 1 limited, the mass_min surface merge
+!   is off. 0 = no limit (Julia Inf); only a leading block of layers can be
+!   limited (D36). chion keeps all four at 0 until the Stage C default
+!   switch (C11).
 !
 ! The three sub-scheme choices — albedo_scheme, fresh_snow_density_scheme
 ! and low_density_densification — are NOT here. They live in the

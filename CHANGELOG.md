@@ -33,6 +33,11 @@ tag is the port itself, summarised rather than enumerated.
   `H_ice > 0` (now packed into the step forcing for BESSI); reset with the
   column; restart field `ice_temperature`, older restarts start at
   `min(t_srf, T0)` (D34). Default runs bit-identical.
+- BESSI fine near-surface layers (Chion.jl `03bb445`): `&bessi
+  near_surface_layer_max_thicknesses` [m] holds layers 1-4 at fixed thicknesses
+  (upstream 0.02, 0.05, 0.10, 0.30) by a conservative remesh after accumulation
+  and after refreezing; the `mass_min` surface merge is off with layer 1
+  limited. 0 = no limit, the default here (D36). Default runs bit-identical.
 
 ### Fixed
 

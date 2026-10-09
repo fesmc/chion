@@ -358,6 +358,103 @@ function run_bessi_substrate(nstep::Int)
 end
 
 """
+Fine near-surface layer thicknesses [m] of the fine-layer configurations
+(Chion.jl's default `near_surface_layer_max_thicknesses_m`).
+"""
+const NEAR_SURFACE_THICKNESSES = (0.02, 0.05, 0.10, 0.30)
+
+"""chion's `&bessi` line for `NEAR_SURFACE_THICKNESSES`."""
+fine_nml() = "    near_surface_layer_max_thicknesses = " * join(NEAR_SURFACE_THICKNESSES, ", ")
+
+"""
+BESSI with fine near-surface layers (Chion.jl 03bb445, plan C4): the top four
+layers held at `NEAR_SURFACE_THICKNESSES` by the conservative remesh, the
+100 kg m-2 surface merge off. Gated like the default configuration (dp+legacy,
+every BESSI field, same forcing). Coverage, on chion's output: the limited
+layers sit at their target thickness at the end of every step with a layer
+below them; cap-down fires (snowfall pushed into layer 5 of `cold_dry`, no
+melt); fill-up fires (layer 5 gives mass while `melting` melts); and layer 5,
+which Chion.jl never splits or merges (N7; chion's C4b split/merge is reverted
+under legacy), outgrows `mass_max` while the columns stay at <= 5 layers.
+"""
+function run_bessi_fine(fbessi::AbstractString)
+    jl = run_julia_bessi(; forcing=fbessi, outfile="julia_bessi_fine.nc", workdir=WORKDIR,
+                         ntot=15, years=1, near_surface=NEAR_SURFACE_THICKNESSES)
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
+                   outfile="chion_bessi_fine_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0, bessi_extra=fine_nml())
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, fine near-surface layers: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity (fine near-surface layers)")
+
+    N, m, rho, melt = NCDataset(ch) do dc
+        (read_canonical(dc, "N")[1], read_canonical(dc, "mass")[1],
+         read_canonical(dc, "density")[1], read_canonical(dc, "melt")[1])
+    end
+    names = [s.name for s in BESSI_SCENARIOS]
+    h = collect(NEAR_SURFACE_THICKNESSES)
+    nk = length(h)
+    # Record 1 is the initial state; record t follows step t-1.
+    nrec = size(N, 1)
+    nchecked, noff = 0, 0
+    for i in eachindex(names), t in 2:nrec
+        n = Int(N[t, 1, i])
+        n >= 2 || continue
+        nchecked += 1
+        any(abs(m[t, k, 1, i] / rho[t, k, 1, i] - h[k]) > 1e-9 * h[k]
+            for k in 1:min(nk, n - 1)) && (noff += 1)
+    end
+    col(name) = findfirst(==(name), names)
+    i = col("cold_dry")
+    cap = count(t -> N[t, 1, i] >= 5 && N[t-1, 1, i] >= 5 && m[t, 5, 1, i] > m[t-1, 5, 1, i],
+                3:nrec)
+    i = col("melting")
+    fill = count(t -> N[t, 1, i] >= 5 && N[t-1, 1, i] >= 5 && melt[t, 1, i] > melt[t-1, 1, i] &&
+                      m[t, 5, 1, i] < m[t-1, 5, 1, i], 3:nrec)
+    nmax = Int(maximum(skipmissing(N)))
+    m5max = maximum(m[t, 5, 1, i] for i in eachindex(names), t in 1:nrec if N[t, 1, i] >= 5)
+    println()
+    println("      limited layers checked on $(nchecked) column-steps, $(noff) off target; " *
+            "cap-down into layer 5 on $(cap) cold_dry steps; fill-up from layer 5 on " *
+            "$(fill) melting steps; max N = $(nmax), max layer-5 mass = $(round(m5max; digits=1))")
+    checks = [("fine: limited layers at their target thickness after every step",
+               nchecked > 0 && noff == 0),
+              ("fine: cap-down fires (snowfall pushed into layer 5, cold_dry)", cap > 0),
+              ("fine: fill-up fires (layer 5 refills the top while melting)", fill > 0),
+              ("fine: layer 5 is never split (N <= 5, layer 5 beyond mass_max; N7)",
+               nmax <= 5 && m5max > 500.0)]
+    println()
+    println("--- coverage assertions (fine near-surface layers) ---")
+    for (label, ok) in checks
+        println(ok ? "  ok   : $label" : "  FAIL : $label")
+        ok || (nfail += 1)
+    end
+    return nfail
+end
+
+"""
+Fine near-surface layers over the thermal ice substrate (both Chion.jl
+defaults since 03bb445), on the substrate configuration's forcing and columns
+(uniform HI = 1000 m for chion, D34; plus `bare_ice`). Gated only: the coverage
+of each part is asserted in its own configuration.
+"""
+function run_bessi_fine_substrate(nstep::Int)
+    scen = vcat(BESSI_SCENARIOS, [BARE_ICE_SCENARIO])
+    fs = joinpath(WORKDIR, "forcing_bessi_ice.nc")
+    write_forcing(fs, scen; nstep=nstep, dt_days=1.0, h_ice=1000.0)
+    jl = run_julia_bessi(; forcing=fs, outfile="julia_bessi_fine_ice.nc", workdir=WORKDIR,
+                         ntot=15, years=1, ice_substrate_layers=ICE_SUBSTRATE_LAYERS,
+                         near_surface=NEAR_SURFACE_THICKNESSES)
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fs,
+                   outfile="chion_bessi_fine_ice_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0, name_hice="HI",
+                   bessi_extra="    ice_substrate_layers = $(ICE_SUBSTRATE_LAYERS)\n" * fine_nml())
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, fine layers + ice substrate: chion dp+legacy vs Chion.jl")
+    return gate(d, "BESSI port fidelity (fine near-surface layers + ice substrate)")
+end
+
+"""
 ITM against Chion.jl's ITMModel (ported from chion, 29eb867): dp+legacy, so
 chion's tsrf uses the daily melt_net as Chion.jl does (D27), and all eight
 written fields are gated.
@@ -460,6 +557,8 @@ function main()
     nfail += run_bessi_aging(fbessi)
     nfail += run_bessi_humid(nstep)
     nfail += run_bessi_substrate(nstep)
+    nfail += run_bessi_fine(fbessi)
+    nfail += run_bessi_fine_substrate(nstep)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

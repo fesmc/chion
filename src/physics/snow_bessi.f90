@@ -20,7 +20,8 @@ module snow_bessi
     !   1  dt_seconds; snapshot started_without_surface_snow BEFORE anything
     !      else; resolve use_prescribed_albedo
     !   2  accumulation (snow + rain, split/merge, depth cap)
-    !   3  fresh snow onto a column that started bare -> temperature(1) = T_air
+    !   3  fresh snow onto a column that started bare -> temperature(1:n) = T_air,
+    !      then the near-surface remesh (fine layers only)
     !   4  prescribed albedo, if any, applied BEFORE the bare-surface test
     !   5  no surface snow -> bare-ice ablation, accumulate diagnostics, RETURN
     !      (percolation and refreezing are skipped ENTIRELY -- trap, see below);
@@ -35,7 +36,8 @@ module snow_bessi
     !  12  percolation -> runoff
     !  13  HTESSEL only: liquid-water compaction, using the step-7 snapshot
     !  14  refreezing
-    !  15  final albedo fixup (and snow age)
+    !  15  near-surface remesh (fine layers only)
+    !  16  final albedo fixup (and snow age)
     !
     ! ---------------------------------------------------------------------
     ! Traps honoured here (docs/PLAN.md section 5)
@@ -68,6 +70,7 @@ module snow_bessi
                            DEF_NTOT, DEF_MASS_MAX, DEF_MASS_SPLIT, DEF_MASS_MIN, &
                            DEF_DENSITY_INIT, DEF_TEMPERATURE_INIT, &
                            DEF_ICE_SUBSTRATE_LAYERS, DEF_ICE_SUBSTRATE_TOP_THICKNESS, &
+                           NEAR_SURFACE_LAYERS, DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES, &
                            CHION_ALBEDO_PRESCRIBED, CHION_ALBEDO_SEMIX, &
                            CHION_ALBEDO_AGING, &
                            CHION_DENSIFY_HTESSEL, &
@@ -77,6 +80,7 @@ module snow_bessi
     use snow_column_utils,  only : surface_has_snow, column_has_liquid_water
 
     use snow_accumulation,  only : apply_accumulation
+    use snow_layers,        only : remesh_near_surface_layers
     use snow_albedo,        only : albedo_update, albedo_update_aging
     use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration, &
                                    semix_daily_coszm
@@ -123,6 +127,12 @@ module snow_bessi
         ! T0). Only under ice: a column with H_ice = 0 has none (D34).
         integer  :: ice_substrate_layers          ! [1] n_ice >= 0
         real(wp) :: ice_substrate_top_thickness   ! [m] top layer, > 0
+
+        ! Fine near-surface layers (Chion.jl 03bb445): maximum thicknesses
+        ! of the top layers, held by a conservative remesh; 0 = no limit
+        ! (Julia Inf), the limited ones a leading block. With layer 1
+        ! limited, the 100 kg m-2 surface merge (mass_min) is off.
+        real(wp) :: near_surface_layer_max_thicknesses(NEAR_SURFACE_LAYERS)   ! [m] >= 0
 
         logical  :: diurnal_shortwave_substeps            ! [1] enable substepping
         real(wp) :: diurnal_shortwave_threshold           ! [W m-2] peak-minus-mean excess
@@ -236,6 +246,8 @@ contains
         par%ice_substrate_layers        = DEF_ICE_SUBSTRATE_LAYERS
         par%ice_substrate_top_thickness = DEF_ICE_SUBSTRATE_TOP_THICKNESS
 
+        par%near_surface_layer_max_thicknesses = DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES
+
         par%diurnal_shortwave_substeps            = .FALSE.
         par%diurnal_shortwave_threshold           = 0.0_wp
         par%diurnal_shortwave_max_substeps        = 3
@@ -255,7 +267,8 @@ contains
     subroutine bessi_par_validate(par)
         ! Chion.jl _validate_mass_partition (src/domain.jl:59-64) plus the six
         ! diurnal guards in the BESSIModel constructor (src/models.jl:48-51, 97-101 at 27113b6)
-        ! and the two ice-substrate guards (src/models.jl:114-115 at 9ec6cc7).
+        ! and the two ice-substrate guards (src/models.jl:114-115 at 9ec6cc7)
+        ! and the near-surface thickness guard (src/models.jl:112-113).
         !
         ! The mass partition is not merely cosmetic:
         !   mass_split < mass_max   -- otherwise the split loop cannot converge
@@ -270,6 +283,9 @@ contains
         implicit none
 
         type(bessi_par_class), intent(IN) :: par
+
+        ! Local variables
+        integer :: k
 
         if (par%Ntot .lt. 1) then
             write(io_unit_err,*) "bessi_par_validate:: Error: Ntot must be at least 1."
@@ -315,6 +331,34 @@ contains
             write(io_unit_err,*) "ice_substrate_top_thickness = ", par%ice_substrate_top_thickness
             stop "Program stopped."
         end if
+
+        ! Julia requires positive values, Inf meaning no limit; chion writes
+        ! no limit as 0. chion also requires the limited layers to be the
+        ! top ones (D36): the first unlimited layer is then the first mass
+        ! layer, which the split/merge below the fine layers acts on.
+        do k = 1, NEAR_SURFACE_LAYERS
+            if (.not. ieee_is_finite(par%near_surface_layer_max_thicknesses(k)) .or. &
+                par%near_surface_layer_max_thicknesses(k) .lt. 0.0_wp) then
+                write(io_unit_err,*) "bessi_par_validate:: Error: &
+                                     &near_surface_layer_max_thicknesses must be finite and &
+                                     &non-negative (0 = no limit)."
+                write(io_unit_err,*) "near_surface_layer_max_thicknesses = ", &
+                                     par%near_surface_layer_max_thicknesses
+                stop "Program stopped."
+            end if
+        end do
+
+        do k = 2, NEAR_SURFACE_LAYERS
+            if (par%near_surface_layer_max_thicknesses(k)   .gt. 0.0_wp .and. &
+                par%near_surface_layer_max_thicknesses(k-1) .le. 0.0_wp) then
+                write(io_unit_err,*) "bessi_par_validate:: Error: &
+                                     &near_surface_layer_max_thicknesses: only the top layers &
+                                     &can be limited (no limit, 0, above a limited layer)."
+                write(io_unit_err,*) "near_surface_layer_max_thicknesses = ", &
+                                     par%near_surface_layer_max_thicknesses
+                stop "Program stopped."
+            end if
+        end do
 
         if (par%diurnal_shortwave_threshold .lt. 0.0_wp) then
             write(io_unit_err,*) "bessi_par_validate:: Error: &
@@ -606,6 +650,7 @@ contains
 
         ! Local variables
         real(wp) :: dt_seconds, accumulation_rate, melt_mass
+        real(wp) :: surface_mass_min
         logical  :: started_without_surface_snow
         logical  :: use_prescribed_albedo
         logical  :: has_surface_snow, has_liquid_water
@@ -690,11 +735,17 @@ contains
 
         uses_htessel = (c%low_density_densification .eq. CHION_DENSIFY_HTESSEL)
 
+        ! The fine layers own the surface geometry: with layer 1 limited, the
+        ! 100 kg m-2 surface merge in accumulation, vapour flux and melt would
+        ! merge it away, so it is off there (Chion.jl 03bb445 step.jl).
+        surface_mass_min = par%mass_min
+        if (par%near_surface_layer_max_thicknesses(1) .gt. 0.0_wp) surface_mass_min = 0.0_wp
+
         ! === Step 2: accumulation ============================================
 
         call apply_accumulation(mass,mass_w,density,temperature,n, &
                                 mass_base,smb_ice,runoff,t_srf,albedo,snow_age, &
-                                c,par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
+                                c,par%Ntot,par%mass_max,par%mass_split,surface_mass_min, &
                                 forc%snowfall_rate,forc%rainfall_rate,dt_seconds, &
                                 forc%air_temperature,forc%wind_speed)
 
@@ -709,6 +760,11 @@ contains
                 temperature(1:n) = forc%air_temperature
             end if
         end if
+
+        ! Fine layers: cap the fresh snow down into the column (after the air
+        ! temperature is set, so every layer it reaches carries it).
+        call remesh_near_surface_layers(mass,mass_w,density,temperature,n,par%Ntot, &
+                                        par%near_surface_layer_max_thicknesses,c)
 
         ! === Step 4: prescribed albedo, applied before the bare test =========
 
@@ -852,7 +908,7 @@ contains
 
         call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n, &
                                                 runoff,t_srf,albedo,c,forc,dt_seconds, &
-                                                par%mass_split,par%mass_min, &
+                                                par%mass_split,surface_mass_min, &
                                                 snow_vapor_fluxes)
 
         vapor_mass  = vapor_mass  + real(snow_vapor_fluxes%vapor_mass,wp_acc)
@@ -876,7 +932,7 @@ contains
             melt_mass = real(energy%melt_energy_available/real(c%Lm,wp_acc),wp)
 
             call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo, &
-                            par%mass_split,par%mass_min,melt_mass,c,melted)
+                            par%mass_split,surface_mass_min,melt_mass,c,melted)
 
             if (melted .lt. real(melt_mass,wp_acc)) then
                 if (n .eq. 0) then
@@ -931,7 +987,16 @@ contains
 
         end if
 
-        ! === Step 15: final albedo fixup =====================================
+        ! === Step 15: near-surface remesh ====================================
+        ! Melt, sublimation, densification and refreezing can leave a thin or
+        ! thick top cell: restore the fine-layer geometry before the next
+        ! energy solve, conserving every column reservoir. Unconditional, as
+        ! in Julia (steps 12-14 above are guarded on liquid water).
+
+        call remesh_near_surface_layers(mass,mass_w,density,temperature,n,par%Ntot, &
+                                        par%near_surface_layer_max_thicknesses,c)
+
+        ! === Step 16: final albedo fixup =====================================
         ! The column may have gone bare during melt or sublimation, in which
         ! case the albedo diagnosed in step 6 no longer describes the surface.
         ! A bare column carries zero snow age; Chion.jl resets it only under

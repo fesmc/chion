@@ -103,6 +103,7 @@ program test_bessi
     call test_scheme_matrix(nfail)
     call test_substrate_cold_content(nfail)
     call test_substrate_column(nfail)
+    call test_fine_layers_column(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -825,6 +826,96 @@ contains
         return
 
     end subroutine test_substrate_column
+
+    subroutine test_fine_layers_column(nfail)
+        ! Fine near-surface layers (Chion.jl 03bb445, plan C4) over a 5-yr
+        ! annual cycle that melts the column bare every summer: mass closure
+        ! (the remesh moves mass, never creates or exports it), the limited
+        ! layers back at their target thickness after every step that ends
+        ! with snow and a layer below them (both remesh halves: snowfall caps
+        ! down, melt fills up), and a run different from the default column.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi, bsi0
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp_acc) :: precip, precip0
+        real(wp)     :: h(NEAR_SURFACE_LAYERS), dz
+        integer      :: iyr, iday, k, n, n_max, n_checked, n_off
+        logical      :: off
+
+        write(*,"(a)") "--- 14. fine near-surface layers in a full column ---"
+
+        h = [0.02_wp, 0.05_wp, 0.10_wp, 0.30_wp]
+
+        call chion_const_init(c)
+
+        call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = h
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+
+        call bessi_par_init(bsi0%par)
+        call bessi_alloc(bsi0,1)
+        call bessi_init_state(bsi0,c)
+
+        precip    = 0.0_wp_acc
+        n_max     = 0
+        n_checked = 0
+        n_off     = 0
+
+        do iyr = 1, 5
+            do iday = 1, NDAY_YEAR
+
+                call annual_forcing(iday,c,forc)
+                precip = precip + real(forc%snowfall_rate*forc%dt_days*real(sec_day,wp),wp_acc) &
+                                + real(forc%rainfall_rate*forc%dt_days*real(sec_day,wp),wp_acc)
+                call bessi_column_step(bsi,1,forc,c)
+
+                n     = bsi%now%n_lay(1)
+                n_max = max(n_max,n)
+                if (.not. surface_has_snow(bsi%now%mass(:,1),n)) cycle
+
+                off = .FALSE.
+                do k = 1, min(NEAR_SURFACE_LAYERS,n-1)
+                    dz  = bsi%now%mass(k,1)/bsi%now%density(k,1)
+                    off = off .or. abs(dz - h(k)) .gt. 1.0e-5_wp*h(k)
+                end do
+                if (n .gt. 1) n_checked = n_checked + 1
+                if (off) n_off = n_off + 1
+
+            end do
+        end do
+
+        precip0 = 0.0_wp_acc
+        call run_annual_cycle(bsi0,c,5,1,precip0)
+
+        write(*,"(a,i0,a,i0)")       "         steps checked / off target   = ", n_checked, " / ", n_off
+        write(*,"(a,i0)")            "         max layer count              = ", n_max
+        write(*,"(a,g16.8,a,g16.8)") "         melt with / without          = ", &
+                                     bsi%now%melt(1), " / ", bsi0%now%melt(1)
+
+        call check("fine layers: geometry checked on many steps", n_checked .gt. 300, nfail)
+        call check("fine layers: limited layers at target after every step", n_off .eq. 0, nfail)
+        call check("fine layers: the cycle still melts the column bare", &
+                   bsi%now%melt(1) .gt. precip, nfail)
+        call check("fine layers change the result", bsi%now%melt(1) .ne. bsi0%now%melt(1), nfail)
+        call check_close("closure with fine layers", closure_lhs(bsi,1),precip, &
+                         1.0e-6_wp_acc,nfail)
+
+        call bessi_dealloc(bsi)
+        call bessi_dealloc(bsi0)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_fine_layers_column
 
     ! =====================================================================
     ! Test 4 -- drive the column to Ntot capacity

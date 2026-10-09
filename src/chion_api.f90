@@ -1189,6 +1189,8 @@ contains
         call nml_read(filename,group,"ice_substrate_layers",       par%ice_substrate_layers,       init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"ice_substrate_top_thickness",par%ice_substrate_top_thickness,init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
 
+        call nml_read(filename,group,"near_surface_layer_max_thicknesses",par%near_surface_layer_max_thicknesses,init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+
         call nml_read(filename,group,"diurnal_shortwave_substeps",            par%diurnal_shortwave_substeps,            init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_shortwave_threshold",           par%diurnal_shortwave_threshold,           init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_shortwave_max_substeps",        par%diurnal_shortwave_max_substeps,        init=init_pars,defaults_file=def_file,defaults_group=def_bessi)

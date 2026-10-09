@@ -134,6 +134,7 @@ contains
         write(io,"(a)") "    mass_min   = 80.0"
         write(io,"(a)") "    diurnal_shortwave_substeps     = True"
         write(io,"(a)") "    diurnal_shortwave_max_substeps = 8"
+        write(io,"(a)") "    near_surface_layer_max_thicknesses = 0.02, 0.05, 0.10, 0.30"
         write(io,"(a)") "/"
         write(io,"(a)") "&pdd"
         write(io,"(a)") "    ddf_snow   = 4.5"
@@ -242,6 +243,10 @@ contains
                    bpar%ice_substrate_layers .eq. 0, nfail)
         call check_val("bessi: ice_substrate_top_thickness from defaults", &
                        bpar%ice_substrate_top_thickness, 0.05_wp, nfail)
+        call check_val("bessi: near_surface_layer_max_thicknesses(1) read", &
+                       bpar%near_surface_layer_max_thicknesses(1), 0.02_wp, nfail)
+        call check_val("bessi: near_surface_layer_max_thicknesses(4) read", &
+                       bpar%near_surface_layer_max_thicknesses(4), 0.30_wp, nfail)
 
         ! --- &pdd -----------------------------------------------------
         call pdd_par_init(ppar)

@@ -157,7 +157,7 @@ end
 
 """
     run_julia_bessi(; forcing, outfile, workdir, ntot, albedo, vars, humidity,
-                    ice_substrate_layers)
+                    ice_substrate_layers, near_surface)
 
 Run Chion.jl's BESSI on the same file. `netcdf_variables` is the explicit 18-var
 list: requesting `latent_heat_flux` would flip the run into monthly-aggregation
@@ -166,12 +166,14 @@ per step and would not be comparable. With `albedo = :aging` the timescales are
 passed explicitly (`AGING_PARAMS`): 12407a3 defaults the melting one to 5 d,
 dev_nils and chion to 2 d. `humidity = true` reads the forcing's RHZ and PS
 (see forcing.jl), matching chion's `rh_default` and sea-level pressure.
-`ice_substrate_layers` overrides the pin of `BESSI_SCHEME_PINS` (0).
+`ice_substrate_layers` overrides the pin of `BESSI_SCHEME_PINS` (0), and
+`near_surface` the fine-layer thicknesses [m] (pinned to Inf, no limit).
 """
 function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
                          workdir::AbstractString, ntot::Int=15, years::Int=1,
                          albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS,
-                         humidity::Bool=false, ice_substrate_layers::Int=0)
+                         humidity::Bool=false, ice_substrate_layers::Int=0,
+                         near_surface::Union{Nothing,NTuple{4,Float64}}=nothing)
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -199,6 +201,8 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
     aging = albedo === :aging ? AGING_PARAMS : (;)
     pins = ice_substrate_layers == 0 ? BESSI_SCHEME_PINS :
            merge(BESSI_SCHEME_PINS, (; ice_substrate_layers))
+    near_surface === nothing ||
+        (pins = merge(pins, (; near_surface_layer_max_thicknesses_m=near_surface)))
     model = BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
                        alpha_ice=0.3, alpha_wet=0.70, aging..., pins...,
                        densification=:bessi, fresh_snow_density=:constant,

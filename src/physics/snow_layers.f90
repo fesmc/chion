@@ -11,6 +11,9 @@ module snow_layers
     !     _continuous_bottom_deplete!             -> continuous_bottom_deplete
     !     _free_slot_for_surface_split!           -> free_slot_for_surface_split
     !     _enforce_snow_depth_cap!                -> enforce_snow_depth_cap
+    !     _cap_near_surface_layer_thicknesses!    -> cap_near_surface_layer_thicknesses
+    !     _fill_near_surface_layer_thicknesses!   -> fill_near_surface_layer_thicknesses
+    !     _remesh_near_surface_layers!            -> remesh_near_surface_layers
     !
     ! CALLING CONVENTION (docs/porting_notes.md D8): every routine takes
     ! contiguous column slices -- mass(:,icol), mass_w(:,icol), ... -- together
@@ -47,6 +50,12 @@ module snow_layers
     ! DEPTH CAP: enforce_snow_depth_cap caps the total solid depth at the
     ! constant BESSI_REFERENCE_SNOW_DEPTH_M = 22.5 m (Chion.jl 03bb445),
     ! INDEPENDENT of the configured Ntot and of mass_split.
+    !
+    ! FINE NEAR-SURFACE LAYERS (Chion.jl 03bb445): the remesh holds the top
+    ! NEAR_SURFACE_LAYERS layers at maximum thicknesses h_max(k) [m] (0 = no
+    ! limit, Julia's Inf; the limited layers are a leading block,
+    ! bessi_par_validate). It conserves solid mass, liquid water, volume and
+    ! sensible enthalpy (temperature by mass_weighted_mean, D31).
 
     use chion_defs, only : wp, wp_acc, io_unit_err, TOL_TINY, TOL_EMPTY_LAYER, &
                            BESSI_REFERENCE_SNOW_DEPTH_M, &
@@ -65,6 +74,10 @@ module snow_layers
     public :: continuous_bottom_deplete
     public :: free_slot_for_surface_split
     public :: enforce_snow_depth_cap
+    public :: near_surface_layer_count
+    public :: cap_near_surface_layer_thicknesses
+    public :: fill_near_surface_layer_thicknesses
+    public :: remesh_near_surface_layers
 
 contains
 
@@ -89,6 +102,26 @@ contains
         return
 
     end function safe_nonnegative
+
+    pure function safe_positive(x) result(y)
+        ! Chion.jl _safe_positive (src/processes/energy_flux.jl:5): floor at
+        ! EPS_TINY, used to protect divisions. wp_acc, like the remesh locals
+        ! it guards (snow_vapor has the wp version).
+
+        implicit none
+
+        real(wp_acc), intent(IN) :: x
+        real(wp_acc) :: y
+
+        if (x .gt. TOL_TINY) then
+            y = x
+        else
+            y = TOL_TINY
+        end if
+
+        return
+
+    end function safe_positive
 
     pure function mass_weighted_mean(m1,x1,m2,x2) result(xbar)
         ! Chion.jl _mass_weighted_mean: mass-weighted mean of two layer
@@ -790,5 +823,227 @@ contains
         return
 
     end subroutine enforce_snow_depth_cap
+
+    ! =====================================================================
+    ! Fine near-surface layers
+    ! Chion.jl layer_structure.jl (03bb445) _cap_near_surface_layer_thicknesses!,
+    ! _fill_near_surface_layer_thicknesses!, _remesh_near_surface_layers!
+    ! =====================================================================
+
+    pure function near_surface_layer_count(h_max) result(n_fine)
+        ! Number of thickness-limited near-surface layers: the leading entries
+        ! of h_max that are > 0 (0 = no limit). bessi_par_validate requires the
+        ! limited layers to be a leading block, so this is also the index of
+        ! the deepest one; 0 = no fine layers.
+
+        implicit none
+
+        real(wp), intent(IN) :: h_max(:)     ! (NEAR_SURFACE_LAYERS) [m]
+        integer :: n_fine
+
+        ! Local variables
+        integer :: k
+
+        n_fine = 0
+
+        do k = 1, size(h_max)
+            if (h_max(k) .le. 0.0_wp) exit
+            n_fine = k
+        end do
+
+        return
+
+    end function near_surface_layer_count
+
+    subroutine cap_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n, &
+                                                  Ntot,h_max,c)
+        ! The downward half of the remesh. For each limited layer k (top
+        ! down, k <= n), mass above rho_k*h_max(k) moves into layer k+1 with
+        ! its share of liquid water. Layer k+1 takes the combined mass, the
+        ! volume-conserving density m/(m_excess/rho_k + m_below/rho_below)
+        ! and the mass-weighted temperature. Density and temperature of
+        ! layer k are unchanged.
+        !
+        ! If k is the deepest active layer, a new layer n+1 is opened for the
+        ! excess -- unless n == Ntot, in which case layer k keeps it and the
+        ! pass ends (Julia: "a full column keeps its deepest near-surface
+        ! layer as it is").
+        !
+        ! Precision: the excess is taken against the capped mass AS STORED,
+        ! so the pair (k, k+1) is conserved up to the one rounding of
+        ! mass(k+1) (identical to Julia when wp = dp).
+
+        implicit none
+
+        real(wp), intent(INOUT) :: mass(:)
+        real(wp), intent(INOUT) :: mass_w(:)
+        real(wp), intent(INOUT) :: density(:)
+        real(wp), intent(INOUT) :: temperature(:)
+        integer,  intent(INOUT) :: n
+        integer,  intent(IN)    :: Ntot
+        real(wp), intent(IN)    :: h_max(:)          ! (NEAR_SURFACE_LAYERS) [m], 0 = no limit
+        type(chion_const_class), intent(IN) :: c
+
+        ! Local variables
+        integer      :: k
+        real(wp)     :: mass_cap, excess_wp
+        real(wp_acc) :: layer_mass, max_mass, excess_mass, excess_water
+        real(wp_acc) :: below_mass, combined_mass, combined_volume
+
+        do k = 1, size(h_max)
+
+            if (k .gt. n) exit
+            if (h_max(k) .le. 0.0_wp) cycle
+
+            layer_mass = real(mass(k),wp_acc)
+            max_mass   = real(density(k),wp_acc)*real(h_max(k),wp_acc)
+
+            if (layer_mass .le. max_mass) cycle
+
+            if (k .eq. n) then
+                if (k .eq. Ntot) exit
+                n = n + 1
+                call reset_layer_at_index(mass,mass_w,density,temperature,n,c)
+            end if
+
+            mass_cap     = real(max_mass,wp)
+            excess_mass  = layer_mass - real(mass_cap,wp_acc)
+            excess_water = real(mass_w(k),wp_acc)*excess_mass/safe_positive(layer_mass)
+
+            below_mass      = real(mass(k+1),wp_acc)
+            combined_mass   = excess_mass + below_mass
+            combined_volume = excess_mass/safe_positive(real(density(k),wp_acc)) &
+                            + below_mass/safe_positive(real(density(k+1),wp_acc))
+
+            excess_wp = real(excess_mass,wp)
+            temperature(k+1) = mass_weighted_mean(excess_wp,temperature(k), &
+                                                  mass(k+1),temperature(k+1))
+            density(k+1)     = real(combined_mass/safe_positive(combined_volume),wp)
+
+            mass(k)     = mass_cap
+            mass_w(k)   = real(real(mass_w(k),wp_acc)   - excess_water,wp)
+            mass(k+1)   = real(combined_mass,wp)
+            mass_w(k+1) = real(real(mass_w(k+1),wp_acc) + excess_water,wp)
+
+        end do
+
+        return
+
+    end subroutine cap_near_surface_layer_thicknesses
+
+    subroutine fill_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n, &
+                                                   h_target,c)
+        ! The upward half of the remesh. Each limited layer k < n thinner
+        ! than h_target(k) pulls min(m_donor, deficit*rho_donor) from layer
+        ! k+1, with liquid water in proportion; layer k takes the
+        ! volume-conserving density and the mass-weighted temperature. A
+        ! donor left with <= TOL_EMPTY_LAYER is removed (its residue with
+        ! it, as in Julia) and the next layer becomes the donor. A shallow
+        ! column is not padded: its deepest layer may stay thin.
+        !
+        ! Julia loops while the recomputed deficit exceeds EPS_TINY. After a
+        ! transfer that leaves the donor non-empty the receiver is full by
+        ! construction: in dp the recomputed deficit is ~1e-18 m and Julia
+        ! exits, but in sp it is a few ulp of h (~1e-9 m) and the loop would
+        ! keep moving round-off. So the loop ends there instead; it continues
+        ! only after a donor is exhausted (identical to Julia when wp = dp).
+
+        implicit none
+
+        real(wp), intent(INOUT) :: mass(:)
+        real(wp), intent(INOUT) :: mass_w(:)
+        real(wp), intent(INOUT) :: density(:)
+        real(wp), intent(INOUT) :: temperature(:)
+        integer,  intent(INOUT) :: n
+        real(wp), intent(IN)    :: h_target(:)       ! (NEAR_SURFACE_LAYERS) [m], 0 = no limit
+        type(chion_const_class), intent(IN) :: c
+
+        ! Local variables
+        integer      :: k, kd, j
+        real(wp_acc) :: receiver_mass, receiver_volume, missing_volume
+        real(wp_acc) :: donor_mass, donor_density, donor_water
+        real(wp_acc) :: transferred_mass, transferred_water
+        real(wp_acc) :: combined_mass, combined_volume, remaining_donor_mass
+
+        do k = 1, size(h_target)
+
+            if (k .ge. n) exit
+            if (h_target(k) .le. 0.0_wp) cycle
+
+            do while (k .lt. n)
+
+                receiver_mass   = real(mass(k),wp_acc)
+                receiver_volume = receiver_mass/safe_positive(real(density(k),wp_acc))
+                missing_volume  = real(h_target(k),wp_acc) - receiver_volume
+
+                if (missing_volume .le. TOL_TINY) exit
+
+                kd = k + 1
+
+                donor_mass       = real(mass(kd),wp_acc)
+                donor_density    = real(density(kd),wp_acc)
+                transferred_mass = min(donor_mass,missing_volume*donor_density)
+
+                if (transferred_mass .le. TOL_TINY) exit
+
+                donor_water       = real(mass_w(kd),wp_acc)
+                transferred_water = donor_water*transferred_mass/safe_positive(donor_mass)
+
+                combined_mass   = receiver_mass + transferred_mass
+                combined_volume = receiver_volume + transferred_mass/safe_positive(donor_density)
+
+                temperature(k) = mass_weighted_mean(mass(k),temperature(k), &
+                                                    real(transferred_mass,wp),temperature(kd))
+                mass(k)        = real(combined_mass,wp)
+                mass_w(k)      = real(real(mass_w(k),wp_acc) + transferred_water,wp)
+                density(k)     = real(combined_mass/safe_positive(combined_volume),wp)
+
+                remaining_donor_mass = donor_mass - transferred_mass
+                mass(kd)   = real(remaining_donor_mass,wp)
+                mass_w(kd) = real(donor_water - transferred_water,wp)
+
+                ! Receiver full, donor left: done with layer k (see header).
+                if (remaining_donor_mass .gt. TOL_EMPTY_LAYER) exit
+
+                ! Donor exhausted: shift the layers below it up by one.
+                do j = kd, n-1
+                    mass(j)        = mass(j+1)
+                    mass_w(j)      = mass_w(j+1)
+                    density(j)     = density(j+1)
+                    temperature(j) = temperature(j+1)
+                end do
+                call reset_layer_at_index(mass,mass_w,density,temperature,n,c)
+                n = n - 1
+
+            end do
+
+        end do
+
+        return
+
+    end subroutine fill_near_surface_layer_thicknesses
+
+    subroutine remesh_near_surface_layers(mass,mass_w,density,temperature,n,Ntot,h_max,c)
+        ! Conservative remesh of the fine near-surface layers: cap downward,
+        ! then fill upward. Called twice per (sub)step by the BESSI kernel,
+        ! after accumulation and after refreezing. A no-op without limits.
+
+        implicit none
+
+        real(wp), intent(INOUT) :: mass(:)
+        real(wp), intent(INOUT) :: mass_w(:)
+        real(wp), intent(INOUT) :: density(:)
+        real(wp), intent(INOUT) :: temperature(:)
+        integer,  intent(INOUT) :: n
+        integer,  intent(IN)    :: Ntot
+        real(wp), intent(IN)    :: h_max(:)          ! (NEAR_SURFACE_LAYERS) [m], 0 = no limit
+        type(chion_const_class), intent(IN) :: c
+
+        call cap_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n,Ntot,h_max,c)
+        call fill_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n,h_max,c)
+
+        return
+
+    end subroutine remesh_near_surface_layers
 
 end module snow_layers

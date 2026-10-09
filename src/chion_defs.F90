@@ -194,6 +194,14 @@ module chion_defs
     integer,  parameter, public :: DEF_ICE_SUBSTRATE_LAYERS        = 0
     real(wp), parameter, public :: DEF_ICE_SUBSTRATE_TOP_THICKNESS = 0.05_wp
 
+    ! Fine near-surface layers (Chion.jl 03bb445, src/models.jl:97): maximum
+    ! thicknesses of the top NEAR_SURFACE_LAYERS layers, held by a
+    ! conservative remesh. 0 = no limit (Julia Inf). Upstream defaults to
+    ! (0.02, 0.05, 0.10, 0.30) m; chion keeps them off until the default
+    ! switch (docs/porting_notes.md D36).
+    integer,  parameter, public :: NEAR_SURFACE_LAYERS = 4
+    real(wp), parameter, public :: DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES(NEAR_SURFACE_LAYERS) = 0.0_wp
+
     ! Depth cap: a fixed total solid depth, independent of Ntot and of
     ! mass_split (Chion.jl 03bb445, src/constants.jl:39). It replaces the
     ! former 15*mass_split*1.5/300, identical at mass_split = 300.

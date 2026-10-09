@@ -14,10 +14,16 @@ program test_layers
     ! Covered explicitly: Ntot == 1 and Ntot == 2, a column driven to zero
     ! layers and back, and the combined_density > rho_i basal-ice export path
     ! in merge_bottom_layer.
+    !
+    ! Fine near-surface layers (Chion.jl 03bb445, plan C4): the remesh
+    ! (cap down, fill up) conserves solid mass, liquid water, volume and
+    ! sensible enthalpy sum(m*T); Chion.jl's test_geometric_accumulation
+    ! (zero-input accumulation + remesh is the identity) is ported.
 
     use chion_defs,  only : wp, wp_acc, chion_const_class, chion_const_init, &
-                            BESSI_REFERENCE_SNOW_DEPTH_M
+                            BESSI_REFERENCE_SNOW_DEPTH_M, NEAR_SURFACE_LAYERS
     use snow_layers
+    use snow_accumulation, only : apply_accumulation
 
     implicit none
 
@@ -45,6 +51,12 @@ program test_layers
 
     integer  :: k, istep
     real(wp) :: mass_max, mass_split, mass_min
+
+    ! Fine near-surface layers
+    real(wp)     :: h_fine(NEAR_SURFACE_LAYERS), h_off(NEAR_SURFACE_LAYERS)
+    real(wp)     :: mass_before(NMAX), temp_before(NMAX), snow_age
+    real(wp_acc) :: vol_ref, ent_ref, water_ref
+    logical      :: at_target
 
     nfail = 0
 
@@ -726,6 +738,151 @@ program test_layers
                          abs(total_now-total_ref)/max(abs(total_ref),1.0_wp_acc)
 
     ! =====================================================================
+    ! Fine near-surface layers: remesh (Chion.jl 03bb445)
+    ! =====================================================================
+    write(*,"(a)") "--- near-surface remesh: cap down, fill up ---"
+
+    h_fine = [0.02_wp, 0.05_wp, 0.10_wp, 0.30_wp]
+    h_off  = 0.0_wp
+
+    call check("near_surface_layer_count: all four limited", &
+               near_surface_layer_count(h_fine) .eq. 4, nfail)
+    call check("near_surface_layer_count: none", near_surface_layer_count(h_off) .eq. 0, nfail)
+    call check("near_surface_layer_count: top layer only", &
+               near_surface_layer_count([0.02_wp,0.0_wp,0.0_wp,0.0_wp]) .eq. 1, nfail)
+
+    ! --- Chion.jl test_geometric_accumulation: a column already at its
+    !     target thicknesses is left alone by zero-input accumulation (with
+    !     the surface merge off, mass_min = 0) followed by the remesh.
+    call clear_column()
+    call clear_accum()
+    n = 5
+    mass(1:5)        = [6.0_wp, 15.0_wp, 30.0_wp, 90.0_wp, 300.0_wp]
+    density(1:5)     = 300.0_wp
+    temperature(1:5) = [250.0_wp, 255.0_wp, 260.0_wp, 265.0_wp, 270.0_wp]
+    mass_before = mass
+    temp_before = temperature
+    snow_age    = 0.0_wp
+    call apply_accumulation(mass,mass_w,density,temperature,n, &
+                            mass_base,smb_ice,runoff,t_srf,albedo,snow_age, &
+                            c,8,mass_max,mass_split,0.0_wp, &
+                            0.0_wp,0.0_wp,86400.0_wp,250.0_wp,5.0_wp)
+    call remesh_near_surface_layers(mass,mass_w,density,temperature,n,8,h_fine,c)
+    call check("geometric accumulation: n unchanged", n .eq. 5, nfail)
+    call check("geometric accumulation: masses unchanged (rel 1e-6)", &
+               all(abs(mass(1:5) - mass_before(1:5)) .le. 1.0e-6_wp*mass_before(1:5)), nfail)
+    call check("geometric accumulation: temperatures unchanged (rel 1e-6)", &
+               all(abs(temperature(1:5) - temp_before(1:5)) .le. 1.0e-6_wp*temp_before(1:5)), nfail)
+
+    ! --- Cap down: a 0.5 m fresh surface layer over 1 m of firn is pushed
+    !     down through all four fine layers, opening layers 3-5 as it goes.
+    call clear_column()
+    call clear_accum()
+    n = 2
+    mass(1:2)        = [50.0_wp, 400.0_wp]
+    mass_w(1:2)      = [5.0_wp, 2.0_wp]
+    density(1:2)     = [100.0_wp, 400.0_wp]
+    temperature(1:2) = [260.0_wp, 270.0_wp]
+    total_ref = column_total()
+    vol_ref   = column_volume()
+    ent_ref   = column_enthalpy()
+    water_ref = sum(real(mass_w,wp_acc))
+
+    call remesh_near_surface_layers(mass,mass_w,density,temperature,n,10,h_fine,c)
+
+    call check("cap: four fine layers plus one below", n .eq. 5, nfail)
+    at_target = .TRUE.
+    do k = 1, 4
+        at_target = at_target .and. abs(mass(k)/density(k) - h_fine(k)) .le. 1.0e-5_wp*h_fine(k)
+    end do
+    call check("cap: layers 1-4 at their target thickness", at_target, nfail)
+    call check("cap: surface layer keeps its density and temperature", &
+               density(1) .eq. 100.0_wp .and. temperature(1) .eq. 260.0_wp, nfail)
+    call check("cap: water moves with the mass (layer 1 keeps 5*2/50)", &
+               abs(mass_w(1) - 0.2_wp) .le. 1.0e-5_wp, nfail)
+    call check_conserve("cap conserves mass + water", total_ref, nfail)
+    call check_acc("cap conserves water",    sum(real(mass_w,wp_acc)), water_ref, nfail)
+    call check_acc("cap conserves volume",   column_volume(),   vol_ref, nfail)
+    call check_acc("cap conserves sum(m*T)", column_enthalpy(), ent_ref, nfail)
+
+    ! --- Fill up: melt-like loss of most of layer 1 (solid -> liquid in
+    !     place) is replaced from below, layer by layer, down to layer 5.
+    mass(1)   = mass(1) - 1.5_wp
+    mass_w(1) = mass_w(1) + 1.5_wp
+    total_ref = column_total()
+    vol_ref   = column_volume()
+    ent_ref   = column_enthalpy()
+    water_ref = sum(real(mass_w,wp_acc))
+    mass_before = mass
+
+    call remesh_near_surface_layers(mass,mass_w,density,temperature,n,10,h_fine,c)
+
+    call check("fill: layer count unchanged", n .eq. 5, nfail)
+    at_target = .TRUE.
+    do k = 1, 4
+        at_target = at_target .and. abs(mass(k)/density(k) - h_fine(k)) .le. 1.0e-5_wp*h_fine(k)
+    end do
+    call check("fill: layers 1-4 back at their target thickness", at_target, nfail)
+    call check("fill: layer 5 gave the mass", mass(5) .lt. mass_before(5), nfail)
+    call check_conserve("fill conserves mass + water", total_ref, nfail)
+    call check_acc("fill conserves water",    sum(real(mass_w,wp_acc)), water_ref, nfail)
+    call check_acc("fill conserves volume",   column_volume(),   vol_ref, nfail)
+    call check_acc("fill conserves sum(m*T)", column_enthalpy(), ent_ref, nfail)
+
+    ! --- Fill exhausts a donor: layer 2 is emptied into layer 1 and removed,
+    !     and layer 1 goes on filling from the former layer 3.
+    call clear_column()
+    call clear_accum()
+    n = 3
+    mass(1:3)        = [0.2_wp, 1.0_wp, 100.0_wp]
+    mass_w(1:3)      = [0.0_wp, 0.5_wp, 1.0_wp]
+    density(1:3)     = 300.0_wp
+    temperature(1:3) = [265.0_wp, 268.0_wp, 271.0_wp]
+    total_ref = column_total()
+    ent_ref   = column_enthalpy()
+
+    call fill_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n,h_fine,c)
+
+    call check("fill: exhausted donor removed (n = 2)", n .eq. 2, nfail)
+    call check_val("fill: layer 1 at 0.02 m", mass(1)/density(1), 0.02_wp, nfail)
+    call check("fill: vacated slot 3 reset", mass(3) .eq. 0.0_wp .and. mass_w(3) .eq. 0.0_wp, nfail)
+    call check_conserve("fill with exhausted donor conserves mass + water", total_ref, nfail)
+    call check_acc("fill with exhausted donor conserves sum(m*T)", column_enthalpy(), ent_ref, nfail)
+
+    ! --- A shallow column is not padded: layer 1 takes all of layer 2 and
+    !     stays thinner than its target.
+    call clear_column()
+    n = 2
+    mass(1:2)    = [1.0_wp, 2.0_wp]
+    density(1:2) = 300.0_wp
+    call remesh_near_surface_layers(mass,mass_w,density,temperature,n,10,h_fine,c)
+    call check("shallow column: one thin layer left", &
+               n .eq. 1 .and. abs(mass(1) - 3.0_wp) .le. 1.0e-6_wp, nfail)
+
+    ! --- A full column keeps the excess in its deepest fine layer.
+    call clear_column()
+    n = 3
+    mass(1:3)    = [6.0_wp, 15.0_wp, 200.0_wp]
+    density(1:3) = 300.0_wp
+    call remesh_near_surface_layers(mass,mass_w,density,temperature,n,3,h_fine,c)
+    call check("full column (n = Ntot): deepest fine layer keeps its excess", &
+               n .eq. 3 .and. mass(3) .eq. 200.0_wp, nfail)
+
+    ! --- No limits: the remesh is a no-op, bit for bit.
+    call clear_column()
+    n = 2
+    mass(1:2)        = [50.0_wp, 1.0_wp]
+    density(1:2)     = [100.0_wp, 400.0_wp]
+    temperature(1:2) = [260.0_wp, 270.0_wp]
+    mass_before = mass
+    temp_before = temperature
+    call remesh_near_surface_layers(mass,mass_w,density,temperature,n,10,h_off,c)
+    call check("no limits: remesh is a no-op", n .eq. 2 .and. &
+               all(mass .eq. mass_before) .and. all(temperature .eq. temp_before), nfail)
+
+    write(*,*)
+
+    ! =====================================================================
     ! Summary
     ! =====================================================================
     write(*,*)
@@ -789,6 +946,47 @@ contains
         return
 
     end function column_total
+
+    function column_volume() result(vol)
+        ! Total volume of the active layers [m], in wp_acc.
+
+        implicit none
+
+        real(wp_acc) :: vol
+
+        ! Local variables
+        integer :: kk
+
+        vol = 0.0_wp_acc
+
+        do kk = 1, n
+            vol = vol + real(mass(kk),wp_acc)/real(density(kk),wp_acc)
+        end do
+
+        return
+
+    end function column_volume
+
+    function column_enthalpy() result(ent)
+        ! Sensible enthalpy of the solid, up to the factor ci: sum(m*T) over
+        ! the active layers [kg K m-2], in wp_acc.
+
+        implicit none
+
+        real(wp_acc) :: ent
+
+        ! Local variables
+        integer :: kk
+
+        ent = 0.0_wp_acc
+
+        do kk = 1, n
+            ent = ent + real(mass(kk),wp_acc)*real(temperature(kk),wp_acc)
+        end do
+
+        return
+
+    end function column_enthalpy
 
     function column_depth() result(depth)
 

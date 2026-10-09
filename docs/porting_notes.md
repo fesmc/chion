@@ -533,7 +533,9 @@ differ at ~1e-14), and one column diverged by up to 926 ulp. The new form is exa
 equal values and weights only the difference, so it is also better conditioned.
 
 **Impact:** round-off only (last bits of merged density and temperature); default
-results are not bit-identical to before. Reported upstream.
+results are not bit-identical to before. Reported upstream. The fine-layer remesh (C4)
+mixes temperature with it too (review Q16); its harness configurations show no branch
+flips, so it stays out of `legacy_chion`.
 
 ### D34. Ice substrate: none on land, reset with the column, old restarts start at `min(t_srf, T0)`
 **What:** three chion-only rules around Chion.jl's thermal ice substrate (`03bb445`,
@@ -561,6 +563,26 @@ no resets or restarts), so not under `legacy_chion`. Host contract: BESSI with a
 needs `forc%H_ice` filled; a host that leaves it at 0 gets no substrate anywhere. yelmox
 fills it for ITM only (`surface_chion.f90`); `chion_column.x` reads `&ctrl H_ice`,
 `chion_grid.x` `H_ice_default` (domain) or `name_hice` (file; `"None"` = 0).
+
+### D36. Fine near-surface layers: no limit is 0, only the top layers can be limited
+**What:** `&bessi near_surface_layer_max_thicknesses` (Chion.jl
+`near_surface_layer_max_thicknesses_m`, `03bb445`; chion default off until C11):
+1. **No limit is `0`**, not `Inf`; a value must be finite and `>= 0`.
+2. **Leading block.** The limited layers must be the top ones: a `0` above a positive value
+   is refused. Julia accepts any pattern.
+3. **Fill-up exit.** `fill_near_surface_layer_thicknesses` stops filling layer `k` after a
+   transfer that leaves the donor non-empty; Julia re-tests the remaining deficit against
+   `EPS_TINY`.
+
+**Why:** (1) `Inf` is not a robust namelist value, and the `-Ofast` production build may
+assume finite arithmetic. (2) A limited layer below an unlimited one has no use, and the
+first unlimited layer must be well defined: the split/merge resumes there (D32). (3) After
+such a transfer the receiver is full by construction. In dp the re-tested deficit is
+~1e-18 m and Julia exits too; in sp it is a few ulp of the target (~1e-9 m), and the loop
+would keep moving round-off.
+
+**Impact:** none at dp (the harness' fine-layer configurations are gated); (3) only stops
+an sp round-off loop.
 
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its

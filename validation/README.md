@@ -46,7 +46,7 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 
 | target | reference | authority |
 |---|---|---|
-| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), and `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column) |
+| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), and `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate |
 | PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
 | ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 8 written fields (D27 reverted). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
 
@@ -188,6 +188,16 @@ season, over ice already brought to T0 by the melting snow (119 bare steps, all
 melting), so cold bare ice is covered by the dry `bare_ice` column: 220 bare
 steps below T0 without melt (Tsrf down to 247 K), melt only after re-warming.
 
+**After C4 (fine near-surface layers):** two configurations, fine layers
+(0.02, 0.05, 0.10, 0.30 m) on the default forcing and fine layers + ice
+substrate on the substrate forcing, pass every field, worst 0.48 ulp
+(`bulk_density`); the remesh uses chion's exact mixing mean (D31) and shows no
+branch flips, so D31 stays out of `legacy_chion`. Coverage: layers 1-4 at
+their targets on all 1334 column-steps with a layer below; cap-down into layer
+5 on 336 `cold_dry` steps; fill-up from layer 5 on 34 `melting` steps; N never
+exceeds 5 and layer 5 reaches 11646 kg m⁻² (`ntot_capacity`, depth cap), the
+upstream behaviour C4b changes (reverted under legacy).
+
 Reported, not gated:
 
 - **`wp = sp` costs** ~4e-06 relative worst case, first divergence typically
@@ -212,6 +222,7 @@ column actually reached and asserts it:
 | `bare_recover` | ablation to bare ice, early-return bare path, recovery | N→0 then back to 2, melt 10139 |
 | `ntot_capacity` | `Ntot` capacity, bottom merge, depth cap | N=15, base export 8350 kg m⁻² |
 | ice substrate `bare_ice` | dry bare ice over the substrate: below T0 without melt, melts only once re-warmed | asserted |
+| fine near-surface layers | layers 1-4 at target thickness; cap-down (`cold_dry`) and fill-up (`melting`) fire; layer 5 unsplit (N ≤ 5) | asserted |
 | BESSI `:aging` | snow ages; relaxes below `alpha_dry`; ages on a melting surface (`tau_melt`) | asserted |
 | PDD monthly | `simple` and `pism` (Calov–Greve) integrals | 60 steps at dt=30 d each |
 | ITM `ice_ablation` | ice background; melts out, then bare-ice melt; rain refreezing | asserted |
