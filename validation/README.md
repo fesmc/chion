@@ -120,7 +120,8 @@ Worst field, port-fidelity gate (dp+legacy vs Chion.jl): **0.47 ulp**
 (`temperature`, `density`). `N` is exactly 0 — the layer counts agree at every
 step of every column. ITM agrees with smbpal to 1.1e-07 relative at sp and
 5.1e-15 at dp. PDD vs Chion.jl (dp, 60 monthly steps): worst 0.37 ulp
-(`simple`) and 0.41 ulp (`pism`). PDD mass closure: 2.3e-15 at dp, 3.8e-07 at
+(`simple`) and 0.41 ulp (`pism`). ITM vs Chion.jl (dp+legacy, 1095 daily steps):
+worst 0.44 ulp (`Tsrf`). PDD mass closure: 2.3e-15 at dp, 3.8e-07 at
 sp.
 
 Reported, not gated:
