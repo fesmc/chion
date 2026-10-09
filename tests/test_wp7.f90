@@ -179,12 +179,12 @@ contains
         ! === bare surface -> alpha_ice ====================================
         cc%albedo_scheme = CHION_ALBEDO_DYNAMIC
         alb = 0.5_wp
-        call albedo_update(mass,mass_w,density,temperature,0,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,0,cc,1.0_wp,alb)
         call check_val("dynamic, n=0 -> alpha_ice", alb, cc%alpha_ice, nfail)
 
         mass(1) = 0.0_wp
         alb = 0.5_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check_val("dynamic, empty surface layer -> alpha_ice", alb, cc%alpha_ice, nfail)
         mass(1) = 200.0_wp
 
@@ -197,19 +197,18 @@ contains
             mass_w(1)      = real(k-1,wp)*20.0_wp                 ! 0 .. 120 kg m-2
 
             alb = -5.0_wp
-            call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
             if (alb .lt. cc%alpha_wet .or. alb .gt. cc%alpha_dry) ok = .FALSE.
 
             alb = 5.0_wp
-            call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
             if (alb .lt. cc%alpha_wet .or. alb .gt. cc%alpha_dry) ok = .FALSE.
         end do
         call check("dynamic, always within [alpha_wet, alpha_dry] under extremes", ok, nfail)
 
         ! === aging is monotone non-brightening ============================
-        ! Repeated calls with no snowfall and no liquid water must never raise
-        ! the albedo. NOTE: the law has no dt -- it decays once per CALL, which
-        ! is precisely what this loop demonstrates (docs/PLAN.md trap 5).
+        ! Repeated daily steps with no snowfall and no liquid water must never
+        ! raise the albedo.
         mass_w(1)      = 0.0_wp
         temperature(1) = 265.0_wp
         alb            = cc%alpha_dry
@@ -217,27 +216,30 @@ contains
         ok = .TRUE.
         do k = 1, 30
             alb_prev = alb
-            call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
             if (alb .gt. alb_prev) ok = .FALSE.
         end do
         call check("dynamic, aging never brightens over 30 calls", ok, nfail)
         call check_val("dynamic, aging floors at alpha_wet", alb, cc%alpha_wet, nfail)
 
-        ! Aging is per call, not per unit time: two calls decay strictly more
-        ! than one (until the floor is reached).
+        ! Aging scales with dt (Chion.jl 6d077c5): two half-day steps decay
+        ! as much as one daily step, to round-off, away from the floor.
         alb_a = cc%alpha_dry
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_a)
-        alb_b = alb_a
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_b)
-        call check("dynamic, aging acts per CALL (2 calls decay more than 1)", &
-                   alb_b .lt. alb_a, nfail)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
+        alb_b = cc%alpha_dry
+        call albedo_update(mass,mass_w,density,temperature,1,cc,0.5_wp,alb_b)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,0.5_wp,alb_b)
+        call check("dynamic, aging decays below alpha_dry in one day", &
+                   alb_a .lt. cc%alpha_dry .and. alb_a .gt. cc%alpha_wet, nfail)
+        call check("dynamic, two half-day steps == one daily step", &
+                   abs(alb_b - alb_a) .le. 4.0_wp*epsilon(1.0_wp), nfail)
 
         ! Very cold surface: the aging bracket turns negative, and the min()
         ! must then hold the albedo at its previous value rather than brighten.
         temperature(1) = cc%T0 - 100.0_wp
         alb            = 0.75_wp
         alb_prev       = alb
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check("dynamic, very cold surface cannot brighten via aging", &
                    alb .le. alb_prev, nfail)
         temperature(1) = 265.0_wp
@@ -245,11 +247,11 @@ contains
         ! === wetness pulls towards alpha_wet ==============================
         mass_w(1) = 0.0_wp
         alb_a     = 0.80_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_a)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
 
         mass_w(1) = 30.0_wp
         alb_b     = 0.80_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_b)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
 
         call check("dynamic, liquid water darkens the surface", alb_b .lt. alb_a, nfail)
         call check("dynamic, wet result still >= alpha_wet", alb_b .ge. cc%alpha_wet, nfail)
@@ -305,25 +307,25 @@ contains
 
         temperature(1) = 260.0_wp
         alb_a = 0.05_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_a)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
         alb_b = 0.95_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_b)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
         call check_val("constant, result independent of previous albedo", alb_a, alb_b, nfail)
         call check_val("constant, cold surface -> alpha_dry", alb_a, cc%alpha_dry, nfail)
 
         temperature(1) = cc%T0
         alb = 0.05_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check_val("constant, surface at T0 -> alpha_wet", alb, cc%alpha_wet, nfail)
 
         temperature(1) = cc%T0 + 5.0_wp
         alb = 0.05_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check_val("constant, surface above T0 -> alpha_wet", alb, cc%alpha_wet, nfail)
 
         ! Repeated calls do not drift: memoryless means idempotent.
         alb_prev = alb
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check_val("constant, repeated calls are idempotent", alb, alb_prev, nfail)
 
         ! Constant-scheme snowfall refresh resets to alpha_dry outright.
@@ -336,11 +338,11 @@ contains
 
         temperature(1) = 265.0_wp
         alb_a          = cc%alpha_dry
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_a)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
 
         cc%albedo_scheme = CHION_ALBEDO_DYNAMIC
         alb_b            = cc%alpha_dry
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_b)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
 
         call check_val("prescribed scheme follows the DYNAMIC path (trap 9)", &
                        alb_a, alb_b, nfail)

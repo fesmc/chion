@@ -650,8 +650,6 @@ contains
         end if
 
         ! === Step 6: albedo update ===========================================
-        ! Trap 5: the aging law carries no dt, so albedo_update must be called
-        ! exactly once per step. That is here.
 
         if (use_prescribed_albedo) then
             albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
@@ -685,7 +683,7 @@ contains
 
             w_snow_old = w_snow
         else
-            call albedo_update(mass,mass_w,density,temperature,n,c,albedo)
+            call albedo_update(mass,mass_w,density,temperature,n,c,forc%dt_days,albedo)
         end if
 
         ! === Step 7: HTESSEL snapshot ========================================

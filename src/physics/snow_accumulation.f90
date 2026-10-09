@@ -132,8 +132,7 @@ contains
         !   5. depth cap.
         !
         ! NOTE the albedo call here is the snowfall REFRESH, not the aging
-        ! update. Aging happens later in the step, exactly once per call
-        ! (docs/PLAN.md section 5, item 5).
+        ! update. Aging happens later in the step (albedo_update).
 
         implicit none
 

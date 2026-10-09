@@ -7,11 +7,12 @@ module snow_albedo
     ! n, per docs/porting_notes.md D8. The per-column albedo scalar is passed
     ! as intent(INOUT), mirroring Julia's in-place mutation of state.albedo.
     !
+    ! The dynamic aging decrement is scaled by dt_days (Chion.jl dev_nils
+    ! 6d077c5), so diurnal substeps age by their fraction of the day and a
+    ! daily step is unchanged (x*1 is exact). Before that the law decayed once
+    ! per call (former trap 5, upstream defect 19).
+    !
     ! PRESERVED QUIRKS (docs/PLAN.md section 5):
-    !   * item 5 -- the dynamic aging law has NO dt. It decays once per CALL,
-    !     so albedo_update must be called exactly once per model step. Do not
-    !     "fix" this by scaling with dt; that is explicitly not allowed
-    !     without asking (docs/PLAN.md section 4.1).
     !   * item 9 -- CHION_ALBEDO_PRESCRIBED takes the DYNAMIC code path inside
     !     this module. The caller (WP8) overrides the result afterwards, and
     !     only when forc%has_prescribed_albedo is true; when it is false the
@@ -37,8 +38,8 @@ module snow_albedo
 
     ! Dynamic aging law coefficients (Chion.jl albedo.jl:114). Bare magic
     ! numbers upstream; named here per docs/PLAN.md section 4.1.
-    real(wp), parameter, public :: ALBEDO_AGING_TEMP_COEFF = 1.35e-3_wp  ! [K-1] per call
-    real(wp), parameter, public :: ALBEDO_AGING_OFFSET     = 0.0278_wp   ! [1]  per call
+    real(wp), parameter, public :: ALBEDO_AGING_TEMP_COEFF = 1.35e-3_wp  ! [K-1 d-1]
+    real(wp), parameter, public :: ALBEDO_AGING_OFFSET     = 0.0278_wp   ! [d-1]
 
     ! Snowfall brightening e-folding mass (Chion.jl albedo.jl:77).
     real(wp), parameter, public :: ALBEDO_SNOWFALL_EFOLD_MASS = 3.0_wp   ! [kg m-2]
@@ -148,15 +149,15 @@ contains
 
     end subroutine albedo_refresh_from_snowfall
 
-    subroutine albedo_update(mass,mass_w,density,temperature,n,c,albedo)
-        ! Chion.jl/src/processes/albedo.jl:89-129.
+    subroutine albedo_update(mass,mass_w,density,temperature,n,c,dt_days,albedo)
+        ! Chion.jl/src/processes/albedo.jl:89-129 (dev_nils 6d077c5).
         !
-        ! Order of operations, all applied once per CALL (see trap 5):
+        ! Order of operations:
         !   0. no surface snow (n<=0 or mass(1) <= TOL_EMPTY_LAYER)
         !                                       -> alpha_ice, return
         !   1. constant scheme                  -> constant_surface_albedo, return
         !   2. a = clamp(a_prev, alpha_wet, alpha_dry)
-        !   3. aging   a = min(a, a - (1.35e-3*(Ts-T0) + 0.0278))
+        !   3. aging   a = min(a, a - (1.35e-3*(Ts-T0) + 0.0278)*dt_days)
         !   4. floor   a = max(a, alpha_wet)
         !   5. wetness a = max(alpha_wet, min(a, a - (a-alpha_wet)*lwc/max_lwc))
         !   6. clamp   a = clamp(a, alpha_wet, alpha_dry)
@@ -174,6 +175,7 @@ contains
         real(wp),                intent(IN)    :: temperature(:)  ! (Ntot) [K]
         integer,                 intent(IN)    :: n
         type(chion_const_class), intent(IN)    :: c
+        real(wp),                intent(IN)    :: dt_days         ! [d] step length
         real(wp),                intent(INOUT) :: albedo          ! [1]
 
         ! Local variables
@@ -200,9 +202,9 @@ contains
         ! behind by a bare step), so clamp before aging.
         alb = min(max(albedo,c%alpha_wet),c%alpha_dry)
 
-        ! Step 3: aging. NO dt -- see trap 5.
+        ! Step 3: aging, scaled by the step length.
         t_srf = temperature(1)
-        alb   = min(alb, alb - ((t_srf - c%T0)*ALBEDO_AGING_TEMP_COEFF + ALBEDO_AGING_OFFSET))
+        alb   = min(alb, alb - ((t_srf - c%T0)*ALBEDO_AGING_TEMP_COEFF + ALBEDO_AGING_OFFSET)*dt_days)
 
         ! Step 4
         alb = max(alb,c%alpha_wet)

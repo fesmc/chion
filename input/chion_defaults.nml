@@ -216,12 +216,10 @@
 !
 ! diurnal_shortwave_substeps
 !   OFF by default, and that is a physics choice rather than a
-!   performance one. The albedo aging law carries no dt
-!   (docs/PLAN.md section 5 item 5), so enabling substepping ages the
-!   albedo max_substeps times per day — upstream defect 19. Snowfall
-!   brightening is likewise nonlinear under substepping (defect 21).
-!   Enabling this changes the albedo scheme, not only the shortwave
-!   resolution.
+!   performance one. Albedo aging scales with each substep's dt, but
+!   snowfall brightening is nonlinear under substepping (upstream
+!   defect 21), so enabling this also changes the albedo, not only the
+!   shortwave resolution.
 !
 ! Ntot
 !   The snow-depth cap uses a hard-coded reference layer count of 15

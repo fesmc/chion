@@ -182,7 +182,8 @@ split a layer, and `mass_base` was identically zero on both sides — so its
 ## Not covered
 
 Diurnal substepping is off in both models, deliberately: it changes the albedo
-scheme rather than only the shortwave resolution (upstream defects 19 and 21),
+scheme rather than only the shortwave resolution (upstream defect 21; defect 19,
+aging per substep, is fixed since dev_nils 6d077c5),
 and it is the only consumer of `day_of_year` / `solar_longitude_deg`, which the
 two drivers derive differently. Comparing it would compare two known-divergent
 schemes. Humidity forcing is likewise absent — with it on, Chion.jl's vapour

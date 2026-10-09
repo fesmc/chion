@@ -722,7 +722,8 @@ tightened without moving the layer mass arrays to `dp`.**
     `_update_surface_albedo_arrays!` sits inside `column_step_core!`, and the aging law
     carries no `dt` (trap 5). With `max_substeps = 8` the albedo ages eight times per day.
     Bounded by the `alpha_wet` floor, but it means enabling substepping silently changes the
-    albedo scheme, not merely the shortwave resolution. Found in WP8.
+    albedo scheme, not merely the shortwave resolution. Found in WP8. **Fixed upstream** in
+    dev_nils `6d077c5` (aging scaled by `dt_days`); chion: PLAN_dev_nils WP5.
 20. **(A) The bare-ice path uses `rainfall_rate` in the energy budget but discards its mass.**
     Extends defect 11: rain is a genuine mass leak on *any* bare column, not only on
     massless-surface columns. Found in WP8. **Fixed upstream** in dev_nils `8fff530`

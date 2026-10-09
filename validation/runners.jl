@@ -14,9 +14,9 @@ rather than left to a default, because most of the defaults disagree:
   * `wind_default` must match chion's ctrl:wind_default.
 
 DIURNAL SUBSTEPPING IS OFF, deliberately. Enabling it changes the albedo
-scheme rather than only the shortwave resolution -- the aging law carries no dt
-(trap 5), so it fires once per substep (upstream defect 19), and snowfall
-brightening is non-linear under substepping (defect 21). It is also the only
+scheme rather than only the shortwave resolution -- snowfall brightening is
+non-linear under substepping (defect 21; aging scales with dt since dev_nils
+6d077c5, which fixed defect 19). It is also the only
 consumer of day_of_year / solar_longitude_deg, which the two drivers derive
 differently (chion_grid.f90 from modulo(time,365)+1, Chion.jl from a calendar
 axis). Comparing it would be comparing two known-divergent schemes.
