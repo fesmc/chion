@@ -167,7 +167,10 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
         wind_default=5.0,
     )
 
+    # Albedo constants pinned to chion's defaults: Chion.jl's have moved
+    # (alpha_ice 0.3 -> 0.4 -> 0.3, alpha_wet 0.70 -> 0.60 on dev_nils).
     model = BESSIModel(loaded.grid; Ntot=ntot, albedo=:dynamic,
+                       alpha_ice=0.3, alpha_wet=0.70,
                        densification=:bessi, fresh_snow_density=:constant,
                        mass_max=500.0, mass_split=300.0, mass_min=100.0,
                        density_init=300.0, temperature_init=273.0,
