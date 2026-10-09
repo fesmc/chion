@@ -297,9 +297,12 @@ function run_julia_itm(; forcing::AbstractString, outfile::AbstractString,
 
     model = ITMModel(g; ITM_PARAMS...)
 
+    # "all", not the Chion.jl names in ITM_PAIRS: the selector parser lowercases every name
+    # (io.jl), so `H_snow` cannot be selected individually (upstream defect).
+    # "all" is ITM's per-step output set, not the monthly mode.
     sim = Simulation(model; forcing=itm_forcing, years=years,
                      backend=:threads, write_netcdf=true,
-                     netcdf_variables=ITM_JULIA_VARS, netcdf_path=out,
+                     netcdf_variables="all", netcdf_path=out,
                      name="wp16_itm")
     run!(sim)
     return out

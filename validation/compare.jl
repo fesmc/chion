@@ -53,7 +53,6 @@ const ITM_PAIRS = ["H_snow" => "H_snow", "albedo" => "alb_s", "Tsrf" => "Tsrf",
                    "melt" => "melt_cum", "refreezing" => "refreezing_cum",
                    "smb_total" => "smb_cum"]
 const ITM_VARS = first.(ITM_PAIRS)
-const ITM_JULIA_VARS = last.(ITM_PAIRS)
 
 const TIME_NAMES = ("t", "time")
 const X_NAMES = ("x", "xc")
