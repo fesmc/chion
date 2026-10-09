@@ -74,13 +74,6 @@
     mass_min            = 100.0             ! [kg m-2] Merge the surface layer below this
     density_init        = 300.0             ! [kg m-3] Initial layer density
     temperature_init    = 273.0             ! [K] Initial layer temperature
-
-    diurnal_shortwave_substeps          = .FALSE.   ! Resolve the diurnal shortwave cycle
-    diurnal_shortwave_threshold         = 0.0       ! [W m-2] Peak-minus-mean to activate
-    diurnal_shortwave_max_substeps      = 3         ! [1] Substeps per day when active
-    diurnal_shortwave_min_air_temperature = 265.15  ! [K] Below this, do not substep
-    diurnal_temperature_cycle           = .FALSE.   ! Add a diurnal air-temperature cycle
-    diurnal_temperature_amplitude       = 5.0       ! [K] Half-amplitude of that cycle
 /
 
 ! ============================================================

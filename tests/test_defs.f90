@@ -86,7 +86,7 @@ program test_defs
     call check_val("D_sh",            c%D_sh,           10.0_wp,        nfail)
     call check_val("alpha_dry",       c%alpha_dry,      0.81_wp,        nfail)
     call check_val("alpha_wet",       c%alpha_wet,      0.70_wp,        nfail)
-    call check_val("alpha_ice",       c%alpha_ice,      0.30_wp,        nfail)
+    call check_val("alpha_ice",       c%alpha_ice,      0.40_wp,        nfail)
     call check_val("max_lwc_albedo",  c%max_lwc_albedo, 0.10_wp,        nfail)
     call check_val("aging_cold_timescale_days",    c%aging_cold_timescale_days,    20.0_wp, nfail)
     call check_val("aging_melting_timescale_days", c%aging_melting_timescale_days,  2.0_wp, nfail)
@@ -102,6 +102,13 @@ program test_defs
                c%fresh_snow_density_scheme .eq. CHION_FRESH_SNOW_DENSITY_CONSTANT, nfail)
     call check("default low_density_densification = bessi", &
                c%low_density_densification .eq. CHION_DENSIFY_BESSI, nfail)
+    ! Chion.jl 03bb445's calibrated surface scheme (C11).
+    call check("default seb_scheme = semix", &
+               c%seb_scheme .eq. CHION_SEB_SEMIX, nfail)
+    call check("default turbulent_flux_scheme = semix", &
+               c%turbulent_flux_scheme .eq. CHION_TURB_SEMIX, nfail)
+    call check("default longwave_scheme = cloud_proxy", &
+               c%longwave_scheme .eq. CHION_LONGWAVE_CLOUD_PROXY, nfail)
 
     ! --- Scheme name mapping (canonical names only since Chion.jl 03bb445) ---
     call check("albedo 'constant'",   chion_albedo_scheme_flag("constant")   .eq. CHION_ALBEDO_CONSTANT,   nfail)

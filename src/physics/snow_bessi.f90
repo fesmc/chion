@@ -219,12 +219,14 @@ contains
     ! =====================================================================
 
     subroutine bessi_par_init(par)
-        ! Chion.jl defaults: src/models.jl:28-78 (BESSIModel keyword defaults)
-        ! and src/constants.jl (DEFAULT_NTOT etc., re-exported by chion_defs).
+        ! Chion.jl defaults: src/models.jl:74-100 at 9ec6cc7 (BESSIModel
+        ! keyword defaults, the calibrated GrIS set: 8 diurnal substeps, a
+        ! 1 K temperature cycle capped at 1 K) and src/constants.jl
+        ! (DEFAULT_NTOT etc., re-exported by chion_defs).
         !
         ! NOTE the two unit conversions Julia performs in the constructor:
         !   diurnal_shortwave_min_air_temperature_c = -8.0  ->  265.15 K
-        !   diurnal_temperature_amplitude_c         =  5.0  ->    5.0 K
+        !   diurnal_temperature_amplitude_c         =  1.0  ->    1.0 K
         !   diurnal_temperature_amplitude_gradient_c_per_km -> K km-1 here; the
         !     /1000 to K m-1 happens in diurnal_temperature_amplitude
         ! The amplitude is a temperature DIFFERENCE, so only the minimum air
@@ -249,15 +251,15 @@ contains
 
         par%near_surface_layer_max_thicknesses = DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES
 
-        par%diurnal_shortwave_substeps            = .FALSE.
+        par%diurnal_shortwave_substeps            = .TRUE.
         par%diurnal_shortwave_threshold           = 0.0_wp
-        par%diurnal_shortwave_max_substeps        = 3
+        par%diurnal_shortwave_max_substeps        = 8
         par%diurnal_shortwave_min_air_temperature = 265.15_wp
-        par%diurnal_temperature_cycle             = .FALSE.
-        par%diurnal_temperature_amplitude         = 5.0_wp
+        par%diurnal_temperature_cycle             = .TRUE.
+        par%diurnal_temperature_amplitude         = 1.0_wp
         par%diurnal_temperature_amplitude_gradient         = 0.0_wp
         par%diurnal_temperature_amplitude_reference_height = 0.0_wp
-        par%diurnal_temperature_amplitude_max              = 1.0e30_wp   ! Julia Inf
+        par%diurnal_temperature_amplitude_max              = 1.0_wp
 
         call bessi_par_validate(par)
 

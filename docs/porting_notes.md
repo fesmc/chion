@@ -569,7 +569,7 @@ Harness: the fine-layer configurations run under `legacy_chion` and stay gated.
 
 ### D33. Cloud-proxy longwave: optional host TOA
 **What:** Chion.jl's cloud-proxy longwave (`03bb445`, `longwave_scheme = "cloud_proxy"`,
-chion default `graybody` until C11) divides the daily shortwave by a top-of-atmosphere
+the default since C11) divides the daily shortwave by a top-of-atmosphere
 shortwave it computes itself: a fixed modern orbit (`S0 = 1361 W m-2`, obliquity
 23.439291 deg, eccentricity term `1 + 0.033 cos(2 pi doy/365)`) from latitude, solar
 longitude and day of year. chion adds an optional host field, `forc%toa_shortwave` with
@@ -589,7 +589,7 @@ Chion.jl's internal TOA. The drivers set neither (`chion_column.x`, `chion_grid.
 
 ### D34. Ice substrate: none on land, reset with the column, old restarts start at `min(t_srf, T0)`
 **What:** three chion-only rules around Chion.jl's thermal ice substrate (`03bb445`,
-`ice_substrate_layers`, chion default 0 until C11):
+`ice_substrate_layers`, default 5 since C11):
 1. **Land.** A column with `H_ice <= 0` has no substrate: it runs as
    `ice_substrate_layers = 0` (adiabatic firn base, bare surface held at `T0`), and its
    `ice_temperature` slice is never touched. `H_ice` is packed into
@@ -637,7 +637,7 @@ for Nils, not fixed here.
 
 ### D36. Fine near-surface layers: no limit is 0, only the top layers can be limited
 **What:** `&bessi near_surface_layer_max_thicknesses` (Chion.jl
-`near_surface_layer_max_thicknesses_m`, `03bb445`; chion default off until C11):
+`near_surface_layer_max_thicknesses_m`, `03bb445`; on by default since C11):
 1. **No limit is `0`**, not `Inf`; a value must be finite and `>= 0`.
 2. **Leading block.** The limited layers must be the top ones: a `0` above a positive value
    is refused. Julia accepts any pattern.

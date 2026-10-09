@@ -80,6 +80,13 @@
 ! inside SnowpackPhysicalConstants, and every chion physics routine
 ! already receives the constants object. See docs/porting_notes.md D3
 ! and D4.
+!
+! CALIBRATED DEFAULT SET. alpha_ice = 0.40, seb_scheme = turbulent_flux_scheme
+! = "semix" (sensible factor 2.5, stable coefficient 40), longwave_scheme =
+! "cloud_proxy", and in &bessi the 5-layer ice substrate, the fine
+! near-surface layers and 8 diurnal substeps with a 1 K cycle are Chion.jl
+! 03bb445's setup, calibrated as one package against MAR over Greenland for
+! daily forcing. Changing one member leaves the others off their calibration.
 
 &chion_const
 
@@ -100,8 +107,8 @@
     latent_heat_flux_ratio    = 1.0         ! [1] Scaling of the turbulent latent flux
 
     ! ## Surface energy balance and turbulent exchange ##
-    seb_scheme                = "bessi"     ! Longwave only: "bessi" | "semix" (absorbed with eps_snow / eps_ice)
-    turbulent_flux_scheme     = "bessi"     ! Sensible and latent heat: "bessi" | "semix" | "climberx"
+    seb_scheme                = "semix"     ! Longwave only: "bessi" | "semix" (absorbed with eps_snow / eps_ice)
+    turbulent_flux_scheme     = "semix"     ! Sensible and latent heat: "bessi" | "semix" | "climberx"
     D_sh                      = 10.0        ! [W m-2 K-1] Sensible heat exchange coefficient (bessi)
 
     ! ## CLIMBER-X SEMIX aerodynamic exchange (turbulent_flux_scheme = "climberx") ##
@@ -128,7 +135,7 @@
     ! ## Albedo ##
     alpha_dry                 = 0.81        ! [1] Dry snow albedo (upper bound)
     alpha_wet                 = 0.70        ! [1] Wet snow albedo (lower bound)
-    alpha_ice                 = 0.30        ! [1] Bare ice albedo
+    alpha_ice                 = 0.40        ! [1] Bare ice albedo
     max_lwc_albedo            = 0.10        ! [1] LWC at which the albedo reaches alpha_wet
     albedo_scheme             = "dynamic"   ! "constant" | "dynamic" | "prescribed" | "semix" | "aging"
     aging_cold_timescale_days    = 20.0     ! [d] Aging e-folding time, surface below T0 (albedo_scheme = "aging")
@@ -157,7 +164,7 @@
 
     ! ## Radiation ##
     eps_air                   = 0.80        ! [1] Emissivity of air (graybody longwave)
-    longwave_scheme           = "graybody"  ! Downwelling longwave if not prescribed: "graybody" | "cloud_proxy"
+    longwave_scheme           = "cloud_proxy" ! Downwelling longwave if not prescribed: "graybody" | "cloud_proxy"
     lw_emissivity_base                 = 0.624   ! [1]     Cloud proxy: emissivity at T0, clear sky
     lw_emissivity_temperature_slope    = 0.0032  ! [K-1]   Cloud proxy: emissivity per K of T_air - T0
     lw_emissivity_cloud_slope          = 0.613   ! [1]     Cloud proxy: emissivity per unit cloudiness
@@ -203,10 +210,11 @@
 !   exchange at semix_surface_height, z0h = z0m/semix_zm_to_zh,
 !   bulk-Richardson damping 1/(1 + b*Ri) when stable and sqrt(1 - 16*Ri)
 !   enhancement when unstable, wind floored at 0.1 m s-1, air humidity
-!   relative to saturation over ice, vapour mass Q_lh/L. Upstream default
-!   (with seb_scheme = "semix"); chion keeps "bessi" until C11. Over bare
-!   ice chion uses Lv + Lm in its latent exchange (D35), and c%R_dry for
-!   the air density (D38).
+!   relative to saturation over ice, vapour mass Q_lh/L. The default (with
+!   seb_scheme = "semix"), as in Chion.jl. Over bare ice chion uses Lv + Lm
+!   in its latent exchange (D35), and c%R_dry for the air density (D38).
+!   "bessi" is BESSI's original pair: LWdn - eps_snow*sigma*Ts^4 and the
+!   bulk coefficient D_sh.
 !   "climberx" is chion's port of CLIMBER-X SEMIX's aerodynamic exchange
 !   (docs/semix_port_scope.md); its vapour mass converts with Lv + Lm at
 !   every surface temperature. CLIMBER-X's full surface scheme is
@@ -227,8 +235,8 @@
 !   orbit), or the host's forc%toa_shortwave when set (D33). Below
 !   50 W m-2 of TOA (polar night), at dt < 0.75 d or without a latitude,
 !   n = lw_night_cloud_fraction. Resolved once per forcing step, before
-!   the diurnal substeps, which reuse it. Upstream default "cloud_proxy";
-!   chion keeps "graybody" until the Stage C default switch (C11).
+!   the diurnal substeps, which reuse it. Default "cloud_proxy", as in
+!   Chion.jl; "graybody" is BESSI's original eps_air*sigma*T_air^4.
 !
 ! low_density_densification
 !   Selects only the rho < 550 kg m-3 branch. The mid and high branches
@@ -268,30 +276,33 @@
     density_init     = 300.0                ! [kg m-3] Density assigned to an inactive layer slot
     temperature_init = 273.0                ! [K] Temperature assigned to an inactive layer slot
 
-    ice_substrate_layers        = 0         ! [1] Thermal ice layers below the snow/firn column (0 = none)
+    ice_substrate_layers        = 5         ! [1] Thermal ice layers below the snow/firn column (0 = none)
     ice_substrate_top_thickness = 0.05      ! [m] Top substrate layer; each layer below is twice as thick
 
-    near_surface_layer_max_thicknesses = 0.0, 0.0, 0.0, 0.0   ! [m] Maximum thickness of layers 1-4 (0 = no limit)
+    near_surface_layer_max_thicknesses = 0.02, 0.05, 0.10, 0.30   ! [m] Maximum thickness of layers 1-4 (0 = no limit)
 
-    diurnal_shortwave_substeps            = False   ! [1] Resolve the diurnal cycle by substepping
+    diurnal_shortwave_substeps            = True    ! [1] Resolve the diurnal cycle by substepping
     diurnal_shortwave_threshold           = 0.0     ! [W m-2] Peak-minus-mean excess required to substep
-    diurnal_shortwave_max_substeps        = 3       ! [1] Substeps per day when enabled; 1..24
+    diurnal_shortwave_max_substeps        = 8       ! [1] Substeps per day when enabled; 1..24
     diurnal_shortwave_min_air_temperature = 265.15  ! [K] Below this, do not substep (Julia: -8 C)
-    diurnal_temperature_cycle             = False   ! [1] Impose a diurnal air-temperature cycle
-    diurnal_temperature_amplitude         = 5.0     ! [K] Half-amplitude of that cycle at reference height
+    diurnal_temperature_cycle             = True    ! [1] Impose a diurnal air-temperature cycle
+    diurnal_temperature_amplitude         = 1.0     ! [K] Half-amplitude of that cycle at reference height
     diurnal_temperature_amplitude_gradient         = 0.0     ! [K km-1] Amplitude increase above reference height
     diurnal_temperature_amplitude_reference_height = 0.0     ! [m] Reference height of that gradient
-    diurnal_temperature_amplitude_max              = 1e30    ! [K] Upper bound on the amplitude (none)
+    diurnal_temperature_amplitude_max              = 1.0     ! [K] Upper bound on the amplitude
 /
 
 ! Notes on &bessi
 !
-! diurnal_shortwave_substeps
-!   OFF by default, and that is a physics choice rather than a
-!   performance one. Albedo aging scales with each substep's dt, but
-!   snowfall brightening is nonlinear under substepping (upstream
-!   defect 21), so enabling this also changes the albedo, not only the
-!   shortwave resolution.
+! diurnal_shortwave_substeps (and the diurnal_* parameters)
+!   ON by default, Chion.jl's calibrated 03bb445 set: a day with shortwave
+!   and air temperature above -8 C is split into 8 intervals of hour angle,
+!   each with its mean shortwave and a +-1 K air-temperature cycle (capped at
+!   1 K). Substepping also changes the albedo, not only the shortwave
+!   resolution: aging scales with each substep's dt, but snowfall
+!   brightening is nonlinear under substepping (upstream defect 21). Cost:
+!   up to 8 core steps on a warm day. A day that is not split keeps its
+!   forcing (D39).
 !
 ! Ntot
 !   The snow-depth cap is a fixed 22.5 m of solid depth
@@ -303,7 +314,7 @@
 !   0.80 m at 5 layers; 1.55 m) below the snow/firn, insulated at the base,
 !   solved with the snow in one implicit system. Bare ice then carries cold
 !   content and must warm to T0 before it melts; with 0 it is held at T0.
-!   Upstream default 5; chion 0 until the Stage C default switch (C11).
+!   Default 5, as in Chion.jl; 0 holds bare ice at T0 (BESSI's original).
 !   chion only (D34): no substrate where forc%H_ice = 0 (land), so a host
 !   using it must fill H_ice for BESSI too; ice_temperature is reset with
 !   the column and is initialised to min(t_srf, T0) from an older restart.
@@ -316,8 +327,8 @@
 !   is off; the first layer below the fine ones is split and merged by
 !   mass_max/mass_split/mass_min instead (chion only, D32; Chion.jl keeps
 !   everything below them in one layer). 0 = no limit (Julia Inf); only a
-!   leading block of layers can be limited (D36). chion keeps all four at 0
-!   until the Stage C default switch (C11).
+!   leading block of layers can be limited (D36). Defaults as in Chion.jl;
+!   all four 0 is BESSI's original mass-based layering.
 !
 ! The three sub-scheme choices — albedo_scheme, fresh_snow_density_scheme
 ! and low_density_densification — are NOT here. They live in the

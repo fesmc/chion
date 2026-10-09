@@ -233,18 +233,18 @@ module chion_defs
     real(wp), parameter, public :: DEF_TEMPERATURE_INIT = 273.0_wp
 
     ! Thermal ice substrate below the snow/firn column (Chion.jl 03bb445,
-    ! src/models.jl:98-99). Upstream defaults to 5 layers; chion keeps 0
-    ! (no substrate, the bare-ice-at-T0 treatment) until the default switch.
-    integer,  parameter, public :: DEF_ICE_SUBSTRATE_LAYERS        = 0
+    ! src/models.jl:98-99), Chion.jl's default 5 layers (0 = none, the
+    ! bare-ice-at-T0 treatment).
+    integer,  parameter, public :: DEF_ICE_SUBSTRATE_LAYERS        = 5
     real(wp), parameter, public :: DEF_ICE_SUBSTRATE_TOP_THICKNESS = 0.05_wp
 
     ! Fine near-surface layers (Chion.jl 03bb445, src/models.jl:97): maximum
     ! thicknesses of the top NEAR_SURFACE_LAYERS layers, held by a
-    ! conservative remesh. 0 = no limit (Julia Inf). Upstream defaults to
-    ! (0.02, 0.05, 0.10, 0.30) m; chion keeps them off until the default
-    ! switch (docs/porting_notes.md D36).
+    ! conservative remesh. 0 = no limit (Julia Inf; docs/porting_notes.md
+    ! D36). Chion.jl's defaults, (0.02, 0.05, 0.10, 0.30) m.
     integer,  parameter, public :: NEAR_SURFACE_LAYERS = 4
-    real(wp), parameter, public :: DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES(NEAR_SURFACE_LAYERS) = 0.0_wp
+    real(wp), parameter, public :: DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES(NEAR_SURFACE_LAYERS) = &
+                                   [0.02_wp, 0.05_wp, 0.10_wp, 0.30_wp]
 
     ! Depth cap: a fixed total solid depth, independent of Ntot and of
     ! mass_split (Chion.jl 03bb445, src/constants.jl:39). It replaces the
@@ -643,8 +643,10 @@ contains
 
         c%D_sh    = 10.0_wp
 
-        c%seb_scheme            = CHION_SEB_BESSI
-        c%turbulent_flux_scheme = CHION_TURB_BESSI
+        ! Chion.jl 03bb445's calibrated surface scheme: graybody longwave
+        ! absorbed with the surface emissivity, its own bulk turbulence.
+        c%seb_scheme            = CHION_SEB_SEMIX
+        c%turbulent_flux_scheme = CHION_TURB_SEMIX
 
         ! CLIMBER-X SEMIX aerodynamic exchange defaults (CLIMBER-X
         ! smb_par.nml / smb_params.f90 / constants.f90).
@@ -671,7 +673,7 @@ contains
 
         c%alpha_dry      = 0.81_wp
         c%alpha_wet      = 0.70_wp
-        c%alpha_ice      = 0.30_wp
+        c%alpha_ice      = 0.40_wp
         c%max_lwc_albedo = 0.10_wp
         c%albedo_scheme  = CHION_ALBEDO_DYNAMIC
 
@@ -703,9 +705,8 @@ contains
         c%eps_air  = 0.80_wp
 
         ! Chion.jl 03bb445 coefficients (fitted to daily MAR longwave over
-        ! Greenland). Upstream defaults to the cloud proxy; chion keeps the
-        ! graybody until the Stage C default switch.
-        c%longwave_scheme                    = CHION_LONGWAVE_GRAYBODY
+        ! Greenland) and default, the cloud proxy.
+        c%longwave_scheme                    = CHION_LONGWAVE_CLOUD_PROXY
         c%lw_emissivity_base                 = 0.624_wp
         c%lw_emissivity_temperature_slope    = 0.0032_wp
         c%lw_emissivity_cloud_slope          = 0.613_wp

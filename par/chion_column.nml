@@ -76,7 +76,6 @@
 
     ! Substepping is off. Enabling it changes the albedo scheme as well as
     ! the shortwave resolution — see the notes in input/chion_defaults.nml.
-    diurnal_shortwave_substeps = False
 /
 
 &pdd

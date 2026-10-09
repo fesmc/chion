@@ -180,8 +180,8 @@ contains
                    c%seb_scheme .eq. CHION_SEB_SEMIX, nfail)
         call check("const: turbulent_flux_scheme overridden -> climberx flag", &
                    c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX, nfail)
-        call check("const: longwave_scheme from defaults -> graybody", &
-                   c%longwave_scheme .eq. CHION_LONGWAVE_GRAYBODY, nfail)
+        call check("const: longwave_scheme from defaults -> cloud_proxy", &
+                   c%longwave_scheme .eq. CHION_LONGWAVE_CLOUD_PROXY, nfail)
         call check_val("const: alpha_wet from defaults",c%alpha_wet,0.70_wp,nfail)
         call check_val("const: sigma_sb from defaults",c%sigma_sb,5.670373e-8_wp,nfail)
         call check("const: shared fields not read from &chion_const", &
@@ -237,15 +237,15 @@ contains
         call check_val("bessi: diurnal_shortwave_min_air_temperature from defaults", &
                        bpar%diurnal_shortwave_min_air_temperature, 265.15_wp, nfail)
         call check("bessi: diurnal_temperature_cycle from defaults", &
-                   .not. bpar%diurnal_temperature_cycle, nfail)
+                   bpar%diurnal_temperature_cycle, nfail)
         call check_val("bessi: diurnal_temperature_amplitude from defaults", &
-                       bpar%diurnal_temperature_amplitude, 5.0_wp, nfail)
+                       bpar%diurnal_temperature_amplitude, 1.0_wp, nfail)
         call check_val("bessi: diurnal_temperature_amplitude_gradient from defaults", &
                        bpar%diurnal_temperature_amplitude_gradient, 0.0_wp, nfail)
         call check_val("bessi: diurnal_temperature_amplitude_max from defaults", &
-                       bpar%diurnal_temperature_amplitude_max, 1.0e30_wp, nfail)
-        call check("bessi: ice_substrate_layers = 0 from defaults", &
-                   bpar%ice_substrate_layers .eq. 0, nfail)
+                       bpar%diurnal_temperature_amplitude_max, 1.0_wp, nfail)
+        call check("bessi: ice_substrate_layers = 5 from defaults", &
+                   bpar%ice_substrate_layers .eq. 5, nfail)
         call check_val("bessi: ice_substrate_top_thickness from defaults", &
                        bpar%ice_substrate_top_thickness, 0.05_wp, nfail)
         call check_val("bessi: near_surface_layer_max_thicknesses(1) read", &
