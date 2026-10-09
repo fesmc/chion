@@ -222,7 +222,10 @@
     diurnal_shortwave_max_substeps        = 3       ! [1] Substeps per day when enabled; 1..24
     diurnal_shortwave_min_air_temperature = 265.15  ! [K] Below this, do not substep (Julia: -8 C)
     diurnal_temperature_cycle             = False   ! [1] Impose a diurnal air-temperature cycle
-    diurnal_temperature_amplitude         = 5.0     ! [K] Half-amplitude of that cycle
+    diurnal_temperature_amplitude         = 5.0     ! [K] Half-amplitude of that cycle at reference height
+    diurnal_temperature_amplitude_gradient         = 0.0     ! [K km-1] Amplitude increase above reference height
+    diurnal_temperature_amplitude_reference_height = 0.0     ! [m] Reference height of that gradient
+    diurnal_temperature_amplitude_max              = 1e30    ! [K] Upper bound on the amplitude (none)
 /
 
 ! Notes on &bessi

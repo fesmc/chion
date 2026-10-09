@@ -352,6 +352,7 @@ module chion_defs
         logical  :: has_alb_ice_host = .FALSE.
 
         real(wp) :: latitude_deg        ! [deg N]
+        real(wp) :: surface_height = 0.0_wp  ! [m] diurnal T amplitude gradient; non-finite = no excess
         real(wp) :: day_of_year         ! [d] fractional, 1-based
         real(wp) :: solar_longitude_deg ! [deg]
     end type chion_step_forcing_class
@@ -384,7 +385,7 @@ module chion_defs
         real(wp), allocatable :: relative_humidity(:)    ! [1]
         logical,  allocatable :: has_relative_humidity(:)
 
-        real(wp), allocatable :: surface_height(:)       ! [m] used for air pressure
+        real(wp), allocatable :: surface_height(:)       ! [m] host air pressure; BESSI diurnal amplitude; ITM
         real(wp), allocatable :: air_pressure(:)         ! [Pa]
         real(wp), allocatable :: prescribed_albedo(:)    ! [1]
         logical,  allocatable :: has_prescribed_albedo(:)

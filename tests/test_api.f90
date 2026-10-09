@@ -234,6 +234,10 @@ contains
                    .not. bpar%diurnal_temperature_cycle, nfail)
         call check_val("bessi: diurnal_temperature_amplitude from defaults", &
                        bpar%diurnal_temperature_amplitude, 5.0_wp, nfail)
+        call check_val("bessi: diurnal_temperature_amplitude_gradient from defaults", &
+                       bpar%diurnal_temperature_amplitude_gradient, 0.0_wp, nfail)
+        call check_val("bessi: diurnal_temperature_amplitude_max from defaults", &
+                       bpar%diurnal_temperature_amplitude_max, 1.0e30_wp, nfail)
 
         ! --- &pdd -----------------------------------------------------
         call pdd_par_init(ppar)

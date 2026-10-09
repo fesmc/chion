@@ -53,7 +53,7 @@ plus `aba07a0` (type-stability refactor, bit-neutral) and `6fca5d7` (PDD honours
 3. **ITM D27** (Tsrf scaled to annual `melt_net`) not upstream; Julia ITM firn warming ~360× too small.
 4. `f2c46d0`: with prescribed albedo, a bare column keeps a stale albedo (Fortran applies it, `snow_bessi.f90:616-618`). Liquid-water guards removed (differs only for ≤1e-12 kg water) — keep Fortran's guards. Diurnal wrapper with `n_substeps==1` returns 0 SW at polar night.
 5. `8fff530` double-count window: for `0 < mass(1) ≤ EPS_EMPTY_LAYER` rain is already in `mass_w(1)` and is added to runoff again.
-6. `d0146e1`: `diurnal_temperature_cycle=true` with missing `surface_height` (NaN) gives NaN amplitude even with γ=0.
+6. `d0146e1`: `diurnal_temperature_cycle=true` with missing `surface_height` (NaN) gives NaN amplitude even with γ=0. **Fixed upstream in `03bb445`; chion WP13 matches (non-finite height = no excess).**
 7. Output: ITM `melt/runoff/refreezing` written as rates but labelled "Cumulative"; `smb` name clashes with chion's ice-facing `smb`.
 8. Stale upstream tests/docs: `test_case_api.jl:108,110` (`alpha_wet==0.70`, τ_melt 5), `albedo.md:85,105`.
 9. Gravity 9.81 in densification (D25) still upstream.

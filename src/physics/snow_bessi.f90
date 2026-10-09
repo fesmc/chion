@@ -58,6 +58,8 @@ module snow_bessi
     ! an increment through a wp temporary -- that is the one mistake in this
     ! module that would compile, run, and only show up as slow mass drift.
 
+    use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
+
     use chion_defs, only : wp, wp_acc, io_unit_err, &
                            TOL_TINY, TOL_EMPTY_LAYER, &
                            DEF_NTOT, DEF_MASS_MAX, DEF_MASS_SPLIT, DEF_MASS_MIN, &
@@ -86,6 +88,7 @@ module snow_bessi
     use snow_refreezing,    only : apply_refreezing
     use snow_diurnal,       only : diurnal_substep_count, diurnal_substep_bounds, &
                                    diurnal_shortwave_interval_average, &
+                                   diurnal_temperature_amplitude, &
                                    diurnal_temperature_interval_average
 
     implicit none
@@ -99,7 +102,7 @@ module snow_bessi
     type bessi_par_class
         ! Chion.jl BESSIModel (src/models.jl:11-26), minus the grid and the
         ! constants object, which chion keeps separately (chion_grid_class and
-        ! chion_const_class). The six diurnal fields are Chion.jl's step
+        ! chion_const_class). The nine diurnal fields are Chion.jl's step
         ! `config` NamedTuple (src/step.jl:45-52), which is built directly from
         ! the model (src/simulation.jl:172-180), so they belong here.
 
@@ -115,7 +118,10 @@ module snow_bessi
         integer  :: diurnal_shortwave_max_substeps        ! [1] 1..24
         real(wp) :: diurnal_shortwave_min_air_temperature ! [K]
         logical  :: diurnal_temperature_cycle             ! [1] impose a diurnal T cycle
-        real(wp) :: diurnal_temperature_amplitude         ! [K] half-amplitude
+        real(wp) :: diurnal_temperature_amplitude         ! [K] half-amplitude at z_ref
+        real(wp) :: diurnal_temperature_amplitude_gradient          ! [K km-1] above z_ref
+        real(wp) :: diurnal_temperature_amplitude_reference_height  ! [m] z_ref
+        real(wp) :: diurnal_temperature_amplitude_max               ! [K] upper clamp
     end type bessi_par_class
 
     type bessi_state_class
@@ -192,6 +198,8 @@ contains
         ! NOTE the two unit conversions Julia performs in the constructor:
         !   diurnal_shortwave_min_air_temperature_c = -8.0  ->  265.15 K
         !   diurnal_temperature_amplitude_c         =  5.0  ->    5.0 K
+        !   diurnal_temperature_amplitude_gradient_c_per_km -> K km-1 here; the
+        !     /1000 to K m-1 happens in diurnal_temperature_amplitude
         ! The amplitude is a temperature DIFFERENCE, so only the minimum air
         ! temperature gains the 273.15 offset.
         !
@@ -215,6 +223,9 @@ contains
         par%diurnal_shortwave_min_air_temperature = 265.15_wp
         par%diurnal_temperature_cycle             = .FALSE.
         par%diurnal_temperature_amplitude         = 5.0_wp
+        par%diurnal_temperature_amplitude_gradient         = 0.0_wp
+        par%diurnal_temperature_amplitude_reference_height = 0.0_wp
+        par%diurnal_temperature_amplitude_max              = 1.0e30_wp   ! Julia Inf
 
         call bessi_par_validate(par)
 
@@ -223,8 +234,8 @@ contains
     end subroutine bessi_par_init
 
     subroutine bessi_par_validate(par)
-        ! Chion.jl _validate_mass_partition (src/domain.jl:59-64) plus the four
-        ! diurnal guards in the BESSIModel constructor (src/models.jl:48-51).
+        ! Chion.jl _validate_mass_partition (src/domain.jl:59-64) plus the six
+        ! diurnal guards in the BESSIModel constructor (src/models.jl:48-51, 97-101 at 27113b6).
         !
         ! The mass partition is not merely cosmetic:
         !   mass_split < mass_max   -- otherwise the split loop cannot converge
@@ -292,6 +303,25 @@ contains
                                  &diurnal_temperature_amplitude must be non-negative."
             write(io_unit_err,*) "diurnal_temperature_amplitude = ", &
                                  par%diurnal_temperature_amplitude
+            stop "Program stopped."
+        end if
+
+        if (.not. ieee_is_finite(par%diurnal_temperature_amplitude_gradient)) then
+            write(io_unit_err,*) "bessi_par_validate:: Error: &
+                                 &diurnal_temperature_amplitude_gradient must be finite."
+            write(io_unit_err,*) "diurnal_temperature_amplitude_gradient = ", &
+                                 par%diurnal_temperature_amplitude_gradient
+            stop "Program stopped."
+        end if
+
+        if (.not. (par%diurnal_temperature_amplitude_max .ge. &
+                   par%diurnal_temperature_amplitude)) then
+            write(io_unit_err,*) "bessi_par_validate:: Error: &
+                                 &diurnal_temperature_amplitude_max must be at least &
+                                 &diurnal_temperature_amplitude."
+            write(io_unit_err,*) "diurnal_temperature_amplitude, _max = ", &
+                                 par%diurnal_temperature_amplitude, &
+                                 par%diurnal_temperature_amplitude_max
             stop "Program stopped."
         end if
 
@@ -877,6 +907,7 @@ contains
         integer  :: n_substeps, k
         real(wp) :: shortwave_for_criterion
         real(wp) :: hour_angle_start, hour_angle_end, fraction
+        real(wp) :: amplitude
 
         type(chion_step_forcing_class) :: subforc
 
@@ -898,6 +929,15 @@ contains
                                                bsi%par%diurnal_shortwave_max_substeps)
 
             if (n_substeps .gt. 1) then
+
+                ! Elevation-dependent half-amplitude (Chion.jl d0146e1); the
+                ! same for every interval of the day.
+                amplitude = diurnal_temperature_amplitude( &
+                                bsi%par%diurnal_temperature_amplitude, &
+                                bsi%par%diurnal_temperature_amplitude_gradient, &
+                                bsi%par%diurnal_temperature_amplitude_reference_height, &
+                                bsi%par%diurnal_temperature_amplitude_max, &
+                                forc%surface_height)
 
                 do k = 1, n_substeps
 
@@ -930,8 +970,7 @@ contains
                     if (bsi%par%diurnal_temperature_cycle) then
                         subforc%air_temperature = &
                             diurnal_temperature_interval_average(forc%air_temperature, &
-                                                bsi%par%diurnal_temperature_amplitude, &
-                                                hour_angle_start,hour_angle_end)
+                                                amplitude,hour_angle_start,hour_angle_end)
                     end if
 
                     call bessi_column_step_core(bsi,icol,subforc,c)

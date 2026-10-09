@@ -21,6 +21,11 @@ tag is the port itself, summarised rather than enumerated.
   on any snowfall (D30; reverted under `legacy_chion`).
 - `chion_get_surface_flux_totals`: cumulative melt/runoff/refrz/subl [kg m-2],
   so a host aggregating over many steps differences two calls.
+- BESSI diurnal T amplitude rises with elevation, `clamp(A0 + γ·max(z − z_ref, 0),
+  0, A_max)` (Chion.jl `d0146e1`): `diurnal_temperature_amplitude_gradient`
+  [K km-1], `_reference_height` [m], `_max` [K]; neutral defaults (bit-identical).
+  `surface_height` is now packed into the step forcing; a missing (NaN) height
+  adds no excess.
 
 ### Fixed
 

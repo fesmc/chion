@@ -56,6 +56,7 @@ module snow_diurnal
     public :: diurnal_daylight_integral
     public :: diurnal_shortwave_interval_average
     public :: diurnal_shortwave_peak_flux
+    public :: diurnal_temperature_amplitude
     public :: diurnal_temperature_interval_average
     public :: diurnal_substep_count
     public :: diurnal_substep_bounds
@@ -255,6 +256,44 @@ contains
         return
 
     end function diurnal_shortwave_peak_flux
+
+    pure function diurnal_temperature_amplitude(amplitude_base,gradient_per_km, &
+                                                reference_height,amplitude_max, &
+                                                surface_height) result(amplitude)
+        ! Chion.jl/src/step.jl:_diurnal_air_temperature (d0146e1, 9ec6cc7):
+        !     A = clamp(A0 + gamma*max(z_s - z_ref, 0), 0, A_max)
+        ! with gamma converted K/km -> K/m as in the BESSIModel constructor
+        ! (src/models.jl: gradient_c_per_km/1000).
+        !
+        ! A non-finite surface height (a host that does not supply one) has no
+        ! height excess, so the amplitude stays A0 clamped -- never NaN
+        ! (Chion.jl 03bb445; our 1c.6). The default parameters
+        ! (gamma = 0, A_max large) give A = A0 exactly.
+
+        implicit none
+
+        real(wp), intent(IN) :: amplitude_base     ! [K] A0
+        real(wp), intent(IN) :: gradient_per_km    ! [K km-1] gamma
+        real(wp), intent(IN) :: reference_height   ! [m] z_ref
+        real(wp), intent(IN) :: amplitude_max      ! [K] A_max
+        real(wp), intent(IN) :: surface_height     ! [m] z_s
+        real(wp) :: amplitude                      ! [K]
+
+        ! Local variables
+        real(wp) :: height_excess
+
+        if (ieee_is_finite(surface_height)) then
+            height_excess = max(surface_height - reference_height, 0.0_wp)
+        else
+            height_excess = 0.0_wp
+        end if
+
+        amplitude = min(max(amplitude_base + (gradient_per_km/1000.0_wp)*height_excess, &
+                            0.0_wp), amplitude_max)
+
+        return
+
+    end function diurnal_temperature_amplitude
 
     pure function diurnal_temperature_interval_average(air_temperature_daily_mean,amplitude, &
                                                        hour_angle_start,hour_angle_end) result(t_air)

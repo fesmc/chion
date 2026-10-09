@@ -1192,6 +1192,9 @@ contains
         call nml_read(filename,group,"diurnal_shortwave_min_air_temperature", par%diurnal_shortwave_min_air_temperature, init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_temperature_cycle",             par%diurnal_temperature_cycle,             init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_temperature_amplitude",         par%diurnal_temperature_amplitude,         init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+        call nml_read(filename,group,"diurnal_temperature_amplitude_gradient",         par%diurnal_temperature_amplitude_gradient,         init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+        call nml_read(filename,group,"diurnal_temperature_amplitude_reference_height", par%diurnal_temperature_amplitude_reference_height, init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+        call nml_read(filename,group,"diurnal_temperature_amplitude_max",              par%diurnal_temperature_amplitude_max,              init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
 
         call bessi_par_validate(par)
 

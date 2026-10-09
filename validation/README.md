@@ -222,5 +222,6 @@ scheme rather than only the shortwave resolution (upstream defect 21; defect 19,
 aging per substep, is fixed since dev_nils 6d077c5),
 and it is the only consumer of `day_of_year` / `solar_longitude_deg`, which the
 two drivers derive differently. Comparing it would compare two known-divergent
-schemes. Humidity forcing is uniform (`rh_default`; `chion_grid.x` has no
+schemes. The elevation-dependent temperature amplitude (Chion.jl `d0146e1`) is
+therefore covered by `test_wp7` only. Humidity forcing is uniform (`rh_default`; `chion_grid.x` has no
 humidity reader) and absent from the first two configurations.

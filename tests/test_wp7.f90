@@ -13,6 +13,8 @@ program test_wp7
     !   (iv)  diurnal interval averages over a full [-pi,pi] tiling recover the
     !         daily mean to 1e-6 relative; polar day and polar night both give
     !         sensible values; substep_count returns only 1 or max_substeps
+    !   (v)   the elevation-dependent diurnal T amplitude clamps at 0 and A_max,
+    !         and a missing (NaN) surface height adds no excess (Chion.jl d0146e1)
     !
     ! apply_accumulation itself is exercised by WP4's and WP8's tests, since it
     ! is mostly a driver for the layer-structure routines; what is tested here
@@ -770,6 +772,8 @@ contains
 
     subroutine test_diurnal(nfail)
 
+        use, intrinsic :: ieee_arithmetic, only : ieee_value, ieee_quiet_nan, ieee_is_finite
+
         implicit none
 
         integer, intent(INOUT) :: nfail
@@ -778,7 +782,7 @@ contains
         integer,  parameter :: nsub_max = 24
         real(wp), parameter :: PI_WP = 3.14159265358979_wp
 
-        real(wp)     :: lat, lon, qbar, h_a, h_b, q, tbar, amp, t_int, dec, h0
+        real(wp)     :: lat, lon, qbar, h_a, h_b, q, tbar, amp, t_int, dec, h0, nan_wp
         real(wp_acc) :: total, weight, w_total, I_day, A, B
         integer      :: i, n, ilat, ilon, nsub
         logical      :: ok_nonneg, ok_tiling
@@ -931,6 +935,28 @@ contains
         end do
         call check("temperature tiling preserves the daily mean", &
                    abs(total/w_total - real(tbar,wp_acc)) .le. 1.0e-4_wp_acc, nfail)
+
+        ! === elevation-dependent amplitude (Chion.jl d0146e1) ==============
+        ! A = clamp(A0 + gamma*max(z - z_ref, 0), 0, A_max), gamma in K/km.
+        call check("amplitude: neutral defaults return A0 exactly", &
+                   diurnal_temperature_amplitude(5.0_wp,0.0_wp,0.0_wp,1.0e30_wp,3000.0_wp) &
+                   .eq. 5.0_wp, nfail)
+        call check_val("amplitude: gradient above z_ref", &
+                       diurnal_temperature_amplitude(1.0_wp,2.0_wp,1000.0_wp,10.0_wp,2500.0_wp), &
+                       4.0_wp, nfail)
+        call check_val("amplitude: no excess below z_ref", &
+                       diurnal_temperature_amplitude(1.0_wp,2.0_wp,1000.0_wp,10.0_wp,500.0_wp), &
+                       1.0_wp, nfail)
+        call check_val("amplitude: clamped at A_max", &
+                       diurnal_temperature_amplitude(1.0_wp,2.0_wp,0.0_wp,3.0_wp,4000.0_wp), &
+                       3.0_wp, nfail)
+        call check_val("amplitude: negative gradient clamped at zero", &
+                       diurnal_temperature_amplitude(1.0_wp,-2.0_wp,0.0_wp,3.0_wp,4000.0_wp), &
+                       0.0_wp, nfail)
+        nan_wp = ieee_value(nan_wp,ieee_quiet_nan)
+        amp = diurnal_temperature_amplitude(1.0_wp,2.0_wp,0.0_wp,3.0_wp,nan_wp)
+        call check("amplitude: missing (NaN) surface height gives A0, not NaN", &
+                   ieee_is_finite(amp) .and. amp .eq. 1.0_wp, nfail)
 
         ! === substep_count returns only 1 or max_substeps ==================
         lat = 65.0_wp

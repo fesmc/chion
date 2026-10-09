@@ -114,9 +114,10 @@ contains
         ! Fields are assigned in declaration order, which is also the order of
         ! Chion.jl's SnowpackStepForcing, so the two can be diffed by eye.
         !
-        ! NOTE what is NOT here: surface_height, H_ice and PDDs. The first is
-        ! used by the host to derive air_pressure; the last two are ITM's, and
-        ! are passed to itm_step directly (see the module header).
+        ! NOTE what is NOT here: H_ice and PDDs. Both are ITM's and are passed
+        ! to itm_step directly (see the module header). surface_height is
+        ! packed (Chion.jl d0146e1: elevation-dependent diurnal T amplitude);
+        ! ITM still receives it as its explicit z_srf argument as well.
 
         implicit none
 
@@ -161,6 +162,7 @@ contains
         fc%has_alb_ice_host = forc%has_alb_ice_host(icol)
 
         fc%latitude_deg        = forc%latitude_deg(icol)
+        fc%surface_height      = forc%surface_height(icol)
         fc%day_of_year         = forc%day_of_year
         fc%solar_longitude_deg = forc%solar_longitude_deg
 
