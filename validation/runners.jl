@@ -19,7 +19,8 @@ Chion.jl's calendar-day formula (calendar_solar_longitude_deg), which coincide
 on the harness' one-year axis starting 1 January 2000. They feed the
 cloud-proxy longwave's TOA and the diurnal substeps.
 
-DIURNAL SUBSTEPPING IS OFF in every configuration but its own.
+DIURNAL SUBSTEPPING IS OFF in every configuration but its own, which runs
+Chion.jl's calibrated 03bb445 set on both sides (DIURNAL_CALIBRATED).
 """
 
 using NCDatasets
@@ -62,7 +63,8 @@ make_cmd(target::AbstractString, precision::Symbol; legacy::Bool=false) =
 
 Write a namelist and run `chion_grid.x` in `workdir`. Returns the output path.
 `bessi_extra` adds lines to the `&bessi` group (a second group of the same name
-in `nml_extra` would not be read).
+in `nml_extra` would not be read); `diurnal` sets its diurnal parameters
+(`diurnal_nml`, default off).
 The namelist and log are named after `outfile`, so runs sharing a `workdir`
 keep their own.
 
@@ -76,7 +78,8 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
                    dt::Float64=-1.0, nml_extra::AbstractString="",
                    legacy::Bool=false, pdd_method::AbstractString="simple",
                    name_hice::AbstractString="None", name_pdds::AbstractString="None",
-                   rh_default::Float64=0.0, bessi_extra::AbstractString="")
+                   rh_default::Float64=0.0, bessi_extra::AbstractString="",
+                   diurnal::NamedTuple=DIURNAL_OFF)
     mkpath(workdir)
     link = joinpath(workdir, "input")
     islink(link) || ispath(link) || symlink(joinpath(CHION_ROOT, "input"), link)
@@ -125,12 +128,7 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
     mass_min            = 100.0
     density_init        = 300.0
     temperature_init    = 273.0
-    diurnal_shortwave_substeps            = .FALSE.
-    diurnal_shortwave_threshold           = 0.0
-    diurnal_shortwave_max_substeps        = 3
-    diurnal_shortwave_min_air_temperature = 265.15
-    diurnal_temperature_cycle             = .FALSE.
-    diurnal_temperature_amplitude         = 5.0
+$(diurnal_nml(diurnal))
 $(bessi_extra)
 /
 
@@ -156,6 +154,41 @@ $(nml_extra)
 end
 
 """
+Diurnal substepping parameters, one NamedTuple for both models: `diurnal_nml`
+writes chion's `&bessi` lines, `diurnal_kwargs` Chion.jl's `BESSIModel`
+keywords. `DIURNAL_OFF` is every configuration but the diurnal one;
+`DIURNAL_CALIBRATED` is Chion.jl's 03bb445 default (8 substeps, a 1 K
+temperature cycle capped at 1 K, no threshold, no substepping below -8 C).
+"""
+const DIURNAL_OFF = (substeps=false, threshold=0.0, max_substeps=3,
+                     min_air_temperature_c=-8.0, cycle=false, amplitude=5.0,
+                     amplitude_max=5.0)
+const DIURNAL_CALIBRATED = (substeps=true, threshold=0.0, max_substeps=8,
+                            min_air_temperature_c=-8.0, cycle=true, amplitude=1.0,
+                            amplitude_max=1.0)
+
+fortran_logical(b::Bool) = b ? ".TRUE." : ".FALSE."
+
+diurnal_nml(d::NamedTuple) = """
+    diurnal_shortwave_substeps            = $(fortran_logical(d.substeps))
+    diurnal_shortwave_threshold           = $(d.threshold)
+    diurnal_shortwave_max_substeps        = $(d.max_substeps)
+    diurnal_shortwave_min_air_temperature = $(d.min_air_temperature_c + 273.15)
+    diurnal_temperature_cycle             = $(fortran_logical(d.cycle))
+    diurnal_temperature_amplitude         = $(d.amplitude)
+    diurnal_temperature_amplitude_max     = $(d.amplitude_max)"""
+
+diurnal_kwargs(d::NamedTuple) = (
+    diurnal_shortwave_substeps=d.substeps,
+    diurnal_shortwave_threshold=d.threshold,
+    diurnal_shortwave_max_substeps=d.max_substeps,
+    diurnal_shortwave_min_air_temperature_c=d.min_air_temperature_c,
+    diurnal_temperature_cycle=d.cycle,
+    diurnal_temperature_amplitude_c=d.amplitude,
+    diurnal_temperature_amplitude_max_c=d.amplitude_max,
+)
+
+"""
     run_julia_bessi(; forcing, outfile, workdir, ntot, albedo, vars, humidity,
                     ice_substrate_layers, near_surface)
 
@@ -168,15 +201,16 @@ dev_nils and chion to 2 d. `humidity = true` reads the forcing's RHZ and PS
 (see forcing.jl), matching chion's `rh_default` and sea-level pressure.
 `ice_substrate_layers` overrides the pin of `BESSI_SCHEME_PINS` (0), and
 `near_surface` the fine-layer thicknesses [m] (pinned to Inf, no limit).
-`overrides` replaces any other `BESSIModel` keyword last (pins and diurnal
-switches included), e.g. `(longwave_scheme=:cloud_proxy,)`.
+`diurnal` sets the diurnal substepping (`DIURNAL_OFF` by default, see
+`diurnal_kwargs`), and `overrides` replaces any other `BESSIModel` keyword
+last, e.g. `(longwave_scheme=:cloud_proxy,)`.
 """
 function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
                          workdir::AbstractString, ntot::Int=15, years::Int=1,
                          albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS,
                          humidity::Bool=false, ice_substrate_layers::Int=0,
                          near_surface::Union{Nothing,NTuple{4,Float64}}=nothing,
-                         overrides::NamedTuple=(;))
+                         diurnal::NamedTuple=DIURNAL_OFF, overrides::NamedTuple=(;))
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -206,8 +240,7 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
            merge(BESSI_SCHEME_PINS, (; ice_substrate_layers))
     near_surface === nothing ||
         (pins = merge(pins, (; near_surface_layer_max_thicknesses_m=near_surface)))
-    settings = merge(pins, (diurnal_shortwave_substeps=false,
-                            diurnal_temperature_cycle=false), overrides)
+    settings = merge(pins, diurnal_kwargs(diurnal), overrides)
     model = BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
                        alpha_ice=0.3, alpha_wet=0.70, aging..., settings...,
                        densification=:bessi, fresh_snow_density=:constant,

@@ -71,6 +71,10 @@ tag is the port itself, summarised rather than enumerated.
   `seb_scheme = "semix"` + `turbulent_flux_scheme = "climberx"` (bit-identical);
   `semix_qsat` is renamed `climberx_qsat` (`"climberx"` | `"bessi"`) (D37).
 
+- With diurnal substeps on, a day the criterion does not split keeps its forcing;
+  Chion.jl averages it over the full day, which zeroes shortwave in the polar night
+  (D39; reverted under `legacy_chion`).
+
 ### Fixed
 
 - `chion_column.x` and `chion_grid.x` derive the solar longitude with Chion.jl's

@@ -695,6 +695,25 @@ gas constant). Ask Nils to use a named constant.
 **Impact:** `rho_a` 2.8e-5 relative lower, and with it both turbulent fluxes, under
 `turbulent_flux_scheme = "semix"` only. Gated under `legacy_chion`.
 
+### D39. Diurnal substeps: a day that is not split keeps its forcing
+**What:** with `diurnal_shortwave_substeps` on, `bessi_column_step` steps a day that the
+substep criterion does not split (`n_substeps = 1`: below the minimum air temperature, no
+shortwave, polar night, dt outside 0.75-1.25 d, ...) with its forcing unchanged. Chion.jl
+runs it as one interval `[-pi, pi]` through the same interval averages as the substeps.
+Reverted under `legacy_chion` (`DIURNAL_SINGLE_INTERVAL_AVERAGED`).
+
+**Why:** the full-day shortwave average reconstructs the daily mean from the solar
+geometry, so it returns the forcing's value (to round-off) wherever the sun rises, but zero
+where the geometry has no daylight -- polar night, or a missing latitude -- whatever
+shortwave the forcing carries. A day that is not resolved should not lose forcing energy;
+with the switch off it simply is the daily step.
+
+**Impact:** only where the forcing has shortwave on a day without daylight in chion's
+fixed-orbit geometry: synthetic or smoothed forcing (the harness' annual cosine, a
+monthly climatology interpolated to days) and calendar mismatches at the polar-night edge.
+Real daily reanalysis shortwave is zero there. The harness' diurnal configuration has it
+on 4 x ~50 column-days at 70 N and gates Julia's behaviour under `legacy_chion`.
+
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its
 output test was seeded such that with `dt_out == dt` the after-step-1 record was

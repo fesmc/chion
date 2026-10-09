@@ -73,7 +73,7 @@ module snow_bessi
                            NEAR_SURFACE_LAYERS, DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES, &
                            CHION_ALBEDO_PRESCRIBED, CHION_ALBEDO_SEMIX, &
                            CHION_ALBEDO_AGING, &
-                           CHION_DENSIFY_HTESSEL, &
+                           CHION_DENSIFY_HTESSEL, DIURNAL_SINGLE_INTERVAL_AVERAGED, &
                            chion_const_class, chion_step_forcing_class
 
     use phys_constants,     only : sec_day
@@ -1142,6 +1142,13 @@ contains
         ! is a rectified function of the surface energy balance, so resolving
         ! the daytime peak produces more melt than the daily mean does. That is
         ! the entire purpose of the option.
+        !
+        ! A day the criterion does not split (n_substeps = 1) is stepped with
+        ! its forcing as given. Chion.jl runs it as one [-pi, pi] interval,
+        ! whose shortwave average is the daily mean again -- except where the
+        ! geometry has no daylight (polar night, no latitude), where it is
+        ! zero whatever the forcing says. legacy_chion does the same
+        ! (DIURNAL_SINGLE_INTERVAL_AVERAGED, docs/porting_notes.md D39).
 
         implicit none
 
@@ -1177,7 +1184,7 @@ contains
                                                bsi%par%diurnal_shortwave_threshold, &
                                                bsi%par%diurnal_shortwave_max_substeps)
 
-            if (n_substeps .gt. 1) then
+            if (n_substeps .gt. 1 .or. DIURNAL_SINGLE_INTERVAL_AVERAGED) then
 
                 ! Elevation-dependent half-amplitude (Chion.jl d0146e1); the
                 ! same for every interval of the day.

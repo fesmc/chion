@@ -560,6 +560,57 @@ function run_bessi_turb_semix(nstep::Int; substrate::Bool=false)
 end
 
 """
+BESSI with diurnal substepping (plan C8), Chion.jl's calibrated 03bb445 set on
+both sides (`DIURNAL_CALIBRATED`: up to 8 substeps, a 1 K temperature cycle,
+none below -8 C), on the default forcing and columns with dynamic albedo, the
+graybody longwave and BESSI's surface scheme. Day of year and solar longitude
+agree by construction (runners.jl). A day that is not split keeps its forcing
+in chion but takes the interval average in Chion.jl, which zeroes the
+synthetic forcing's polar-night shortwave; `legacy_chion` does the same (D39).
+Gated like the default configuration (dp+legacy, every BESSI field).
+Coverage: substepped days (counted with Chion.jl's own criterion), unsplit days
+with shortwave in the polar night, and a result that differs from the run
+without substeps, `ch_daily`.
+"""
+function run_bessi_diurnal(fbessi::AbstractString, ch_daily::AbstractString)
+    jl = run_julia_bessi(; forcing=fbessi, outfile="julia_bessi_diurnal.nc", workdir=WORKDIR,
+                         ntot=15, years=1, diurnal=DIURNAL_CALIBRATED)
+    ch = run_chion(; precision=:dp, legacy=true, forcing=fbessi,
+                   outfile="chion_bessi_diurnal_dp_legacy.nc", workdir=WORKDIR,
+                   model="bessi", dt_out=1.0, dt=1.0, diurnal=DIURNAL_CALIBRATED)
+    d = compare_files(ch, jl, BESSI_VARS; eps_wp=eps_of(:dp))
+    report(d, "BESSI port fidelity, diurnal substeps (8, 1 K): chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "BESSI port fidelity (diurnal substeps, 8 substeps, 1 K cycle)")
+
+    # Days split, with Chion.jl's criterion on the file's forcing and calendar.
+    lat, tt, sw = NCDataset(fbessi) do ds
+        (Float64(ds["LAT"][1, 1]), Array(ds["TT"]), Array(ds["SWD"]))   # (x, y, time)
+    end
+    dc = DIURNAL_CALIBRATED
+    nsub(i, k) = Chion._diurnal_shortwave_substep_count(
+        1.0, sw[i, 1, k], tt[i, 1, k], dc.min_air_temperature_c + 273.15, lat,
+        Chion._solar_longitude_deg_from_calendar_day(Float64(k)), dc.threshold, dc.max_substeps)
+    nt = size(sw, 3)
+    split = count(nsub(i, k) == dc.max_substeps for i in axes(sw, 1), k in 1:nt)
+    night = count(sw[i, 1, k] > 0 &&
+                  Chion._daily_toa_shortwave(lat, Chion._solar_longitude_deg_from_calendar_day(Float64(k)),
+                                             Float64(k)) == 0
+                  for i in axes(sw, 1), k in 1:nt)
+    println()
+    println("      $(split) column-days split into $(dc.max_substeps) substeps; $(night) " *
+            "column-days with shortwave in the polar night (unsplit)")
+    checks = [("diurnal: days split into substeps", split > 0),
+              ("diurnal: unsplit polar-night days with shortwave (D39 path)", night > 0)]
+    println()
+    println("--- coverage assertions (diurnal substeps) ---")
+    for (label, ok) in checks
+        println(ok ? "  ok   : $label" : "  FAIL : $label")
+        ok || (nfail += 1)
+    end
+    return nfail + check_moved(ch, ch_daily, "diurnal substeps", "the daily run")
+end
+
+"""
 Coverage helper: assert that a configuration's chion output `ch` differs from
 the run `ch_ref` without its switch (max |Tsrf difference| > 0.1 K), so a gate
 pass cannot come from a switch that silently did nothing on either side.
@@ -685,6 +736,7 @@ function main()
     nfail += run_bessi_seb_semix(fbessi, ch_legacy)
     nfail += run_bessi_turb_semix(nstep)
     nfail += run_bessi_turb_semix(nstep; substrate=true)
+    nfail += run_bessi_diurnal(fbessi, ch_legacy)
 
     # PRECISION COST (reported): sp vs dp, chion against itself, so the number
     # is the cost of wp = sp alone with no reference-model effects mixed in.

@@ -1485,6 +1485,60 @@ contains
         call bessi_dealloc(bsi_off)
         call bessi_dealloc(bsi_on)
 
+        ! --- 6c: an unsplit day keeps its forcing (D39) --------------------
+        ! Polar night (80 N, solar longitude 270) with shortwave in the
+        ! forcing: the criterion does not split the day. chion steps it with
+        ! the forcing as given, i.e. exactly as with substepping off;
+        ! legacy_chion (Chion.jl) averages it over [-pi, pi], which zeroes the
+        ! shortwave, i.e. exactly as substepping off with no shortwave.
+        call bessi_par_init(bsi_off%par)
+        call bessi_alloc(bsi_off,1)
+        call bessi_init_state(bsi_off,c)
+
+        call bessi_par_init(bsi_on%par)
+        bsi_on%par%diurnal_shortwave_substeps     = .TRUE.
+        bsi_on%par%diurnal_shortwave_max_substeps = 8
+        bsi_on%par%diurnal_temperature_cycle      = .TRUE.
+        bsi_on%par%diurnal_temperature_amplitude  = 1.0_wp
+        call bessi_par_validate(bsi_on%par)
+        call bessi_alloc(bsi_on,1)
+        call bessi_init_state(bsi_on,c)
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 260.0_wp
+        forc%snowfall_rate   = 3.0e-4_wp
+        forc%wind_speed      = 2.0_wp
+        do istep = 1, 30
+            call bessi_column_step(bsi_off,1,forc,c)
+            call bessi_column_step(bsi_on,1,forc,c)
+        end do
+
+        forc%air_temperature     = 266.0_wp
+        forc%snowfall_rate       = 0.0_wp
+        forc%shortwave_down      = 100.0_wp
+        forc%latitude_deg        = 80.0_wp
+        forc%solar_longitude_deg = 270.0_wp
+        forc%day_of_year         = 356.0_wp
+        do istep = 1, 10
+            call bessi_column_step(bsi_on,1,forc,c)
+            if (DIURNAL_SINGLE_INTERVAL_AVERAGED) forc%shortwave_down = 0.0_wp
+            call bessi_column_step(bsi_off,1,forc,c)
+            forc%shortwave_down = 100.0_wp
+        end do
+
+        if (DIURNAL_SINGLE_INTERVAL_AVERAGED) then
+            call check("unsplit polar-night day: shortwave zeroed (legacy_chion, Chion.jl)", &
+                       bsi_on%now%t_srf(1) .eq. bsi_off%now%t_srf(1) .and. &
+                       all(bsi_on%now%temperature(:,1) .eq. bsi_off%now%temperature(:,1)), nfail)
+        else
+            call check("unsplit polar-night day: forcing kept (D39), = substeps off", &
+                       bsi_on%now%t_srf(1) .eq. bsi_off%now%t_srf(1) .and. &
+                       all(bsi_on%now%temperature(:,1) .eq. bsi_off%now%temperature(:,1)), nfail)
+        end if
+
+        call bessi_dealloc(bsi_off)
+        call bessi_dealloc(bsi_on)
+
         write(*,*)
 
         return

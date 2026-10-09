@@ -191,6 +191,11 @@ module chion_defs
     !   * TURB_SEMIX_R_AIR_LITERAL -> .TRUE., i.e. the semix turbulence's air
     !     density uses Chion.jl's literal 287.05 instead of c%R_dry
     !     (docs/porting_notes.md D38).
+    !   * DIURNAL_SINGLE_INTERVAL_AVERAGED -> .TRUE., i.e. with diurnal
+    !     substeps on, a day that is not split still takes the interval
+    !     averages over [-pi, pi], which zero its shortwave when the solar
+    !     geometry has no daylight (polar night), as in Chion.jl. chion steps
+    !     such a day with its forcing as given (docs/porting_notes.md D39).
     !
     ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
     ! the plain build is gated against Chion.jl for PDD.
@@ -206,6 +211,7 @@ module chion_defs
     logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .FALSE.
     logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .FALSE.
     logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .TRUE.
+    logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .TRUE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
@@ -215,6 +221,7 @@ module chion_defs
     logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .TRUE.
     logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .TRUE.
     logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .FALSE.
+    logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .FALSE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
 #endif
 

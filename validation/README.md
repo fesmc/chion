@@ -46,7 +46,7 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 
 | target | reference | authority |
 |---|---|---|
-| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate, and `:dynamic` with the cloud-proxy longwave (`longwave_scheme = :cloud_proxy`, `03bb445`; chion's internal TOA) |
+| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate, and `:dynamic` with the cloud-proxy longwave (`longwave_scheme = :cloud_proxy`, `03bb445`; chion's internal TOA), `seb_scheme = :semix` with BESSI turbulence, Chion.jl's surface scheme `seb_scheme = turbulent_flux_scheme = :semix` (humidity on; alone and with the substrate), and diurnal substeps at Chion.jl's calibrated `03bb445` set (8 substeps, 1 K cycle) |
 | PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
 | ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 8 written fields (D27 reverted). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
 
@@ -264,11 +264,12 @@ split a layer, and `mass_base` was identically zero on both sides — so its
 
 ## Not covered
 
-Diurnal substepping is off in both models, deliberately: it changes the albedo
-scheme rather than only the shortwave resolution (upstream defect 21; defect 19,
-aging per substep, is fixed since dev_nils 6d077c5). The elevation-dependent
-temperature amplitude (Chion.jl `d0146e1`) is therefore covered by `test_wp7`
-only.
+Diurnal substepping is off in every configuration but its own (Chion.jl's
+calibrated set: 8 substeps, 1 K cycle capped at 1 K, none below -8 C). Snowfall
+brightening stays non-linear under substepping (upstream defect 21), the same on
+both sides; a day that is not split keeps its forcing in chion (D39, legacy
+reverts). The elevation-dependent temperature amplitude (Chion.jl `d0146e1`) is
+covered by `test_wp7` only (gradient 0 in the calibrated set).
 
 `day_of_year` and `solar_longitude_deg` (diurnal substeps, cloud-proxy TOA) agree
 by construction: Chion.jl derives both from the calendar axis, `chion_grid.x` the
