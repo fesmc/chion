@@ -224,7 +224,6 @@ module chion_defs
         integer  :: fresh_snow_density_scheme   ! CHION_FRESH_SNOW_DENSITY_*
 
         ! Thermal properties
-        real(wp) :: Ki                 ! [W m-1 K-1] thermal conductivity of ice
         real(wp) :: ci                 ! [J kg-1 K-1] heat capacity of ice   (shared: cp_ice)
         real(wp) :: cw                 ! [J kg-1 K-1] heat capacity of water (shared: cp_w)
         real(wp) :: Lm                 ! [J kg-1] latent heat of melting     (shared: L_ice)
@@ -528,7 +527,6 @@ contains
         c%rho_s_c = 26.0_wp
         c%fresh_snow_density_scheme = CHION_FRESH_SNOW_DENSITY_CONSTANT
 
-        c%Ki      = 2.1_wp
         c%ci      = 2110.0_wp
         c%cw      = 4181.0_wp
         c%Lm      = 334000.0_wp
@@ -611,7 +609,6 @@ contains
         write(*,"(a25,g14.6,a)") "rho_s_b = ", c%rho_s_b, "  [kg m-3 K-1]"
         write(*,"(a25,g14.6,a)") "rho_s_c = ", c%rho_s_c, "  [kg m-3 (m s-1)^-1/2]"
         write(*,"(a25,i14)")     "fresh_snow_density_scheme = ", c%fresh_snow_density_scheme
-        write(*,"(a25,g14.6,a)") "Ki      = ", c%Ki,      "  [W m-1 K-1]"
         write(*,"(a25,g14.6,a)") "ci      = ", c%ci,      "  [J kg-1 K-1]"
         write(*,"(a25,g14.6,a)") "cw      = ", c%cw,      "  [J kg-1 K-1]"
         write(*,"(a25,g14.6,a)") "Lm      = ", c%Lm,      "  [J kg-1]"

@@ -1045,7 +1045,6 @@ contains
         call nml_read(filename,group,"rho_s_c",                  c%rho_s_c,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"fresh_snow_density_scheme",fresh_snow_density_scheme, init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"Ki",                       c%Ki,                      init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"Lv",                       c%Lv,                      init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"cp_air",                   c%cp_air,                  init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"latent_heat_flux_ratio",   c%latent_heat_flux_ratio,  init=init_pars,defaults_file=def_file,defaults_group=def_const)

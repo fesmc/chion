@@ -20,6 +20,7 @@ program test_energy
     !      the former arithmetic form on a uniform column, coefficient and full
     !      step; two layers of contrasting conductivity carry the analytic
     !      series-resistance steady flux.
+    !  10. Calonne et al. (2019) conductivity against hand-computed values.
 
     use chion_defs,   only : wp, wp_acc, chion_const_class, chion_step_forcing_class, &
                              chion_const_init, CHION_SEB_BESSI, CHION_SEB_SEMIX
@@ -51,6 +52,7 @@ program test_energy
     call test_early_exit(nfail)
     call test_semix_surface_row(nfail)
     call test_interface_conductance(nfail)
+    call test_conductivity_calonne(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -827,6 +829,55 @@ contains
     end subroutine test_interface_conductance
 
     ! =====================================================================
+    ! 10. Calonne et al. (2019) conductivity
+    ! =====================================================================
+
+    subroutine test_conductivity_calonne(nfail)
+        ! Reference values computed by hand (double precision) from Eq. (5) of
+        ! Calonne et al. (2019) with rho_i = 917 kg m-3:
+        !   theta  = 1/(1 + exp(-0.04 (rho - 450)))
+        !   k_ice  = 9.828 exp(-5.7e-3 T),  k_air = 2.334e-3 T^1.5/(164.54 + T)
+        !   k_snow = 0.024 - 1.23e-4 rho + 2.5e-6 rho^2
+        !   k_firn = 2.107 + 3.618e-3 (rho - rho_i)
+        !   K = (1-theta) k_ice k_air/(2.107*0.024) k_snow + theta k_ice/2.107 k_firn
+        ! (300,253): theta 0.00247262, k_snow 0.2121           -> 0.2183550623
+        ! (500,253): theta 0.880797,   k_firn 0.598294         -> 0.6535479534
+        ! (917,263): theta ~1, k_firn = 2.107, k_ice 2.1949    -> 2.194897732
+        ! The former Ki*(rho/1000)^1.88 gives 0.2184, 0.5705 and 1.784.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        real(wp), parameter :: rho(3)  = [300.0_wp, 500.0_wp, 917.0_wp]
+        real(wp), parameter :: T(3)    = [253.0_wp, 253.0_wp, 263.0_wp]
+        real(wp), parameter :: Kref(3) = [0.2183550623_wp, 0.6535479534_wp, 2.194897732_wp]
+        real(wp) :: K
+        integer  :: i
+        character(len=64) :: label
+
+        write(*,*)
+        write(*,"(a)") "--- Calonne et al. (2019) conductivity ---"
+
+        do i = 1, size(rho)
+            K = snow_thermal_conductivity(rho(i),T(i),917.0_wp)
+            write(label,"(a,f5.0,a,f5.0,a)") "K(rho=", rho(i), ", T=", T(i), ") (1e-5 rel)"
+            call check_val(trim(label),K,Kref(i),1.0e-5_wp*Kref(i),nfail)
+        end do
+
+        call check("K rises with density at fixed T", &
+                   snow_thermal_conductivity(400.0_wp,253.0_wp,917.0_wp) .lt. &
+                   snow_thermal_conductivity(600.0_wp,253.0_wp,917.0_wp), nfail)
+        call check("K of dense firn falls with temperature (ice phase)", &
+                   snow_thermal_conductivity(800.0_wp,263.0_wp,917.0_wp) .lt. &
+                   snow_thermal_conductivity(800.0_wp,233.0_wp,917.0_wp), nfail)
+
+        return
+
+    end subroutine test_conductivity_calonne
+
+    ! =====================================================================
     ! Helpers
     ! =====================================================================
 
@@ -840,7 +891,7 @@ contains
         type(chion_const_class), intent(IN) :: c
         real(wp) :: K
 
-        K = snow_thermal_conductivity(rho,c%Ki)
+        K = snow_thermal_conductivity(rho,T,c%rho_i)
 
         return
 

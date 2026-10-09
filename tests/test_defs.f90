@@ -78,7 +78,6 @@ program test_defs
     call check_val("rho_s_a",         c%rho_s_a,        109.0_wp,       nfail)
     call check_val("rho_s_b",         c%rho_s_b,        6.0_wp,         nfail)
     call check_val("rho_s_c",         c%rho_s_c,        26.0_wp,        nfail)
-    call check_val("Ki",              c%Ki,             2.1_wp,         nfail)
     call check_val("ci",              c%ci,             2110.0_wp,      nfail)
     call check_val("cw",              c%cw,             4181.0_wp,      nfail)
     call check_val("Lm",              c%Lm,             334000.0_wp,    nfail)

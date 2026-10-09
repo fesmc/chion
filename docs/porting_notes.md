@@ -463,8 +463,10 @@ silently differed from the rest of the program.
 is part of the `legacy_chion` reference-reproduction switch. chion therefore still has two
 gravities, as before this change: 9.80665 in densification and `g` (9.81 in both shipped sets)
 in the SEMIX SEB. Universal constants with no
-`phys_const_class` counterpart (`Lv`, `cp_air`, `karman`, `R_dry`, `sigma_sb`, `Ki`) stay in
-`&chion_const`.
+`phys_const_class` counterpart (`Lv`, `cp_air`, `karman`, `R_dry`, `sigma_sb`) stay in
+`&chion_const`. (`Ki` was there too until the Calonne et al. 2019 conductivity, Chion.jl
+`49990e6`, made it dead; it was removed from `chion_const_class`, the API reader and
+`input/chion_defaults.nml`. A par file that still sets `Ki` is not read for it.)
 
 **Impact:**
 - Standalone: none. `input/chion_phys_const.nml` keeps Chion.jl's values (`rho_ice = 917`,

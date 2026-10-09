@@ -36,6 +36,10 @@ tag is the port itself, summarised rather than enumerated.
   resistances in series), `2KiKj/(Kj dzi + Ki dzj)`, with `beta = -dt/ci`
   (Chion.jl `81034fa`, `d0146e1`). Identical on uniform columns; changes
   default BESSI results where conductivity jumps between layers.
+- BESSI snow thermal conductivity: Calonne et al. (2019), density- and
+  temperature-dependent (Chion.jl `49990e6`), replacing `Ki*(rho/1000)^1.88`;
+  `Ki` removed from `&chion_const`. Changes default BESSI results (K +14% at
+  500, +23% at 917 kg m-3).
 - Layer merges mix density and temperature as `x1 + w2*(x2 - x1)`: equal
   values stay exact (two layers at T0 stay at T0). Round-off-level change (D31).
 - Shared physical constants (`rho_i`, `rho_w`, `ci`, `cw`, `Lm`, `grav`, `T0`)

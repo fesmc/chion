@@ -94,17 +94,40 @@ module snow_energy
 
 contains
 
-    pure function snow_thermal_conductivity(rho,Ki) result(K)
-        ! Chion.jl/src/processes/energy_flux.jl:40-41:  K = Ki*(rho*1e-3)^1.88
-        ! Note the exponent is applied to density in g cm-3, not kg m-3.
+    pure function snow_thermal_conductivity(rho,T,rho_i) result(K)
+        ! Calonne et al. (2019), Eq. (5); Chion.jl/src/processes/energy_flux.jl:40-59
+        ! (dev_nils 49990e6). A logistic blend, centred on 450 kg m-3, of a
+        ! snow regression (quadratic in rho) and a firn regression (linear,
+        ! reaching the ice value 2.107 at rho_i), each scaled by the
+        ! temperature dependence of its conducting phases: ice
+        ! k_ice(T) = 9.828 exp(-5.7e-3 T) and air
+        ! k_air(T) = 2.334e-3 T^1.5/(164.54 + T), relative to their reference
+        ! values 2.107 and 0.024 W m-1 K-1. The coefficients are the
+        ! paper's, carried verbatim; the ice density is the model's.
+        !
+        ! Evaluated in Julia's order and grouping.
 
         implicit none
 
         real(wp), intent(IN) :: rho          ! [kg m-3] layer density
-        real(wp), intent(IN) :: Ki           ! [W m-1 K-1] conductivity of ice
-        real(wp) :: K
+        real(wp), intent(IN) :: T            ! [K] layer temperature
+        real(wp), intent(IN) :: rho_i        ! [kg m-3] ice density
+        real(wp) :: K                        ! [W m-1 K-1]
 
-        K = Ki*(rho*1.0e-3_wp)**1.88_wp
+        ! Local variables
+        real(wp), parameter :: K_ICE_REF = 2.107_wp   ! [W m-1 K-1]
+        real(wp), parameter :: K_AIR_REF = 0.024_wp   ! [W m-1 K-1]
+        real(wp) :: transition, k_ice, k_air, k_snow, k_firn, snow_scale, firn_scale
+
+        transition = 1.0_wp/(1.0_wp + exp(-0.04_wp*(rho - 450.0_wp)))
+        k_ice      = 9.828_wp*exp(-5.7e-3_wp*T)
+        k_air      = 2.334e-3_wp*T**1.5_wp/safe_positive(164.54_wp + T)
+        k_snow     = K_AIR_REF - 1.23e-4_wp*rho + 2.5e-6_wp*(rho*rho)
+        k_firn     = K_ICE_REF + 3.618e-3_wp*(rho - rho_i)
+        snow_scale = k_ice*k_air/(K_ICE_REF*K_AIR_REF)
+        firn_scale = k_ice/K_ICE_REF
+
+        K = (1.0_wp - transition)*snow_scale*k_snow + transition*firn_scale*k_firn
 
         return
 
@@ -424,14 +447,16 @@ contains
         ! NOTE the surface layer thickness uses the SAFE-POSITIVE mass m1,
         ! while every other layer uses its raw mass (energy_flux.jl:433 vs 439).
         dz_prev = m1/safe_positive(density(1))
-        K_prev  = snow_thermal_conductivity(density(1),c%Ki)
+        ! Each layer's conductivity at its own start-of-step temperature; the
+        ! surface layer's is T^n, the linearization point (energy_flux.jl:557-569).
+        K_prev  = snow_thermal_conductivity(density(1),Tn,c%rho_i)
 
         rhs(1) = Tn + rhs_surf
 
         do k = 2, n
 
             dz_k = mass(k)/safe_positive(density(k))
-            K_k  = snow_thermal_conductivity(density(k),c%Ki)
+            K_k  = snow_thermal_conductivity(density(k),temperature(k),c%rho_i)
 
             G_k = interface_conductance(K_prev,dz_prev,K_k,dz_k)
 

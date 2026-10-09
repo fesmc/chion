@@ -95,7 +95,6 @@
     fresh_snow_density_scheme = "constant"  ! "constant" | "parameterized" (aliases: "bessi", "htessel")
 
     ! ## Thermal properties ##
-    Ki                        = 2.1         ! [W m-1 K-1] Thermal conductivity of ice
     Lv                        = 2.501e6     ! [J kg-1] Latent heat of vaporization
     cp_air                    = 1003.0      ! [J kg-1 K-1] Heat capacity of air
     latent_heat_flux_ratio    = 1.0         ! [1] Scaling of the turbulent latent flux
