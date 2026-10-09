@@ -113,13 +113,13 @@ Verify: unit test against hand-computed values at (ρ,T) = (300,253), (500,253),
 **WP11 — Phase-dependent latent heat; gradient-based vapour mass (BESSI turbulence).** `snow_vapor.f90`, `snow_surface_fluxes.f90:477-483`; bare-ice keeps L_v+L_m (as upstream).
 Verify: gate fully green at `27113b6` (with explicit `albedo=:dynamic`, `alpha_wet=0.70`, `turbulent_flux_scheme=:bessi`); BESSI closure tests pass (re-check defect-1 vapour closure — note the harness runs humidity-off, so add a humidity-on unit test).
 
-**WP12 — `turbulent_flux_scheme` flag split from `seb_scheme`.** Flags + parser; `seb_scheme` keeps longwave/`eps_ice`; `turbulent_flux_scheme = "bessi" | "semix"` where `semix` = our CLIMBER-X `snow_seb_semix.f90` (not Julia's, 1c.1).
+**WP12 — `turbulent_flux_scheme` flag split from `seb_scheme`. SUPERSEDED by C6/C7.** Flags + parser; `seb_scheme` keeps longwave/`eps_ice`; `turbulent_flux_scheme = "bessi" | "semix"` where `semix` = our CLIMBER-X `snow_seb_semix.f90` (not Julia's, 1c.1).
 Verify: all four combinations run; `seb_scheme=semix` (both) bit-id to current `semix`; `(bessi,bessi)` bit-id to current default.
 
 **WP13 — Elevation-dependent diurnal T amplitude.** Add `surface_height` to `chion_step_forcing_class` and pack it in `chion_model.f90:117`; params γ [K km⁻¹], z_ref, A_max in `bessi_par`/nml. Guard the missing-height case properly (no NaN, 1c.6). No new host field: yelmox already fills `forc%surface_height`.
 Verify: default bit-id; unit test of the clamp; diurnal stays out of the gate (harness note).
 
-**WP14 — Adopt upstream defaults (decided).** `albedo = "aging"`, `alpha_wet = 0.60`. **Exception:** `turbulent_flux_scheme` stays `"bessi"` — upstream's default `:semix` is Julia's modified scheme, which we are not porting yet (§1c.1, N3). Harness drops the albedo overrides but keeps `turbulent_flux_scheme=:bessi`. Also re-check test/par namelists that assumed the old defaults.
+**WP14 — Adopt upstream defaults. VOID: upstream 03bb445 reverted to dynamic albedo / `alpha_wet` 0.70; replaced by C11.** `albedo = "aging"`, `alpha_wet = 0.60`. **Exception:** `turbulent_flux_scheme` stays `"bessi"` — upstream's default `:semix` is Julia's modified scheme, which we are not porting yet (§1c.1, N3). Harness drops the albedo overrides but keeps `turbulent_flux_scheme=:bessi`. Also re-check test/par namelists that assumed the old defaults.
 Verify: gate green with Chion.jl defaults; record default-run deltas (10-yr column, ANT/GRL chion_grid) in CHANGELOG.
 
 **WP15 — Output/naming alignment.** Decided: ITM output takes Julia's names (`alb_s`, `smb`, `smbi`, `melt_net`, `smb_cum`, `melt_cum`, `runoff_cum`, `refreezing_cum`, …) and units, in `chion_io.f90` and `input/chion-variables-itm.md`. ITM's `smb` then means total SMB [mm w.e. d-1], unlike BESSI/PDD's ice-facing `smb` — document it. Write correct long_names (Julia labels the rates "Cumulative", 1c.7) and report that upstream. Fix stale dim-order comment `chion_io.f90:50-56`. Keep `dust_dep`/`alb_ice_host` Fortran names (host contract) and document the mapping.
@@ -127,7 +127,32 @@ Verify: `tests/test_io.f90`; yelmox build unaffected (names it reads unchanged).
 
 **WP16 — Docs.** `PLAN.md` header (new reference commit), `porting_notes.md` (new D-entries for WP2/5/9–11; D22/D24/D27 updates; upstream-defect status: 19, 20, 11, 24?, 26 closed), `pdd_defects.md`, CHANGELOG, `validation/README.md`. Draft the upstream issue list from §1c for Nils.
 
-### Stage C — chion-originated, coordinated with Nils
+### Stage C — reference = Chion.jl `main` `9ec6cc7` (= `03bb445`, "calibrated GrIS surface setup")
+
+Added 2026-10-09 after Nils merged `03bb445` to main (main == dev_nils). Full review:
+side-session-notes `chionjl-03bb445-review.md`. Stage B (WP8–WP11, WP13) finishes against `27113b6` first; WP12 is folded into C6/C7, WP14 into C11, WP17 into C12. Levante worktree: `/work/ba1442/robinson/Chion.jl-main`.
+
+- **C0** Harness against `9ec6cc7`, with pins reproducing chion's physics where options still exist (graybody LW, bessi SEB/turbulence, `ice_substrate_layers=0`, near-surface thicknesses off, diurnal off, albedo values). Expected red: the old surface formulation is gone upstream.
+- **C1** Non-switchable small fixes: fresh snow on bare ice takes air T in every new layer; vapour-mass clipping closed (our defect 1); wet-albedo relaxation `(1−r)^dt`; depth cap constant 22.5 m; NaN guards; drop namelist aliases (canonical `warren_wiscombe`).
+- **C2** Robin surface boundary: Tsrf = interface temperature via half-cell conductance `2K1/dz1`, no surface heat capacity, melt energy `Q(T0) − Gs(T0−T1)`, vapour at Tsrf. C1+C2 gate green together.
+- **C3** Ice substrate (`ice_substrate_layers`, default 5; 0.05 m doubling to 1.55 m; insulated base; one matrix with snow); bare ice carries cold content. chion: reset `ice_temperature` on column reset (Q7, deviation, N8); none on land columns `H_ice = 0` (Q6); old restarts init `min(t_srf, T0)` (Q8). Gated as its own configuration.
+- **C4** Fine near-surface layers (0.02/0.05/0.10/0.30 m, cap-down/fill-up remesh twice per step, 100 kg m-2 surface merge disabled), ported faithfully, gated. Remesh uses D31's exact mean (Q16).
+- **C4b** chion deviation: split/merge resumes on layer 5 (upstream accumulates everything below the fine layers in one layer up to the 22.5 m cap); reverted under `legacy_chion`; N7.
+- **C5** Cloud-proxy longwave `ε = 0.624 + 0.0032(Ta−T0) + 0.613n`, `n = 1 − SWD/(TOA·(0.85+0.075 z/km))`, internal TOA from lat/solar longitude/day; optional host `toa_shortwave` (Q5, N9); needs `surface_height` in step forcing (WP13).
+- **C6** `seb_scheme` = longwave only (`bessi` graybody | `semix`), turbulence separate (supersedes WP12).
+- **C7** Port Julia's bulk turbulence as `turbulent_flux_scheme = "semix"` (sensible factor, stable coefficient); chion's CLIMBER-X SEMIX surface scheme renamed `"climberx"` (Q2, reverses §4.5 / 1c.1 because the calibrated upstream defaults depend on it). chion fixes: bare-ice SEMIX latent uses Lv+Lm (Q12) and `R_dry` = 287.058 (Q13), both reverted under `legacy_chion`.
+- **C8** First gated diurnal configuration (8 substeps, 1 K cycle).
+- **C9** Prescribed melt forcing — deferred (Q9). `surface_smb` monthly output — skipped (Q10).
+- **C10** Output additions folded into WP15.
+- **C11** Adopt the full calibrated upstream default set (`alpha_ice` 0.40, `alpha_wet` 0.70, dynamic albedo, `seb=semix`, Julia SEMIX turbulence 2.5/40, 8 substeps with 1 K cycle, substrate 5, fine layers with C4b); harness then gates with Chion.jl defaults (+ legacy for chion deviations).
+- **C12** WP17 rework: snow cover from column SWE, not `mass(1)` (Q15 revises T2: fine layers pin `mass(1)` ~6 kg m-2); WP6b refresh shape `1 − exp(−S/S_ref)` (Q14 revises T11: linear is not substep-invariant, 66 % of a full refresh over 8 substeps).
+- **C13** Docs, CHANGELOG, list for Nils (N7–N10).
+
+Then: WP15 (outputs), WP18 (build/performance), WP19 (MAR/RACMO evaluation incl. `aging_snowfall_ref`), WP16 (docs), PR.
+
+Decisions Q1–Q16 (review recommendations, adopted autonomously 2026-10-09 under the user's instruction to take main as the reference and continue): all as recommended — see the review file.
+
+### Stage D — chion-originated, coordinated with Nils (reworked as C12)
 
 **WP17 — Thin-snow albedo in BESSI (PLAN ONLY; T1–T7 decided, T8–T9 open).**
 *Problem* (yelmox GRL-8KM, MAR forcing, `model=bessi`): the host spreads monthly precipitation over every day, and its smooth snow fraction gives trace snowfall even at +2 to +5 °C. BESSI treats any surface layer (`mass(1) > TOL_EMPTY_LAYER`) as full snow cover. `albedo_update` step 2 clamps the stored albedo into `[alpha_wet, alpha_dry]`, so a bare column (`alpha_ice`) jumps to ≥ 0.70 on the first trace of snow (`snow_albedo.f90:151-225`, bare test in `snow_bessi.f90:629-633, 822`). `alpha_ice` is almost never seen: a sweep of 0.2/0.3/0.4 gives identical melt (478 Gt/yr). With a near-step snow fraction (`sf_a=5`), melt is 818 vs 670 Gt/yr. Under ssp585 BESSI gives −0.149 m SLE by 2300 vs ITM's −0.344, and the ablation area does not grow. The upstream `:aging` scheme makes this worse: any snowfall > 0 resets the albedo to `alpha_dry`.
@@ -176,6 +201,7 @@ Order rationale: harness first so every physics WP has a gate; Stage A changes a
 - **N1** `max_lwc`: 0.05 (`385d452`) or 0.1 (restored inside `5b4fe49`)? chion keeps 0.1 meanwhile.
 - **N2** Gas constant: please use 8.31446261815324 (already `DEFAULT_UNIVERSAL_GAS_CONSTANT` in `constants.jl`) instead of the literal 8.314 in `densification.jl:10,151,174`.
 - **N3** `:semix` turbulence (now BESSI's default) is no longer CLIMBER-X SEMIX (§1c.1). Intended as a new scheme?
+- **N7** Fine layers: everything below the 4 fine layers accumulates in one layer up to the 22.5 m cap. **N8** substrate temperature not reset on column reset. **N9** internal fixed-orbit TOA vs host insolation (paleo). **N10** substep-invariant snowfall refresh.
 - **N5** Thin-snow albedo (WP17): BESSI has no partial snow cover, so `alpha_ice` is almost never seen under trace snowfall, and `:aging` resets to `alpha_dry` on any snowfall. Would Chion.jl adopt the same blend (T1–T7), so the two stay comparable?
 - **N4** Bugs in §1c: SEMIX albedo (1c.2), ITM D27 (1c.3), bare-column prescribed albedo (1c.4), rain double count (1c.5), NaN diurnal amplitude (1c.6), ITM output long_names (1c.7), stale tests/docs (1c.8), gravity 9.81 (1c.9).
 
