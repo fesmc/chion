@@ -806,12 +806,15 @@ contains
                    worst .le. 4.0_wp*epsilon(1.0_wp), nfail)
         write(*,"(a,g14.6)") "         worst relative difference = ", worst
 
-        ! (a) one forced step on a uniform column, against the old operator
+        ! (a) one forced step on a uniform column, against the old operator.
+        ! With Q_lin = 0 the Robin boundary delivers exactly F to row 1, the
+        ! old surface term, as long as the interface Ts = T1 + F dz/(2K) stays
+        ! below T0: F = 5 W m-2 keeps it ~5 K above the cell centre.
         call chion_const_init(c)
         call quiet_forcing(forc)
         c%eps_air  = 0.0_wp
         c%eps_snow = 0.0_wp
-        F          = 50.0_wp
+        F          = 5.0_wp
         forc%q_sh  = F
 
         mass = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
@@ -842,6 +845,8 @@ contains
         call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,0.0_wp, &
                               0.0_wp,0.0_wp,dt,res)
 
+        call check("uniform column: interface stays below T0 (no melt)", &
+                   .not. res%needs_melt, nfail)
         worst = maxval(abs(temperature(1:n) - t_ref))
         call check("uniform column: one step equals the arithmetic-form operator", &
                    worst .le. 64.0_wp*epsilon(1.0_wp)*250.0_wp, nfail)

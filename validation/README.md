@@ -175,6 +175,12 @@ humidity on also `sublimation` 2.1e-02 and `latent_heat_flux_sum` 1.2e-02 from
 record 1. The same runner against `27113b6` still passes every gate (the
 `03bb445` pins are feature-detected and absent there).
 
+**After C1–C2 (main `9ec6cc7`, same pins):** all gated fields pass. Worst
+0.47 ulp (`temperature`, `Tsrf`) in each BESSI configuration (dynamic, aging,
+humidity on); PDD ≤0.41 ulp, ITM ≤0.44 ulp. Not covered by the pins, so not
+gated yet: cloud-proxy longwave, ice substrate, fine near-surface layers,
+Julia SEMIX turbulence, diurnal substeps (Stage C3–C8).
+
 Reported, not gated:
 
 - **`wp = sp` costs** ~4e-06 relative worst case, first divergence typically
