@@ -21,6 +21,13 @@ program test_layers
 
     implicit none
 
+    ! Main-program variables are implicitly SAVE (F2008 5.3.16); stated
+    ! explicitly because ifx 2023.2 with -qopenmp otherwise hands the internal
+    ! procedures below (column_total, clear_column) a separate, all-zero copy of
+    ! the column arrays, at any -O level. Every conservation check then compared
+    ! 0 with 0, or failed. gfortran is unaffected.
+    save
+
     integer, parameter :: NMAX = 20
 
     type(chion_const_class) :: c

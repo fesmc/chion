@@ -918,6 +918,7 @@ contains
         real(wp) :: t_b(Ntot), t_s(Ntot)
         real(wp) :: t_srf_b, t_srf_s, dt, Tn, h_snow
         real(wp) :: lw_const, lw_lin, sw_abs, expect_const, expect_lin
+        real(wp) :: tol_wp
         integer  :: k
 
         write(*,*)
@@ -1004,11 +1005,14 @@ contains
         ! --- nothing below row 1 moves ----------------------------------
         ! With both turbulent fluxes prescribed AND the emissivities equal,
         ! neither scheme's coefficients are consulted and the longwave terms
-        ! coincide, so the whole solve must agree to the last bit.
+        ! coincide, so the whole solve must agree to round-off of wp.
         !
         ! eps_snow = 1 is what makes the longwave agree: it is the only value
         ! at which absorbing the downwelling flux with emissivity (semix) and
-        ! absorbing it in full (bessi) are the same operation.
+        ! absorbing it in full (bessi) are the same operation. Not to the bit:
+        ! the two branches evaluate it in a different order
+        ! (sigma*(eps_air*Ta^4 + 3*Tn^4) vs sigma*eps_air*Ta^4 + 3*sigma*Tn^4),
+        ! which at sp may round one ulp apart (ifx -O2 -fp-model precise does).
         forc%has_q_sh = .TRUE.
         forc%q_sh     = -12.0_wp
         forc%has_q_lh = .TRUE.
@@ -1027,10 +1031,18 @@ contains
         call snow_energy_flux(mass,density,t_b,t_srf_b,n,c,forc,0.75_wp, &
                               0.0_wp,0.0_wp,dt,res_b)
 
-        call check("prescribed fluxes make the two schemes identical", &
-                   all(t_s(1:n) .eq. t_b(1:n)) .and. t_srf_s .eq. t_srf_b .and. &
-                   res_s%surface_flux_constant .eq. res_b%surface_flux_constant .and. &
-                   res_s%surface_flux_linear .eq. res_b%surface_flux_linear, nfail)
+        tol_wp = 4.0_wp*epsilon(1.0_wp)
+        call check_val("prescribed fluxes: same q_const", res_s%surface_flux_constant, &
+                       res_b%surface_flux_constant, &
+                       tol_wp*abs(res_b%surface_flux_constant), nfail)
+        call check_val("prescribed fluxes: same q_lin", res_s%surface_flux_linear, &
+                       res_b%surface_flux_linear, &
+                       tol_wp*abs(res_b%surface_flux_linear), nfail)
+        call check_val("prescribed fluxes: same t_srf", t_srf_s, t_srf_b, &
+                       tol_wp*t_srf_b, nfail)
+        call check_val("prescribed fluxes: same column temperatures", &
+                       maxval(abs(t_s(1:n)-t_b(1:n))), 0.0_wp, &
+                       tol_wp*maxval(t_b(1:n)), nfail)
 
         return
 
