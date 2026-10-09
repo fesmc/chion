@@ -60,6 +60,7 @@ program chion_grid
     !       file_forcing   = "forcing.nc"
     !       name_x  = "x"   name_y = "y"   name_time = "time"
     !       name_t2m = "TT" name_sf = "SF" name_rf = "RF" name_swd = "SWD"
+    !                                      ! SWD: TOA insolation for ITM, surface for BESSI/PDD
     !       name_mask = "mask"  name_lat = "LAT"  name_zs = "SH"
     !       name_hice = "None"  name_pdds = "None" ! ITM: ice thickness [m], annual PDDs [K d]
     !       t2m_in_celsius     = .FALSE.   ! convert TT by +273.15
@@ -74,6 +75,7 @@ program chion_grid
     !       path_racmo     = "/path/to/racmo"  ! antarctica only (RACMO climatology root)
     !       n_years        = 50            ! annual cycles to repeat
     !       swd_source     = "file"        ! "file" | "transmissivity" | "transmissivity_seasonal"
+    !                                      ! (BESSI, PDD; ITM always takes the TOA insolation)
     !       trans_a        = 0.46          ! tau = trans_a + trans_b*z_srf (+ trans_c*tcc)
     !       trans_b        = 6.0e-5        ! [m-1]   trans_a/b: transmissivity* only
     !       trans_c        = 0.0           ! [1] cloud term, transmissivity_seasonal only
@@ -105,7 +107,7 @@ program chion_grid
     logical  :: t2m_in_celsius, precip_in_mmwe_day
 
     ! --- &ctrl : domain source --------------------------------------------
-    character(len=56)  :: domain, grid_name, swd_source
+    character(len=56)  :: domain, grid_name, swd_source, swd_use
     character(len=512) :: path_ice_data, path_insol, path_racmo
     integer  :: n_years
     real(wp) :: trans_a, trans_b, trans_c, H_ice_default
@@ -343,6 +345,16 @@ program chion_grid
     call chion_init(chn,path_par,ncol)
     call chion_init_state(chn)
 
+    ! The shortwave the model is driven with (domain source). ITM takes the
+    ! top-of-atmosphere insolation in shortwave_down and applies its own
+    ! transmissivity (snow_itm.f90, as smbpal; yelmox feeds it the same), so
+    ! it gets S_toa: every swd_source is a surface shortwave, which ITM would
+    ! attenuate a second time.
+    if (is_domain) then
+        swd_use = swd_source
+        if (trim(chn%par%model) .eq. "itm") swd_use = "toa"
+    end if
+
     ! chion_grid_class carries the mask as (ny,nx), the Chion.jl orientation;
     ! everything above is (nx,ny). Transposed once, here.
     allocate(maskT(ny,nx))
@@ -449,7 +461,7 @@ program chion_grid
     write(*,"(a,a)")      " forcing source: ", trim(forcing_source)
     if (is_domain) then
         write(*,"(a,a,a,a)") " domain / grid : ", trim(domain), " / ", trim(grid_name)
-        write(*,"(a,a)")     " swd source    : ", trim(swd_source)
+        write(*,"(a,a)")     " swd source    : ", trim(swd_use)
         write(*,"(a,i0)")    " years         : ", n_years
     else
         write(*,"(a,a)")     " forcing file  : ", trim(file_forcing)
@@ -493,7 +505,9 @@ program chion_grid
             call interp_monthly_to_day(md, rf_c,  doy, fday)
             chn%forc%rainfall_rate   = fday
 
-            select case(trim(swd_source))
+            select case(trim(swd_use))
+                case("toa")
+                    chn%forc%shortwave_down = S_toa_c(:,doy)
                 case("file")
                     call interp_monthly_to_day(md, swd_c, doy, fday)
                     chn%forc%shortwave_down = fday
