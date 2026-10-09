@@ -16,6 +16,10 @@ program test_energy
     !   7. The n <= 0 and mass(1) <= 0 early exits write nothing.
     !   8. seb_scheme = "semix": the surface row picks up SEMIX's f_sh and the
     !      ebal num_lh/denom_lh decomposition, and nothing below row 1 moves.
+    !   9. Harmonic interface conductance (Chion.jl 81034fa/d0146e1): equals
+    !      the former arithmetic form on a uniform column, coefficient and full
+    !      step; two layers of contrasting conductivity carry the analytic
+    !      series-resistance steady flux.
 
     use chion_defs,   only : wp, wp_acc, chion_const_class, chion_step_forcing_class, &
                              chion_const_init, CHION_SEB_BESSI, CHION_SEB_SEMIX
@@ -46,6 +50,7 @@ program test_energy
     call test_single_layer_shortcut(nfail)
     call test_early_exit(nfail)
     call test_semix_surface_row(nfail)
+    call test_interface_conductance(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -252,9 +257,9 @@ contains
         ! flux crossing interface k carries exactly the heating of everything
         ! below it:
         !     q_k = F*(1 - M_k/M_tot),      M_k = sum_{j<=k} m_j.
-        ! The assembled stencil makes the interface flux 2*G_k*(T_k - T_k+1),
+        ! The assembled stencil makes the interface flux G_k*(T_k - T_k+1),
         ! so the analytic temperature drops are
-        !     T_k - T_(k+1) = q_k/(2*G_k) = F*(1 - k/n)*dz/K       (uniform column)
+        !     T_k - T_(k+1) = q_k/G_k = F*(1 - k/n)*dz/K           (uniform column)
         ! i.e. the conductive flux is exactly linear in depth and the drops
         ! decrease linearly with depth. This is the strongest analytic
         ! statement available for a zero-flux-bottom column: a genuinely
@@ -273,7 +278,7 @@ contains
         type(snow_energy_result_class) :: res
 
         real(wp) :: mass(Ntot), density(Ntot), temperature(Ntot)
-        real(wp) :: t_srf, dt, F, m_layer, rho, dz, K_cond, G_face
+        real(wp) :: t_srf, dt, F, m_layer, rho, dz, G_face
         real(wp) :: drop, drop_expect, worst
         integer  :: k, step
 
@@ -317,13 +322,13 @@ contains
         call check("no melt reached (stays well below T0)", .not. res%needs_melt, nfail)
 
         dz = m_layer/rho
-        K_cond = c%Ki*(rho*1.0e-3_wp)**1.88_wp
-        G_face = (K_cond*dz + K_cond*dz)/((dz + dz)**2)      ! = K/(2 dz)
 
         worst = 0.0_wp
         do k = 1, n-1
+            G_face      = interface_conductance(conductivity(rho,temperature(k),c),dz, &
+                                               conductivity(rho,temperature(k+1),c),dz)
             drop        = temperature(k) - temperature(k+1)
-            drop_expect = F*(1.0_wp - real(k,wp)/real(n,wp))/(2.0_wp*G_face)
+            drop_expect = F*(1.0_wp - real(k,wp)/real(n,wp))/G_face
             worst       = max(worst,abs(drop-drop_expect)/abs(drop_expect))
             write(*,"(a,i2,a,g14.6,a,g14.6)") "         drop across interface ", k, &
                                               " = ", drop, "  analytic ", drop_expect
@@ -685,8 +690,161 @@ contains
     end subroutine test_early_exit
 
     ! =====================================================================
+    ! 9. Harmonic interface conductance
+    ! =====================================================================
+
+    subroutine test_interface_conductance(nfail)
+        ! (a) On a uniform column (K, dz) the harmonic conductance with
+        !     beta = -dt/ci is the former arithmetic form with beta = -2 dt/ci:
+        !     G = K/dz = 2*(K dz + K dz)/(2 dz)^2. Checked on the coefficient
+        !     and on a full forced step against the old operator assembled
+        !     here and solved densely.
+        ! (b) Two layers of very different conductivity under a constant
+        !     surface flux F and a zero-flux bottom: in the quasi-steady state
+        !     the interface carries q = F*m2/(m1+m2), and the two half-layer
+        !     resistances in series give
+        !         T1 - T2 = q*(dz1/(2 K1) + dz2/(2 K2)).
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        integer, parameter :: n = 4
+
+        type(chion_const_class)        :: c
+        type(chion_step_forcing_class) :: forc
+        type(snow_energy_result_class) :: res
+
+        real(wp) :: mass(Ntot), density(Ntot), temperature(Ntot)
+        real(wp) :: A(n,n), b(n), t_ref(n)
+        real(wp) :: K, dz, G_old, G_new, beta, lambda, F, t_srf, dt, worst
+        real(wp) :: K1, K2, dz1, dz2, q, drop, drop_expect
+        integer  :: i, j, k, step
+
+        real(wp), parameter :: Ks(3)  = [0.05_wp, 0.3_wp, 2.1_wp]
+        real(wp), parameter :: dzs(3) = [0.02_wp, 0.4_wp, 3.0_wp]
+
+        write(*,*)
+        write(*,"(a)") "--- Harmonic interface conductance ---"
+
+        ! (a) coefficient
+        worst = 0.0_wp
+        do i = 1, size(Ks)
+            do j = 1, size(dzs)
+                G_old = 2.0_wp*(Ks(i)*dzs(j) + Ks(i)*dzs(j))/((dzs(j) + dzs(j))**2)
+                G_new = interface_conductance(Ks(i),dzs(j),Ks(i),dzs(j))
+                worst = max(worst,abs(G_new - G_old)/G_old)
+            end do
+        end do
+        call check("uniform: harmonic G == 2 x arithmetic G to round-off (4 eps)", &
+                   worst .le. 4.0_wp*epsilon(1.0_wp), nfail)
+        write(*,"(a,g14.6)") "         worst relative difference = ", worst
+
+        ! (a) one forced step on a uniform column, against the old operator
+        call chion_const_init(c)
+        call quiet_forcing(forc)
+        c%eps_air  = 0.0_wp
+        c%eps_snow = 0.0_wp
+        F          = 50.0_wp
+        forc%q_sh  = F
+
+        mass = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        mass(1:n)        = 100.0_wp
+        density(1:n)     = 350.0_wp
+        temperature(1:n) = 250.0_wp
+        t_srf = 250.0_wp
+        dt    = 86400.0_wp
+
+        K      = conductivity(350.0_wp,250.0_wp,c)
+        dz     = 100.0_wp/350.0_wp
+        G_old  = (K*dz + K*dz)/((dz + dz)**2)
+        beta   = -2.0_wp*dt/c%ci/100.0_wp
+        lambda = dt/c%ci/100.0_wp
+
+        A = 0.0_wp
+        do k = 1, n-1
+            A(k,k+1) = beta*G_old
+            A(k+1,k) = beta*G_old
+        end do
+        do k = 1, n
+            A(k,k) = 1.0_wp - sum(A(k,:))
+        end do
+        b    = 250.0_wp
+        b(1) = b(1) + lambda*F
+        call dense_solve(A,b,t_ref,n)
+
+        call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,0.0_wp, &
+                              0.0_wp,0.0_wp,dt,res)
+
+        worst = maxval(abs(temperature(1:n) - t_ref))
+        call check("uniform column: one step equals the arithmetic-form operator", &
+                   worst .le. 64.0_wp*epsilon(1.0_wp)*250.0_wp, nfail)
+        write(*,"(a,g14.6,a,g14.6)") "         max |dT| = ", worst, &
+                                     "   surface warming = ", t_ref(1) - 250.0_wp
+
+        ! (b) two layers, K contrast ~8
+        call chion_const_init(c)
+        call quiet_forcing(forc)
+        c%eps_air  = 0.0_wp
+        c%eps_snow = 0.0_wp
+        F          = 0.3_wp
+        forc%q_sh  = F
+
+        mass = 0.0_wp; density = 0.0_wp; temperature = 0.0_wp
+        mass(1:2)        = 250.0_wp
+        density(1)       = 200.0_wp
+        density(2)       = 600.0_wp
+        temperature(1:2) = 230.0_wp
+        t_srf = 230.0_wp
+
+        do step = 1, 1200
+            call snow_energy_flux(mass,density,temperature,t_srf,2,c,forc,0.0_wp, &
+                                  0.0_wp,0.0_wp,dt,res)
+        end do
+        call check("two layers: no melt reached", .not. res%needs_melt, nfail)
+
+        K1  = conductivity(density(1),temperature(1),c)
+        K2  = conductivity(density(2),temperature(2),c)
+        dz1 = mass(1)/density(1)
+        dz2 = mass(2)/density(2)
+
+        G_new = interface_conductance(K1,dz1,K2,dz2)
+        call check("two layers: G == 1/(dz1/(2 K1) + dz2/(2 K2)) to round-off (4 eps)", &
+                   abs(G_new*(dz1/(2.0_wp*K1) + dz2/(2.0_wp*K2)) - 1.0_wp) &
+                   .le. 4.0_wp*epsilon(1.0_wp), nfail)
+
+        q           = F*mass(2)/(mass(1) + mass(2))
+        drop        = temperature(1) - temperature(2)
+        drop_expect = q*(dz1/(2.0_wp*K1) + dz2/(2.0_wp*K2))
+        call check("two layers: steady drop is the series-resistance flux (1e-2 rel)", &
+                   abs(drop - drop_expect)/drop_expect .lt. 1.0e-2_wp, nfail)
+        write(*,"(a,g14.6,a,g14.6,a,g14.6)") "         drop = ", drop, "  analytic ", &
+                                             drop_expect, "  K2/K1 = ", K2/K1
+
+        return
+
+    end subroutine test_interface_conductance
+
+    ! =====================================================================
     ! Helpers
     ! =====================================================================
+
+    function conductivity(rho,T,c) result(K)
+        ! The layer conductivity snow_energy_flux uses for a layer of density
+        ! rho at temperature T.
+
+        implicit none
+
+        real(wp),                intent(IN) :: rho, T
+        type(chion_const_class), intent(IN) :: c
+        real(wp) :: K
+
+        K = snow_thermal_conductivity(rho,c%Ki)
+
+        return
+
+    end function conductivity
 
     subroutine quiet_forcing(forc)
         ! A forcing with every optional flux prescribed and zero, and no

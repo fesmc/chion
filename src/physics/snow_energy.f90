@@ -111,15 +111,16 @@ contains
     end function snow_thermal_conductivity
 
     pure function interface_conductance(K_i,dz_i,K_j,dz_j) result(G)
-        ! Chion.jl/src/processes/energy_flux.jl:104-105:
-        !     G = (K_i*dz_i + K_j*dz_j) / safe_positive((dz_i + dz_j)^2)
+        ! Chion.jl/src/processes/energy_flux.jl:179-184 (dev_nils 81034fa,
+        ! d0146e1): the thermal resistances of the two half layers in series,
+        !     G = 1/(dz_i/(2 K_i) + dz_j/(2 K_j)) = 2 K_i K_j/(K_j dz_i + K_i dz_j),
+        ! the physical conductance between the two layer centres, so the
+        ! interface flux is G*(T_i - T_j) (beta_scale carries no factor 2).
+        ! For a uniform column (K, dz) this is K/dz, the same centre-to-centre
+        ! flux as the arithmetic form it replaces; across a sharp K contrast
+        ! the poorer conductor now controls the flux.
         !
-        ! NOTE the denominator is the SQUARE of the summed thickness. The
-        ! 1/(dz_i+dz_j) that turns a conductivity into a conductance is already
-        ! contained in it -- do not add another division by dz. For a uniform
-        ! column (K, dz) this gives G = K/(2 dz), and the assembled interface
-        ! flux 2*G*(T_i - T_j) = (K/dz)*(T_i - T_j) is the correct
-        ! centre-to-centre conductive flux.
+        ! Evaluated as Julia does, ((2 K_i) K_j)/(...).
 
         implicit none
 
@@ -129,7 +130,7 @@ contains
         real(wp), intent(IN) :: dz_j         ! [m] thickness, layer j
         real(wp) :: G                        ! [W m-2 K-1]
 
-        G = (K_i*dz_i + K_j*dz_j)/safe_positive((dz_i + dz_j)**2)
+        G = 2.0_wp*K_i*K_j/safe_positive(K_j*dz_i + K_i*dz_j)
 
         return
 
@@ -415,7 +416,10 @@ contains
         upper = 0.0_wp
         rhs   = 0.0_wp
 
-        beta_scale = -2.0_wp*dt_seconds/c%ci
+        ! -dt G/(ci m) off the diagonal: G is the full centre-to-centre
+        ! conductance (energy_flux.jl:586-591). The factor 2 of the former
+        ! arithmetic half-conductance is gone with it.
+        beta_scale = -dt_seconds/c%ci
 
         ! NOTE the surface layer thickness uses the SAFE-POSITIVE mass m1,
         ! while every other layer uses its raw mass (energy_flux.jl:433 vs 439).

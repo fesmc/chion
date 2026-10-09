@@ -32,6 +32,10 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- BESSI heat conduction: interface conductance is harmonic (half-layer
+  resistances in series), `2KiKj/(Kj dzi + Ki dzj)`, with `beta = -dt/ci`
+  (Chion.jl `81034fa`, `d0146e1`). Identical on uniform columns; changes
+  default BESSI results where conductivity jumps between layers.
 - Layer merges mix density and temperature as `x1 + w2*(x2 - x1)`: equal
   values stay exact (two layers at T0 stay at T0). Round-off-level change (D31).
 - Shared physical constants (`rho_i`, `rho_w`, `ci`, `cw`, `Lm`, `grav`, `T0`)
