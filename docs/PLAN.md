@@ -6,6 +6,13 @@ FESM-style static library `libchion.a` with a clean public API and pluggable sno
 > **This plan supersedes an earlier draft** that was written against the stale `alex-dev`
 > branch. Everything below is based on `main`.
 
+> **Reference now: Chion.jl `main` `9ec6cc7`** (= `03bb445`, 2026-10). This plan describes the
+> port of `a9ec154` (v0.2.0); the sync to `9ec6cc7` (Calonne conductivity, harmonic
+> conductance, Robin surface boundary, ice substrate, fine near-surface layers, cloud-proxy
+> longwave, Julia SEMIX turbulence, the calibrated default set) is
+> [PLAN_dev_nils.md](PLAN_dev_nils.md), its deviations `porting_notes.md` D29-D42. Where
+> the text below describes Chion.jl's physics or defaults, the sync supersedes it.
+
 ## Reference material
 
 | Source | Role |

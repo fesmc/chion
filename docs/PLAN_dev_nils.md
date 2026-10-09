@@ -1,6 +1,52 @@
 # Plan: sync chion with Chion.jl `dev_nils`
 
-Status: decisions recorded (§4), nothing implemented. Written 2026-10-09.
+Status: **done** on branch `sync-dev-nils` (2026-10-09): reference Chion.jl `main` `9ec6cc7`,
+validation gate green, all unit tests pass. Deferred: WP7 (`refreezing_correction`), C9
+(prescribed melt); skipped: `surface_smb` (Q10). Issues for Nils: `upstream_chionjl_issues.md`.
+Written 2026-10-09.
+
+| item | commits | status |
+|---|---|---|
+| WP0 harness vs dev_nils | `61dfa88`, `0c496c0` | done |
+| WP1 legacy gas constant 8.314 | `1db0c31` | done |
+| WP2 bare-ice rain once (D29) | `c29be31` | done |
+| WP-T fpsafe test builds | `ab81bea`, `ef7a293`, `885de4f`, `56dc227` | done |
+| WP3 PDD `simple`, gated | `b51ecbb` | done |
+| WP4 ITM gated, D27 legacy | `5129763`, `5eaf17f`, `a86dc54`, `864e46a` | done |
+| WP5 aging x dt | `d1b1daf`, `7956e8a` | done |
+| WP6 `:aging` albedo | `6ff0629`, `2411c8e` | done |
+| WP6b proportional refresh (D30) | `5d9a8b8`; exponential in C12 | done |
+| D31 exact merge mean | `a0128db`, `736928e` | done |
+| WP7 `refreezing_correction` | — | **deferred** |
+| WP8 harness vs `27113b6` | `a0f84a7`, `1e3ff66` | done |
+| WP9 harmonic conductance | `9fa33af`, `2a2568a` | done |
+| WP10 Calonne, `Ki` removed | `ffcf812` | done |
+| WP11 phase-dependent latent heat | `40f7163`, `446aa6e` | done |
+| WP12 flag split | — | superseded by C6/C7 |
+| WP13 diurnal amplitude gradient | `d305fa3` | done |
+| WP14 upstream defaults | — | void, replaced by C11 |
+| WP15 output names (D42) | `d768f09` | done |
+| WP16 docs | this commit | done |
+| WP17 thin-snow albedo | as C12 | done |
+| WP18 build, performance | `a00ee7c`, `49e13e3`, `936dd04`, `2623b24` | done |
+| WP19 MAR/RACMO evaluation | `97d6e02`, `3204bd1` | done |
+| C0 harness vs `9ec6cc7` | `c5224be`, `2b638b3` | done |
+| C1 small fixes | `2b3c5f7`, `35121f1` | done |
+| C2 Robin boundary | `eb9a575`, `1ca3a5c` | done |
+| C3 ice substrate (D34) | `3cd011d` | done |
+| C4 fine layers (D36) | `eb7e5eb` | done |
+| C4b split below fine layers (D32) | `7230a65` | done |
+| C5 cloud proxy, host TOA (D33) | `bbe5972` | done |
+| C6 `seb_scheme` = longwave, `climberx` (D37) | `e82c76d` | done |
+| C7 Julia SEMIX turbulence (D35, D38) | `22a639e` | done |
+| C8 diurnal configuration (D39) | `96bdb4e`, `367a595` | done |
+| C9 prescribed melt | — | **deferred** (Q9) |
+| C10 output additions | in WP15 | done (`surface_smb` skipped, Q10) |
+| C11 calibrated default set | `5dc04c3`, `bb41f24`, `be71e00`, `59141f9` | done |
+| C12 WP17 rework (D30, D40, D41) | `3739161`, `ce8a68a`, `4351f87` | done |
+| C13 docs, list for Nils | this commit | done |
+
+Plan-only commits: `a85cdd0`, `716ade6`, `63fc613`, `4a507c2`.
 
 ## 0. Baseline
 
@@ -54,6 +100,8 @@ plus `aba07a0` (type-stability refactor, bit-neutral) and `6fca5d7` (PDD honours
 4. `f2c46d0`: with prescribed albedo, a bare column keeps a stale albedo (Fortran applies it, `snow_bessi.f90:616-618`). Liquid-water guards removed (differs only for ≤1e-12 kg water) — keep Fortran's guards. Diurnal wrapper with `n_substeps==1` returns 0 SW at polar night.
 5. `8fff530` double-count window: for `0 < mass(1) ≤ EPS_EMPTY_LAYER` rain is already in `mass_w(1)` and is added to runoff again.
 6. `d0146e1`: `diurnal_temperature_cycle=true` with missing `surface_height` (NaN) gives NaN amplitude even with γ=0. **Fixed upstream in `03bb445`; chion WP13 matches (non-finite height = no excess).**
+
+Status at `9ec6cc7`: 1 superseded (chion ports Julia's turbulence as `semix`, CLIMBER-X as `climberx`, C7/D37); 4 fixed on the substrate path only; 6 fixed; 8 partly (aging τ test); 2, 3, 5, 7, 9 open. All in `upstream_chionjl_issues.md`.
 7. Output: ITM `melt/runoff/refreezing` written as rates but labelled "Cumulative"; `smb` name clashes with chion's ice-facing `smb`.
 8. Stale upstream tests/docs: `test_case_api.jl:108,110` (`alpha_wet==0.70`, τ_melt 5), `albedo.md:85,105`.
 9. Gravity 9.81 in densification (D25) still upstream.
@@ -183,15 +231,15 @@ Order rationale: harness first so every physics WP has a gate; Stage A changes a
 ## 3. yelmox impact
 
 - ITM (current default): no result change from this plan. WP4 adds verification only; WP15 may rename ITM output variables (yelmox does not read chion output files).
-- BESSI host (next step): WP13 needs no new host field. yelmox never sets `solar_longitude_deg` (stays 0) — must be fixed before BESSI with diurnal SW or SEMIX `coszm`. Upstream drives SEMIX with 10 m wind; our semix uses z_sfl = 100 m.
+- BESSI host (next step): WP13 needs no new host field. yelmox sets `solar_longitude_deg` (Chion.jl's calendar formula on its 360-day year). It must fill `forc%H_ice` for BESSI (D34, D41) and should pass `toa_shortwave` (D33); full hand-off list in the side-session notes (`chion-sync-yelmox-handoff.md`).
 
 ## 4. Decisions (user, 2026-10-09)
 
 1. Reference: `dev_nils` tip; report anything on `main` that dev_nils lacks (§2 tracking rule).
-2. Adopt upstream defaults (WP14), except `turbulent_flux_scheme` (see 5).
+2. Adopt upstream defaults (WP14), except `turbulent_flux_scheme` (see 5). Superseded by C11 (Q3): the full calibrated set.
 3. Albedo aging × dt: adopt (WP5).
 4. Calonne + harmonic: replace outright, no switch (WP9, WP10).
-5. Julia's modified SEMIX turbulence: not ported for now (N3).
+5. Julia's modified SEMIX turbulence: not ported for now (N3). Reversed by C7 (Q2): ported as `semix`, CLIMBER-X as `climberx`.
 6. `max_lwc`: keep **0.1** (current value on both sides at dev_nils tip); ask Nils (N1).
 7. `refreezing_correction`: wait (WP7 deferred).
 8. PDD default `pdd_method = "simple"` (WP3).
@@ -202,6 +250,8 @@ Order rationale: harness first so every physics WP has a gate; Stage A changes a
 13. ITM output names: Julia's (WP15).
 
 ## 5. For Nils (to send in parallel)
+
+Consolidated, with file:function references at `9ec6cc7`: `upstream_chionjl_issues.md`.
 
 - **N1** `max_lwc`: 0.05 (`385d452`) or 0.1 (restored inside `5b4fe49`)? chion keeps 0.1 meanwhile.
 - **N2** Gas constant: please use 8.31446261815324 (already `DEFAULT_UNIVERSAL_GAS_CONSTANT` in `constants.jl`) instead of the literal 8.314 in `densification.jl:10,151,174`.

@@ -49,9 +49,9 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 
 | target | reference | authority |
 |---|---|---|
-| BESSI | Chion.jl | authoritative — tight tolerances; four configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate, and `:dynamic` with the cloud-proxy longwave (`longwave_scheme = :cloud_proxy`, `03bb445`; chion's internal TOA), `seb_scheme = :semix` with BESSI turbulence, Chion.jl's surface scheme `seb_scheme = turbulent_flux_scheme = :semix` (humidity on; alone and with the substrate), diurnal substeps at Chion.jl's calibrated `03bb445` set (8 substeps, 1 K cycle), and each model's own defaults (the calibrated set as a package; humidity on, `HI = 1000 m`, default columns plus `bare_ice`) |
+| BESSI | Chion.jl | authoritative — tight tolerances; twelve configurations: `albedo = :dynamic`, `:aging` (`6d06af6`, timescales set explicitly, plus `snow_age_days`), `:dynamic` with humidity on (uniform `rh = 0.7`, sea-level pressure; exercises the latent flux and vapour mass of `d0146e1`), `:dynamic` with the thermal ice substrate (`ice_substrate_layers = 5`, `03bb445`; uniform `HI = 1000 m` for chion, D34; plus a dry `bare_ice` column), `:dynamic` with fine near-surface layers (`(0.02, 0.05, 0.10, 0.30)` m, `03bb445`), alone and with the substrate, and `:dynamic` with the cloud-proxy longwave (`longwave_scheme = :cloud_proxy`, `03bb445`; chion's internal TOA), `seb_scheme = :semix` with BESSI turbulence, Chion.jl's surface scheme `seb_scheme = turbulent_flux_scheme = :semix` (humidity on; alone and with the substrate), diurnal substeps at Chion.jl's calibrated `03bb445` set (8 substeps, 1 K cycle), and each model's own defaults (the calibrated set as a package; humidity on, `HI = 1000 m`, default columns plus `bare_ice`) |
 | PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
-| ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 8 written fields (D27 reverted). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
+| ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 14 written fields by name (D27 reverted; D42). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
 
 One forcing file drives both models per target, so a difference is attributable
 to the models rather than to two generators drifting apart.
@@ -71,7 +71,7 @@ validates against.
 |---|---|---|
 | chion dp+legacy vs Chion.jl | is the **port** faithful? | **yes** |
 | chion sp vs chion dp | what does `wp = sp` cost? | reported |
-| chion dp vs chion dp+legacy | what does the gas-constant correction do? | reported |
+| chion dp vs chion dp+legacy | what do chion's corrections (D24's list) do? | reported |
 
 `legacy_chion=1` reverts chion's deliberate physics corrections to Chion.jl's
 values (D24). It exists because "is the port faithful?" and "is the reference
@@ -229,14 +229,24 @@ fine thickness on every layered step, bare ice below T0 over the substrate,
 configuration green and unchanged: D30, D40 and D41 are reverted under
 `legacy_chion` (binary aging refresh, no blend, bare ice under every column).
 
+**Final (sync head, main `9ec6cc7`; WP15, WP18, WP19 included):** all 45
+acceptance tests pass (15 per `fpsafe` build: sp, dp, dp+legacy); every gated
+field passes. Worst per BESSI configuration 0.47 ulp (`Tsrf`; `melt` in semix
+turbulence + substrate), 0.48 ulp with fine layers (`bulk_density`) and the
+cloud proxy (`refreezing`); PDD 0.37 (`simple`) and 0.41 ulp (`pism`,
+`snowpack_swe`); ITM, all 14 fields by name, 0.48 ulp (`runoff`). PDD closure
+1.4e-15 / 2.3e-15 at dp, 9.8e-08 / 3.8e-07 at sp.
+
 Reported, not gated:
 
-- **`wp = sp` costs** ~4e-06 relative worst case, first divergence typically
-  within a few records.
-- **The gas-constant correction** moves the density-driven fields by 2-3%
-  against Chion.jl's `8.13`. Integrated over a 10-year column run it is <1% on
-  every cumulative quantity, because densification self-limits against the
-  `(rho_i - rho)` gap and the `rho_i` cap.
+- **`wp = sp` costs** up to ~2e-05 relative (`albedo`, `mass_w`; ~4e-06 for
+  most fields), first divergence typically within a few records.
+- **chion's corrections** (dp vs dp+legacy, the block labelled "legacy
+  constants"): since D40/D41 this is dominated by the land columns (the
+  default-forcing columns carry no `HI`, so chion treats them as land and
+  ablates no ice: `smb_ice`, `melt`, `runoff` O(1)), not by R and g. The
+  gas-constant correction alone (D22) is <1% on every cumulative quantity of a
+  10-year column run.
 
 ## Coverage is asserted, not assumed
 
@@ -266,16 +276,17 @@ split a layer, and `mass_base` was identically zero on both sides — so its
 
 ## Things the harness has to work around
 
-- **Axis order** (D14). Chion.jl declares `("t","x","y")`; chion writes
-  `(time,yc,xc)`. `read_canonical` permutes by dimension *name*, so neither
-  writer's order is hard-coded.
+- **Dimension names** (D14). Chion.jl declares `("x","y","t")` (in the file
+  `var(t,y,x)`; `(y,x,t)` before `ecd4992`); chion writes `(time,yc,xc)`.
+  `read_canonical` permutes by dimension *name*, so neither writer's order is
+  hard-coded.
 - **`MV` vs NaN** (D15). Both map to `missing`, and the two files must agree
   about *which* cells are missing before any value is compared.
 - **Record alignment.** chion writes an initial pre-step record; Chion.jl does
   not. chion record k+1 ↔ Chion.jl record k, asserted on counts.
-- **Chion.jl writes no time coordinate variable** — only a bare `t` dimension,
-  so its output cannot be interpreted without knowing the forcing that produced
-  it. Alignment is checked structurally as a result.
+- **Chion.jl wrote no time coordinate variable** before `ecd4992` (it writes `t`
+  in days since 1970 now). Alignment is checked structurally, which works for
+  every reference commit.
 - **Chion.jl's `load_forcing_file` reads no ITM ice thickness or annual PDDs.**
   The ITM forcing carries them as `HI` / `PDDA`; `run_julia_itm` merges them
   into the loaded forcing, and `chion_grid.x` reads them via `name_hice` /
@@ -284,9 +295,10 @@ split a layer, and `mass_base` was identically zero on both sides — so its
   the step's rates and the `*_cum` accumulators, are compared by name
   (`ITM_VARS`). chion corrects the units and long names of the rates
   `melt`/`runoff`/`refreezing`, which Chion.jl labels as cumulative.
-- **Chion.jl cannot read a CF time axis.** The forcing file carries the time
-  axis twice — CF numeric for `chion_grid.x`, and YYYY/MM/DD/HH for Chion.jl.
-  See the note in `forcing.jl` and the upstream defect list.
+- **Chion.jl could not read a CF time axis** before `9ec6cc7` (upstream defect
+  24, fixed there). The forcing file carries the time axis twice — CF numeric
+  for `chion_grid.x`, and YYYY/MM/DD/HH, which every Chion.jl reads. See the
+  note in `forcing.jl`.
 
 ## Not covered
 

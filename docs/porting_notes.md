@@ -3,6 +3,12 @@
 Every intentional deviation from `Chion.jl` (branch `main`), and every Julia quirk
 deliberately preserved. Required reading before changing any physics module.
 
+Reference: Chion.jl `main` `9ec6cc7` (= `03bb445`), synced in `docs/PLAN_dev_nils.md`
+(D29-D42). The port base was `a9ec154` (D1-D28 were written against it; their text is
+updated where the sync changed them). Physics deviations are reverted under `legacy_chion=1`
+(D24) where they would otherwise fail the validation gate; each entry says whether it is.
+Issues for Chion.jl: `docs/upstream_chionjl_issues.md`.
+
 Policy for what may and may not be cleaned up: `docs/PLAN.md` section 4.1.
 The full list of traps: `docs/PLAN.md` section 5.
 
@@ -268,6 +274,93 @@ and never split.
 
 ## WP16 — validation harness
 
+### D19. `wp` is selectable at compile time (`precision=sp|dp`)
+**What:** `wp` is no longer fixed at `sp`. `make ... precision=dp` defines `CHION_DP`, and
+`src/chion_defs.F90` (renamed from `.f90`; the capital `F` makes both gfortran and ifort
+preprocess it with no `-cpp`/`-fpp` flag and no configme change) selects `wp = dp`. `wp_acc`
+stays `dp` in **both** builds — the accumulator argument in D1 is about summation over
+10^4–10^5 steps, not about the precision of the state, and it holds regardless of `wp`.
+
+**Why:** WP16 compares chion against Chion.jl, which is `Float64` throughout. With `wp = sp`
+the two models share discrete branch points (`mass_max` split, `mass_min` merge,
+`surface_has_snow`, the melt gate) but not the round-off that decides which side of them a
+given step lands on, so a *correct* port diverges by O(1) in layer structure once any branch
+fires a step apart. Validating at `wp = dp` removes that confound: a residual is then
+attributable to the port rather than to the precision. Running both builds against the same
+Chion.jl reference additionally turns the sp-vs-dp difference into a measured number, which
+was previously assumed (PLAN.md §3.1 measured expressions in isolation, never end-to-end).
+
+**Impact:**
+- `sp` keeps the unsuffixed `libchion/include` and `libchion/bin`, so the artifact paths in
+  `.configme/manifest.toml` and `.runme/info.json` are unchanged and `dp` is purely additive
+  (`libchion/include-dp`, `libchion/bin-dp`). The two builds coexist without `make clean`.
+- Pre-existing and *not* addressed here: `openmp=0` and `openmp=1` still share the sp
+  directories, so switching openmp does still need a clean. Only fesm-utils' include dir is
+  swapped by that flag.
+- chion declares no generic interfaces, so `wp == wp_acc` in a dp build creates no ambiguous
+  overloads internally. It does change ncio resolution: `nc_write` selects its **double**
+  variant for `wp` arrays, so a dp build writes double-precision NetCDF variables. Any reader
+  must not assume float.
+- All 13 acceptance tests pass in all six configurations (sp/dp × `-O2`/`debug=1`/`openmp=1`).
+- Tests that assert precision policy must now assert it *per build*. `test_defs` previously
+  hard-coded `wp == sp`, which does not verify the policy — it forbids one of two supported
+  builds.
+
+### D20. `test_itm`'s smbpal reference is typed `_wp`, not copied verbatim
+**What:** the reference implementation inside `tests/test_itm.f90` was a byte-faithful copy of
+`smbpal/src/smb_itm.f90`, deliberately retaining smbpal's untyped and dp literals (`0.d0`,
+`1.d0`, `1d3`, `0d0`, and a bare `273.15`). Every floating literal is now typed `_wp`.
+
+**Why:** the verbatim form silently tested a *different model* under `precision=dp`. A bare
+`273.15` parses as **single** precision — `273.1499938964844` — and is then widened, so
+against chion's true-dp `273.15_wp` the reference carried a 6.1035e-06 K offset in the ITM
+temperature term. That propagated to ~1.8e-3 mm/d in melt and, on one step, pushed `melt`
+across `melt_crit`, flipping the albedo between `alb_snow_dry` and `alb_snow_wet` — a 1.0e-5
+jump. Seven of the nine fields failed their tolerance. The predicted offset matched the
+measured `tsrf` difference to every printed digit, which is what identified the cause.
+
+Under `wp = sp` the untyped literals *are* the working precision, so the issue is invisible;
+it is purely an artefact of the reference, not of chion. This is upstream smbpal defect 5
+(mixed sp/dp literals) having a real consequence rather than a stylistic one.
+
+**Decision:** the test now asserts that chion's ITM is **algebraically identical** to smbpal's,
+at whatever precision the build uses. What it gives up is the ability to detect divergence
+from smbpal-as-compiled. That was judged an acceptable trade because smbpal is not itself a
+validated reference — see the smbpal defect list below, in particular defect 1, which biases
+SMB by up to −2100 mm w.e./yr in the ablation zone.
+
+**Impact:** the measured residual fell by roughly two orders of magnitude at sp, confirming
+that the previous 3.2e-6 was smbpal's literal artefacts and *not* a porting difference:
+
+| build | worst rel(scale) | in ulp of `eps(wp)` |
+|---|---|---|
+| sp | 1.14e-07 (`refrz`) | 0.96 |
+| dp | 5.09e-15 (`refrz`) | 22.9 |
+
+`alb_s`, `melt` and `tsrf` are now bit-identical at sp. The gate was re-derived accordingly,
+from 1e-5 to `128*epsilon(wp)` at each field's own scale. Note the sp build shows *fewer* ulp
+than dp: sp rounds coarsely enough that most of these differences fall below the last stored
+bit and cancel to exactly zero, while dp resolves them instead of discarding them — more ulp
+at a far smaller absolute error.
+
+### D21. `chion_grid.x` stamps output at the end of the step, not the start
+**What:** the driver wrote the post-step state under the pre-step time, and its
+output test was seeded such that with `dt_out == dt` the after-step-1 record was
+never written at all — the first output record held the state after step *two*.
+Both are fixed: the stamp is `time + dt_use`, and the test is written on the same
+post-step time so `dt_out <= dt` emits a record after every step.
+
+**Why:** labelling a post-step state with the pre-step time shifts the whole
+output series one step earlier than the physics, which biases any comparison
+against a reference model by exactly one timestep — silently, and in a way that
+looks like a small physics disagreement rather than a bookkeeping error.
+`chion_column.x` was already correct (`time = time_init + k*dt`), so only the
+gridded driver was affected. The restart stamp was corrected to match.
+
+**Impact:** output files from `chion_grid.x` before this change have their time
+axis shifted by one step and are missing the first post-step record. Nothing
+else consumed them yet.
+
 ### D22. `8.13` in the densification Arrhenius denominators is a typo; corrected
 **What:** `DENSIFY_R_GAS` is the universal gas constant, not Chion.jl's `8.13`.
 Reported upstream as Chion.jl issue #18.
@@ -487,6 +580,8 @@ in the CLIMBER-X turbulence (`turbulent_flux_scheme = "climberx"`, formerly `seb
     runoff +0.22%, refreezing −0.31% and liquid water −1.9% (smaller pore space); `cp_w` is
     negligible (<0.01%).
 
+## PLAN_dev_nils — sync with Chion.jl `dev_nils` and `main` `9ec6cc7`
+
 ### D29. Rain with no layer to hold it runs off, exactly once
 **What:** `apply_accumulation` sends rain to `runoff` when `n = 0` or `mass(1) <= 0`;
 otherwise it goes to `mass_w(1)` as before. Nothing is added in the bare-ice branch.
@@ -497,8 +592,10 @@ TOL_EMPTY_LAYER`, though, accumulation has already put the rain in `mass_w(1)`, 
 counted twice. Routing it where it falls counts it once.
 
 **Impact:** `runoff` on bare-ice steps with rain; `smb_ice` and the snowpack are unchanged.
-Identical to Chion.jl except in the sliver window above (tested in `test_bessi` 5b). The
-BESSI closure identity no longer needs rain withheld. Reported upstream.
+Identical to Chion.jl except in the sliver window above (tested in `test_bessi` 5b), which
+the harness columns never enter, so not under `legacy_chion`. The BESSI closure identity no
+longer needs rain withheld. Chion.jl's substrate bare path (`03bb445`) has the same double
+count; chion adds no rain there either (C3). Reported upstream.
 
 ### D30. Aging albedo: snowfall rejuvenates in proportion to its mass
 **What:** under `albedo_scheme = "aging"`, a step's snowfall `S` [kg m-2] onto aged
@@ -593,7 +690,8 @@ two calendars and orbits shift the ratio seasonally, and under paleo orbits or
 host's transmissivity (review Q5; PLAN_dev_nils N9).
 
 **Impact:** none unless a host sets the flag; the harness does not, so it gates
-Chion.jl's internal TOA. The drivers set neither (`chion_column.x`, `chion_grid.x`).
+Chion.jl's internal TOA (not under `legacy_chion`). The drivers set neither
+(`chion_column.x`, `chion_grid.x`).
 
 ### D34. Ice substrate: none on land, reset with the column, old restarts start at `min(t_srf, T0)`
 **What:** three chion-only rules around Chion.jl's thermal ice substrate (`03bb445`,
@@ -661,7 +759,7 @@ such a transfer the receiver is full by construction. In dp the re-tested defici
 would keep moving round-off.
 
 **Impact:** none at dp (the harness' fine-layer configurations are gated); (3) only stops
-an sp round-off loop.
+an sp round-off loop. Not under `legacy_chion`.
 
 ### D37. Turbulence scheme `climberx`: chion's CLIMBER-X SEMIX exchange under its own name
 **What:** Chion.jl split its surface scheme (`d0146e1`): `seb_scheme` (`bessi` | `semix`)
@@ -688,7 +786,7 @@ CLIMBER-X's longwave is exactly Chion.jl's `seb_scheme = :semix` (`eps_s (LW↓ 
 BESSI's turbulence; add `turbulent_flux_scheme = "climberx"` for the former behaviour, and
 rename `semix_qsat`. The shared longwave expression keeps CLIMBER-X's evaluation order
 (`eps*LW↓ - eps*σTs⁴`, Julia `eps*(LW↓ - σTs⁴)`), so the `seb_scheme = semix` gate sees
-round-off only.
+round-off only. A naming change, not under `legacy_chion`.
 
 ### D38. semix turbulence: air density with `R_dry`
 **What:** Chion.jl's `_semix_air_density` divides by the literal `287.05 * T_a`; chion uses
@@ -790,7 +888,6 @@ would feed a host ice model `smb_ice` where there is no ice. The land albedo is 
 `H_ice_default` (domain) or `name_hice` (file; `"None"` = land). Mass still closes. The
 harness' configurations without `HI` are land for chion, gated under `legacy_chion`.
 
-
 ### D42. Output names: Chion.jl's ITM names; chion's host-contract forcing names
 **What:** ITM output takes Chion.jl's `ITM_OUTPUT_VARS` names and units (WP15): `H_snow`,
 `alb_s`, the step's rates `smb`, `smbi`, `melt`, `runoff`, `refreezing`, `melt_net`
@@ -822,94 +919,7 @@ code reads chion's output names.
 **Impact:** ITM output files change names (`albedo` -> `alb_s`, `smb_total` -> `smb_cum`,
 cumulative `melt`/`runoff`/`refreezing` -> `*_cum`, `smb` [kg m-2 s-1] -> `smbi` [mmWE day-1]).
 The harness compares all 14 ITM fields by name. `diagnostics/compare_*.jl` read
-`runoff_cum` when present.
-
-### D21. `chion_grid.x` stamps output at the end of the step, not the start
-**What:** the driver wrote the post-step state under the pre-step time, and its
-output test was seeded such that with `dt_out == dt` the after-step-1 record was
-never written at all — the first output record held the state after step *two*.
-Both are fixed: the stamp is `time + dt_use`, and the test is written on the same
-post-step time so `dt_out <= dt` emits a record after every step.
-
-**Why:** labelling a post-step state with the pre-step time shifts the whole
-output series one step earlier than the physics, which biases any comparison
-against a reference model by exactly one timestep — silently, and in a way that
-looks like a small physics disagreement rather than a bookkeeping error.
-`chion_column.x` was already correct (`time = time_init + k*dt`), so only the
-gridded driver was affected. The restart stamp was corrected to match.
-
-**Impact:** output files from `chion_grid.x` before this change have their time
-axis shifted by one step and are missing the first post-step record. Nothing
-else consumed them yet.
-
-### D19. `wp` is selectable at compile time (`precision=sp|dp`)
-**What:** `wp` is no longer fixed at `sp`. `make ... precision=dp` defines `CHION_DP`, and
-`src/chion_defs.F90` (renamed from `.f90`; the capital `F` makes both gfortran and ifort
-preprocess it with no `-cpp`/`-fpp` flag and no configme change) selects `wp = dp`. `wp_acc`
-stays `dp` in **both** builds — the accumulator argument in D1 is about summation over
-10^4–10^5 steps, not about the precision of the state, and it holds regardless of `wp`.
-
-**Why:** WP16 compares chion against Chion.jl, which is `Float64` throughout. With `wp = sp`
-the two models share discrete branch points (`mass_max` split, `mass_min` merge,
-`surface_has_snow`, the melt gate) but not the round-off that decides which side of them a
-given step lands on, so a *correct* port diverges by O(1) in layer structure once any branch
-fires a step apart. Validating at `wp = dp` removes that confound: a residual is then
-attributable to the port rather than to the precision. Running both builds against the same
-Chion.jl reference additionally turns the sp-vs-dp difference into a measured number, which
-was previously assumed (PLAN.md §3.1 measured expressions in isolation, never end-to-end).
-
-**Impact:**
-- `sp` keeps the unsuffixed `libchion/include` and `libchion/bin`, so the artifact paths in
-  `.configme/manifest.toml` and `.runme/info.json` are unchanged and `dp` is purely additive
-  (`libchion/include-dp`, `libchion/bin-dp`). The two builds coexist without `make clean`.
-- Pre-existing and *not* addressed here: `openmp=0` and `openmp=1` still share the sp
-  directories, so switching openmp does still need a clean. Only fesm-utils' include dir is
-  swapped by that flag.
-- chion declares no generic interfaces, so `wp == wp_acc` in a dp build creates no ambiguous
-  overloads internally. It does change ncio resolution: `nc_write` selects its **double**
-  variant for `wp` arrays, so a dp build writes double-precision NetCDF variables. Any reader
-  must not assume float.
-- All 13 acceptance tests pass in all six configurations (sp/dp × `-O2`/`debug=1`/`openmp=1`).
-- Tests that assert precision policy must now assert it *per build*. `test_defs` previously
-  hard-coded `wp == sp`, which does not verify the policy — it forbids one of two supported
-  builds.
-
-### D20. `test_itm`'s smbpal reference is typed `_wp`, not copied verbatim
-**What:** the reference implementation inside `tests/test_itm.f90` was a byte-faithful copy of
-`smbpal/src/smb_itm.f90`, deliberately retaining smbpal's untyped and dp literals (`0.d0`,
-`1.d0`, `1d3`, `0d0`, and a bare `273.15`). Every floating literal is now typed `_wp`.
-
-**Why:** the verbatim form silently tested a *different model* under `precision=dp`. A bare
-`273.15` parses as **single** precision — `273.1499938964844` — and is then widened, so
-against chion's true-dp `273.15_wp` the reference carried a 6.1035e-06 K offset in the ITM
-temperature term. That propagated to ~1.8e-3 mm/d in melt and, on one step, pushed `melt`
-across `melt_crit`, flipping the albedo between `alb_snow_dry` and `alb_snow_wet` — a 1.0e-5
-jump. Seven of the nine fields failed their tolerance. The predicted offset matched the
-measured `tsrf` difference to every printed digit, which is what identified the cause.
-
-Under `wp = sp` the untyped literals *are* the working precision, so the issue is invisible;
-it is purely an artefact of the reference, not of chion. This is upstream smbpal defect 5
-(mixed sp/dp literals) having a real consequence rather than a stylistic one.
-
-**Decision:** the test now asserts that chion's ITM is **algebraically identical** to smbpal's,
-at whatever precision the build uses. What it gives up is the ability to detect divergence
-from smbpal-as-compiled. That was judged an acceptable trade because smbpal is not itself a
-validated reference — see the smbpal defect list below, in particular defect 1, which biases
-SMB by up to −2100 mm w.e./yr in the ablation zone.
-
-**Impact:** the measured residual fell by roughly two orders of magnitude at sp, confirming
-that the previous 3.2e-6 was smbpal's literal artefacts and *not* a porting difference:
-
-| build | worst rel(scale) | in ulp of `eps(wp)` |
-|---|---|---|
-| sp | 1.14e-07 (`refrz`) | 0.96 |
-| dp | 5.09e-15 (`refrz`) | 22.9 |
-
-`alb_s`, `melt` and `tsrf` are now bit-identical at sp. The gate was re-derived accordingly,
-from 1e-5 to `128*epsilon(wp)` at each field's own scale. Note the sp build shows *fewer* ulp
-than dp: sp rounds coarsely enough that most of these differences fall below the last stored
-bit and cancel to exactly zero, while dp resolves them instead of discarding them — more ulp
-at a far smaller absolute error.
+`runoff_cum` when present. Output only, not under `legacy_chion`.
 
 ---
 
@@ -968,6 +978,16 @@ equals `d(snowpack_swe)` exactly.
 Collected across batch 1. Severity: **A** = wrong results, **B** = latent/conditional,
 **C** = cosmetic or doc-only.
 
+**Status at Chion.jl `main` `9ec6cc7`** (checked against its source; the list to send is
+`docs/upstream_chionjl_issues.md`):
+
+| status | items |
+|---|---|
+| fixed upstream | 1 (vapour diagnostics, `03bb445`), 5, 6, 7, 13, 20b `273.15`/`86400` (PDD rewrite `ce6a68d`, `pdd_defects.md`), 4 (PDD active columns `6fca5d7`, kernel), 11 and 20 (bare-ice rain, `8fff530`, with a double count: D29), 19 (aging x dt, `6d077c5`), 24 (decoded time axis), 26 (`t` coordinate, `ecd4992`) |
+| still open | 3, 8, 21, 23, 25, D31 merge mean, 20b's single `sigma` (`pdd_defects.md` D11), 21b ITM long names |
+| new since `03bb445` | 27 (`Tsrf = T(1)` in the bottom deplete), 28 (substrate not reset), D29's double count in the substrate bare path, layer 5 unbounded under fine layers (D32), fixed-orbit TOA (D33), bare-ice latent heat (D35), `R_air` literal (D38), polar-night diurnal (D39), thin-snow albedo and land columns (D40, D41), aging refresh (D30) |
+| not re-checked | 2, 9, 10, 12, 14-18, 19b, 22 |
+
 ### Mass-weighted mean of equal values is not exact (D31)
 
 **(B)** `_mass_weighted_mean` (`layer_structure.jl`) evaluates `(m1*x1 + m2*x2)/(m1+m2)`,
@@ -1020,7 +1040,8 @@ tightened without moving the layer mass arrays to `dp`.**
     a 30-day forcing file Chion.jl therefore stepped 30x smaller than chion
     *and* silently used the simple PDD form instead of PISM — every PDD field
     wrong by a factor ~30. Found in WP16; the fix is to read `ds[name][:]`, or
-    to convert the numeric axis using its `units` attribute.
+    to convert the numeric axis using its `units` attribute. **Fixed upstream** by
+    `9ec6cc7` (`_read_time_values` reads the decoded `ds[name][:]`).
 
 25. **(B) NetCDF output is written in Float32 while the model computes in
     Float64.** The output buffers in `io.jl` are `Matrix{Float32}` /
@@ -1033,7 +1054,8 @@ tightened without moving the layer mass arrays to `dp`.**
 
 26. **(C) Output files carry no time coordinate variable** — only a bare `t`
     dimension. A Chion.jl output file cannot be interpreted on its own; the
-    reader has to already know the forcing that produced it. Found in WP16.
+    reader has to already know the forcing that produced it. Found in WP16. **Fixed
+    upstream** in `ecd4992` (`t` in days since 1970-01-01, proleptic Gregorian).
 
 1. **(A) Vapor-mass diagnostics are not mass-closed.**
    `_apply_snow_surface_vapor_mass_flux!` returns the *unclipped* `vapor_mass` while the mass
