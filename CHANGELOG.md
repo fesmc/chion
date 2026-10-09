@@ -17,6 +17,9 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Fixed
 
+- BESSI dynamic albedo: aging scaled by `dt_days` (Chion.jl `6d077c5`), so
+  diurnal substeps no longer age the albedo once each (upstream defect 19).
+  Daily runs bit-identical.
 - ITM per-step `tsrf`: `melt_net` scaled to the annual rate `firn_fac` is
   calibrated on (360-day year); firn warming was ~360x too small (D27).
 
