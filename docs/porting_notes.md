@@ -756,7 +756,12 @@ surface layer's mass (plan T2, revised by review Q15): fine near-surface layers 
 
 **Impact:** seasonal snow over ice and fresh snow on bare ice show the ice through a
 cover thinner than 10 kg m-2 (about 3 cm); `alpha_ice` acts in the ablation zone again.
-Firn columns: none (`f = 1`). The harness gates Chion.jl's switch under `legacy_chion`.
+Firn columns: none (`f = 1`; 10-yr `chion_column` < 0.01 %). GRL-16KM, MAR-forced
+(monthly means interpolated to days: snowfall > 0 on 98 % of ablation-zone melt days,
+83 % below 1 mm d-1), 50 yr, Gt/yr: SMB 448 -> 279 (MAR 348), melt 334 -> 500 (518),
+runoff 259 -> 427 (349), R² 0.83 -> 0.77. `alpha_ice` 0.3/0.4/0.5 gives melt
+562/500/440 with the blend, 335/334/333 without it. Chion.jl's `alpha_ice = 0.40` was
+calibrated without a blend; with it 0.5 matches MAR's SMB (340, R² 0.86). The harness gates Chion.jl's switch under `legacy_chion`.
 To raise with Chion.jl (PLAN_dev_nils N5).
 
 ### D41. Land columns: a land background albedo and no ice ablation

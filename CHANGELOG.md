@@ -64,6 +64,17 @@ tag is the port itself, summarised rather than enumerated.
 
 ### Changed
 
+- BESSI thin-snow albedo (D40): the energy balance sees the snow albedo blended with the
+  background by a snow-cover fraction, `f = min(1, SWE/swe_crit_albedo)` from the column's
+  SWE (10 kg m-2; 0 = off), CLIMBER-X's `tanh` form under `albedo_scheme = "semix"`
+  (`c_fsnow`, `c_fsnow_orog`); new state `albedo_snow` (restart, output). Land columns
+  (`H_ice = 0`) take `alpha_land` (0.2) and ablate no ice: a host must fill `forc%H_ice`
+  for BESSI (D41). Both reverted under `legacy_chion`. GRL-16KM vs MAR (Gt/yr; MAR SMB
+  348, melt 518, runoff 349): SMB 448 -> 279, melt 334 -> 500, runoff 259 -> 427, R²
+  0.83 -> 0.77; `alpha_ice` 0.3/0.4/0.5 now gives melt 562/500/440 (without the blend
+  335/334/333). 10-yr `chion_column`: < 0.01 %.
+- Aging albedo refresh is `1 - exp(-S/aging_snowfall_ref)`, exact across diurnal
+  substeps; snow onto a bare surface starts at `alpha_dry` (D30).
 - Defaults are Chion.jl `03bb445`'s calibrated GrIS set: `alpha_ice` 0.40, `seb_scheme =
   turbulent_flux_scheme = "semix"` (2.5, 40), `longwave_scheme = "cloud_proxy"`,
   `ice_substrate_layers` 5, fine near-surface layers (0.02, 0.05, 0.10, 0.30 m, with

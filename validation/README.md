@@ -225,6 +225,10 @@ D39 reverted), worst 0.47 ulp (`Tsrf`, `temperature`); coverage: layer 1 at its
 fine thickness on every layered step, bare ice below T0 over the substrate,
 11.1 K from the semix-turbulence substrate run.
 
+**After C12 (thin-snow albedo, land columns, exponential aging refresh):** every
+configuration green and unchanged: D30, D40 and D41 are reverted under
+`legacy_chion` (binary aging refresh, no blend, bare ice under every column).
+
 Reported, not gated:
 
 - **`wp = sp` costs** ~4e-06 relative worst case, first divergence typically
