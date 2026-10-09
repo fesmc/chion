@@ -275,7 +275,7 @@ contains
         !   mass_min   < mass_split -- otherwise a split immediately re-merges
         !   mass_split/mass_max >= 0.5 -- so the layer left behind by a split
         !                                 holds at least half of mass_max, and
-        !                                 merge_surface_layer's unguarded
+        !                                 merge_layer's unguarded
         !                                 divisor (2*mass_split - mass_min)
         !                                 stays positive. See upstream defect 8
         !                                 in docs/porting_notes.md.
@@ -763,7 +763,9 @@ contains
 
         ! Fine layers: cap the fresh snow down into the column (after the air
         ! temperature is set, so every layer it reaches carries it).
-        call remesh_near_surface_layers(mass,mass_w,density,temperature,n,par%Ntot, &
+        call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
+                                        mass_base,smb_ice,runoff,t_srf,albedo, &
+                                        par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
                                         par%near_surface_layer_max_thicknesses,c)
 
         ! === Step 4: prescribed albedo, applied before the bare test =========
@@ -993,7 +995,9 @@ contains
         ! energy solve, conserving every column reservoir. Unconditional, as
         ! in Julia (steps 12-14 above are guarded on liquid water).
 
-        call remesh_near_surface_layers(mass,mass_w,density,temperature,n,par%Ntot, &
+        call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
+                                        mass_base,smb_ice,runoff,t_srf,albedo, &
+                                        par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
                                         par%near_surface_layer_max_thicknesses,c)
 
         ! === Step 16: final albedo fixup =====================================

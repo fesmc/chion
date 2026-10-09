@@ -262,9 +262,11 @@
 !   (upstream default 0.02, 0.05, 0.10, 0.30 m) by a conservative remesh
 !   after accumulation and after refreezing, so the energy solve always
 !   sees a thin top cell. With layer 1 limited, the mass_min surface merge
-!   is off. 0 = no limit (Julia Inf); only a leading block of layers can be
-!   limited (D36). chion keeps all four at 0 until the Stage C default
-!   switch (C11).
+!   is off; the first layer below the fine ones is split and merged by
+!   mass_max/mass_split/mass_min instead (chion only, D32; Chion.jl keeps
+!   everything below them in one layer). 0 = no limit (Julia Inf); only a
+!   leading block of layers can be limited (D36). chion keeps all four at 0
+!   until the Stage C default switch (C11).
 !
 ! The three sub-scheme choices — albedo_scheme, fresh_snow_density_scheme
 ! and low_density_densification — are NOT here. They live in the

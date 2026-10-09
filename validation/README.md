@@ -198,6 +198,12 @@ their targets on all 1334 column-steps with a layer below; cap-down into layer
 exceeds 5 and layer 5 reaches 11646 kg m⁻² (`ntot_capacity`, depth cap), the
 upstream behaviour C4b changes (reverted under legacy).
 
+**After C4b (split/merge below the fine layers, D32):** unchanged, every
+configuration green at the same worst ulp; the fine-layer configurations still
+see Chion.jl's unsplit layer 5 under `legacy_chion`. The chion behaviour is
+covered by `tests/test_layers` and `tests/test_bessi` (test 15) in the
+non-legacy builds.
+
 Reported, not gated:
 
 - **`wp = sp` costs** ~4e-06 relative worst case, first divergence typically

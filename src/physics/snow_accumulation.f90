@@ -9,12 +9,13 @@ module snow_accumulation
     ! merge and depth-cap routines change it.
     !
     ! DEPENDENCY ON WP4: everything in the "layer-structure enforcement" section
-    ! is delegated to snow_layers. All five calls are confined to the bottom of
-    ! apply_accumulation, so a change to those signatures touches nothing else
-    ! in this module. Two of them differ from the Julia argument lists: WP4
-    ! dropped Ntot from merge_surface_layer, and Ntot and dt_seconds from
-    ! enforce_snow_depth_cap, because neither body uses them; C1 also dropped
-    ! mass_split from the latter (the cap is a constant depth since 03bb445).
+    ! is delegated to snow_layers, in two calls at the bottom of
+    ! apply_accumulation: rebalance_layer at k = 1 (Julia's split and merge
+    ! loops, which chion also runs below fine near-surface layers, D32) and
+    ! enforce_snow_depth_cap. WP4 dropped Ntot from the merge, and Ntot and
+    ! dt_seconds from enforce_snow_depth_cap, because neither body uses them;
+    ! C1 also dropped mass_split from the latter (the cap is a constant depth
+    ! since 03bb445).
     !
     ! PRESERVED QUIRKS:
     !   * Rain alone never creates a snow layer, and rain is only added to
@@ -27,7 +28,7 @@ module snow_accumulation
     ! counts it twice when 0 < mass(1) <= TOL_EMPTY_LAYER, where the rain is
     ! already in mass_w(1). Totals are otherwise identical.
     !   * The split loop's out-of-slots branch is asymmetric: with Ntot <= 2 it
-    !     calls free_slot_for_surface_split, otherwise merge_bottom_layer. The
+    !     calls free_slot_for_split, otherwise merge_bottom_layer. The
     !     Ntot <= 2 case cannot merge a bottom layer without destroying the only
     !     other layer, hence the special case.
     !   * The density mix is volume-weighted, not mass-weighted:
@@ -42,9 +43,7 @@ module snow_accumulation
                            io_unit_err
     use snow_albedo, only : albedo_refresh_from_snowfall
 
-    use snow_layers, only : split_surface_layer, merge_surface_layer, &
-                            merge_bottom_layer, free_slot_for_surface_split, &
-                            enforce_snow_depth_cap
+    use snow_layers, only : rebalance_layer, enforce_snow_depth_cap
 
     implicit none
 
@@ -215,37 +214,11 @@ contains
             end if
         end if
 
-        ! --- Step 3: split loop ---------------------------------------------
-        do while (n .gt. 0 .and. mass(1) .gt. mass_max)
-
-            if (n .eq. Ntot) then
-
-                if (Ntot .le. 2) then
-                    call free_slot_for_surface_split(mass,mass_w,density,temperature,n, &
-                                                     mass_base,smb_ice,runoff,t_srf,albedo, &
-                                                     Ntot,mass_max,c)
-                else
-                    call merge_bottom_layer(mass,mass_w,density,temperature,n, &
-                                            mass_base,smb_ice,c)
-                end if
-
-                ! Re-test after freeing a slot: either the column emptied or the
-                ! surface is already back under mass_max.
-                if (n .eq. 0) exit
-                if (mass(1) .le. mass_max) exit
-
-            end if
-
-            call split_surface_layer(mass,mass_w,density,temperature,n, &
-                                     Ntot,mass_max,mass_split)
-
-        end do
-
-        ! --- Step 4: merge loop ---------------------------------------------
-        do while (n .gt. 1 .and. mass(1) .lt. mass_min)
-            call merge_surface_layer(mass,mass_w,density,temperature,n, &
-                                     mass_split,mass_min,c)
-        end do
+        ! --- Steps 3-4: split loop while mass(1) > mass_max, then merge loop
+        !     while n > 1 and mass(1) < mass_min ---------------------------
+        call rebalance_layer(mass,mass_w,density,temperature,n,1, &
+                             mass_base,smb_ice,runoff,t_srf,albedo, &
+                             Ntot,mass_max,mass_split,mass_min,c)
 
         ! --- Step 5: depth cap ----------------------------------------------
         call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &

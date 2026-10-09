@@ -537,6 +537,36 @@ results are not bit-identical to before. Reported upstream. The fine-layer remes
 mixes temperature with it too (review Q16); its harness configurations show no branch
 flips, so it stays out of `legacy_chion`.
 
+### D32. Fine near-surface layers: the first layer below them is split and merged by mass
+**What:** with fine near-surface layers (D36), the remesh ends with `rebalance_layer` at
+`k0` = (number of limited layers) + 1, i.e. layer 5: the split loop while `mass(k0) >
+mass_max` (`mass_split` into a new layer `k0+1`; at `Ntot`, merge the two deepest layers,
+or deplete the bottom one when at most two mass layers fit) and the merge loop while
+`mass(k0) < mass_min` (top up to `mass_split` from `k0+1`, or merge with it). These are
+Chion.jl's surface-layer split and merge, generalised to layer `k` (`split_layer`,
+`merge_layer`, `free_slot_for_split`; `k = 1` is Chion.jl's surface layer, used as
+before in accumulation, melt and vapour flux). Reverted under `legacy_chion`
+(`NEAR_SURFACE_SPLIT_MERGE_BELOW`).
+
+**Why:** in Chion.jl (`03bb445`) the surface split fires only when `mass(1) > mass_max`
+right after snowfall (> 500 kg m-2 in one step), and the surface merge is off. The remesh
+pushes every increment down the four fine layers into layer 5, which nothing caps, splits
+or merges: it grows until the 22.5 m depth cap exports its base. A firn column collapses
+to four thin layers over one cell of up to ~22 m (N <= 5, `Ntot` irrelevant), so
+densification, cold content, percolation and refreezing below 0.47 m happen in one cell.
+Upstream docs ("Without these limits the surface layer can hold up to `mass_max`")
+suggest this is not intended (review Q4; PLAN_dev_nils N7).
+
+**Impact:** only with fine layers on. The column below them is resolved as without fine
+layers (300 kg m-2 layers up to `Ntot`). Measured on the 10-year `chion_column` example
+(prod sp), Chion.jl's behaviour -> chion: mean N 4.9 -> 10.0 (max 5 -> 15); runoff +7.7 %,
+refreezing -6.0 %, melt +0.6 %, final thickness -12.6 %, bulk density +10.6 %, liquid water
+-40 %. Chion.jl's single cell holds and refreezes more meltwater; chion's runoff and
+refreezing are within 2.5 % of the run without fine layers. With `Ntot <= k0 + 1` the slot is freed by depleting the
+bottom layer, whose `continuous_bottom_deplete` resets `t_srf` to `temperature(1)` as it
+does in accumulation; with the default `Ntot = 15` a bottom merge frees it instead.
+Harness: the fine-layer configurations run under `legacy_chion` and stay gated.
+
 ### D34. Ice substrate: none on land, reset with the column, old restarts start at `min(t_srf, T0)`
 **What:** three chion-only rules around Chion.jl's thermal ice substrate (`03bb445`,
 `ice_substrate_layers`, chion default 0 until C11):

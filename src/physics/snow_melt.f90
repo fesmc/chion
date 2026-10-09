@@ -37,14 +37,14 @@ module snow_melt
     ! it requested melt.
     !
     ! The two restructuring operations live in snow_layers (WP4):
-    ! remove_depleted_surface_and_route_water and merge_surface_layer. Julia
+    ! remove_depleted_surface_and_route_water and merge_layer (k = 1). Julia
     ! passes Ntot = typemax(Int) to the latter; the Fortran routine drops that
     ! argument, because the Julia body never reads it.
 
     use chion_defs,        only : wp, wp_acc, TOL_TINY, TOL_EMPTY_LAYER, &
                                   chion_const_class
     use snow_layers,       only : remove_depleted_surface_and_route_water, &
-                                  merge_surface_layer
+                                  merge_layer
 
     implicit none
 
@@ -121,8 +121,8 @@ contains
                 call remove_depleted_surface_and_route_water(mass,mass_w,density, &
                                                              temperature,n,runoff,c)
             else if (n .gt. 1 .and. mass(1) .lt. mass_min) then
-                call merge_surface_layer(mass,mass_w,density,temperature,n, &
-                                         mass_split,mass_min,c)
+                call merge_layer(mass,mass_w,density,temperature,n,1, &
+                                 mass_split,mass_min,c)
             end if
 
         end do

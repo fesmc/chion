@@ -38,6 +38,13 @@ tag is the port itself, summarised rather than enumerated.
   (upstream 0.02, 0.05, 0.10, 0.30) by a conservative remesh after accumulation
   and after refreezing; the `mass_min` surface merge is off with layer 1
   limited. 0 = no limit, the default here (D36). Default runs bit-identical.
+- Fine near-surface layers: the first layer below them is split and merged by
+  mass like the surface layer (D32; reverted under `legacy_chion`). Chion.jl
+  keeps everything below the fine layers in one unsplit layer up to the 22.5 m
+  depth cap. 10-yr `chion_column` example with fine layers, Chion.jl's
+  behaviour -> chion: mean layer count 4.9 -> 10.0 (max 5 -> 15), runoff
+  +7.7 %, refreezing -6.0 %, melt +0.6 %, final thickness -12.6 %, liquid water
+  -40 %; runoff and refreezing within 2.5 % of the run without fine layers.
 
 ### Fixed
 

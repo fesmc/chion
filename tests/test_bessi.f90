@@ -104,6 +104,7 @@ program test_bessi
     call test_substrate_cold_content(nfail)
     call test_substrate_column(nfail)
     call test_fine_layers_column(nfail)
+    call test_fine_layers_firn(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -916,6 +917,98 @@ contains
         return
 
     end subroutine test_fine_layers_column
+
+    subroutine test_fine_layers_firn(nfail)
+        ! A firn column under sustained cold accumulation with fine
+        ! near-surface layers, 4 years at 8.6 kg m-2 d-1: Ntot capacity,
+        ! bottom merges and the depth cap all act. chion (C4b, D32) splits
+        ! and merges the first layer below the fine ones by mass, so the
+        ! column keeps several layers there, each interior one (5 .. n-1;
+        ! the bottom one collects bottom merges, as in BESSI without fine
+        ! layers) within [mass_min, mass_max] after every step. Chion.jl,
+        ! and legacy_chion builds, keep everything below the fine layers in
+        ! layer 5. Mass closure in both.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp_acc) :: precip
+        integer      :: istep, k, n, n_max, n_min_late, n_out
+        real(wp)     :: m5_max
+
+        write(*,"(a)") "--- 15. fine layers over a firn column under sustained accumulation ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = [0.02_wp, 0.05_wp, 0.10_wp, 0.30_wp]
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 250.0_wp
+        forc%dt_days         = 1.0_wp
+        forc%snowfall_rate   = 1.0e-4_wp          ! 8.64 kg m-2 d-1
+        forc%shortwave_down  = 50.0_wp
+        forc%wind_speed      = 4.0_wp
+
+        precip     = 0.0_wp_acc
+        n_max      = 0
+        n_min_late = huge(1)
+        n_out      = 0
+        m5_max     = 0.0_wp
+
+        do istep = 1, 4*NDAY_YEAR
+
+            precip = precip + real(forc%snowfall_rate*forc%dt_days*real(sec_day,wp),wp_acc)
+            call bessi_column_step(bsi,1,forc,c)
+
+            n     = bsi%now%n_lay(1)
+            n_max = max(n_max,n)
+            if (istep .gt. NDAY_YEAR) n_min_late = min(n_min_late,n)
+            if (n .ge. 5) m5_max = max(m5_max,bsi%now%mass(5,1))
+
+            do k = 5, n-1
+                if (bsi%now%mass(k,1) .lt. bsi%par%mass_min .or. &
+                    bsi%now%mass(k,1) .gt. bsi%par%mass_max) n_out = n_out + 1
+            end do
+
+        end do
+
+        write(*,"(a,i0,a,i0)")  "         layer count: max / min after year 1 = ", n_max, " / ", n_min_late
+        write(*,"(a,g14.6)")    "         largest layer-5 mass                = ", m5_max
+        write(*,"(a,i0)")       "         interior sub-fine layers out of bounds = ", n_out
+        write(*,"(a,g16.8)")    "         mass_base                           = ", bsi%now%mass_base(1)
+
+        if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
+            call check("C4b: several layers below the fine ones after year 1 (n >= 8)", &
+                       n_min_late .ge. 8, nfail)
+            call check("C4b: column reaches Ntot and never exceeds it", &
+                       n_max .eq. bsi%par%Ntot, nfail)
+            call check("C4b: interior sub-fine layers within [mass_min, mass_max]", &
+                       n_out .eq. 0, nfail)
+        else
+            call check("legacy: everything below the fine layers in layer 5 (n <= 5)", &
+                       n_max .le. 5, nfail)
+            call check("legacy: layer 5 outgrows mass_max", m5_max .gt. bsi%par%mass_max, nfail)
+        end if
+        call check("bottom export occurred (depth cap / bottom merge)", &
+                   bsi%now%mass_base(1) .gt. 0.0_wp_acc, nfail)
+        call check_close("closure, firn column with fine layers", closure_lhs(bsi,1),precip, &
+                         1.0e-6_wp_acc,nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_fine_layers_firn
 
     ! =====================================================================
     ! Test 4 -- drive the column to Ntot capacity

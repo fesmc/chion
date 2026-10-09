@@ -160,6 +160,10 @@ module chion_defs
     !     resets to alpha_dry (age 0) on any snowfall, as Chion.jl does.
     !     chion rejuvenates in proportion to the step's snowfall
     !     (docs/porting_notes.md D30).
+    !   * NEAR_SURFACE_SPLIT_MERGE_BELOW -> .FALSE., i.e. with fine
+    !     near-surface layers everything below them stays in one layer that
+    !     is never split or merged, as in Chion.jl. chion splits and merges
+    !     it by mass like the surface layer (docs/porting_notes.md D32).
     !
     ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
     ! the plain build is gated against Chion.jl for PDD.
@@ -172,12 +176,14 @@ module chion_defs
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc
     real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = 1.0_wp
     logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .TRUE.
+    logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .FALSE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = real(DEF_GRAVITY,wp_acc)
     real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = real(sec_year_360d/sec_day,wp)
     logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .FALSE.
+    logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .TRUE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
 #endif
 

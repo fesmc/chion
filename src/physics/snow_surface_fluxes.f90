@@ -61,7 +61,7 @@ module snow_surface_fluxes
     ! _merge_surface_layer!; the Fortran signature has no such argument, so it
     ! is simply dropped.
     use snow_layers, only : remove_depleted_surface_and_route_water, &
-                            merge_surface_layer
+                            merge_layer
 
     implicit none
 
@@ -529,8 +529,8 @@ contains
             ! Re-merge a surface layer that has become too thin.
             do while (n .gt. 1)
                 if (mass(1) .ge. mass_min) exit
-                call merge_surface_layer(mass,mass_w,density,temperature,n, &
-                                         mass_split,mass_min,c)
+                call merge_layer(mass,mass_w,density,temperature,n,1, &
+                                 mass_split,mass_min,c)
             end do
 
         else

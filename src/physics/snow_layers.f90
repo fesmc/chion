@@ -3,17 +3,25 @@ module snow_layers
     !
     ! Port of Chion.jl/src/processes/layer_structure.jl (branch main), in full:
     !     _reset_layer_at_index!                  -> reset_layer_at_index
-    !     _split_surface_layer!                   -> split_surface_layer
-    !     _merge_surface_layer!                   -> merge_surface_layer
+    !     _split_surface_layer!                   -> split_layer (k = 1)
+    !     _merge_surface_layer!                   -> merge_layer (k = 1)
     !     _merge_bottom_layer!                    -> merge_bottom_layer
     !     _remove_surface_layer!                  -> remove_surface_layer
     !     _remove_depleted_surface_and_route_water! -> remove_depleted_surface_and_route_water
     !     _continuous_bottom_deplete!             -> continuous_bottom_deplete
-    !     _free_slot_for_surface_split!           -> free_slot_for_surface_split
+    !     _free_slot_for_surface_split!           -> free_slot_for_split (k = 1)
     !     _enforce_snow_depth_cap!                -> enforce_snow_depth_cap
     !     _cap_near_surface_layer_thicknesses!    -> cap_near_surface_layer_thicknesses
     !     _fill_near_surface_layer_thicknesses!   -> fill_near_surface_layer_thicknesses
     !     _remesh_near_surface_layers!            -> remesh_near_surface_layers
+    ! plus chion's rebalance_layer, the split and merge loops of
+    ! _apply_accumulation_resolved! (accumulation.jl) for one layer k.
+    !
+    ! THE MASS LAYER k: Chion.jl splits and merges the surface layer only.
+    ! split_layer, merge_layer and free_slot_for_split act on layer k, the
+    ! top MASS layer; k = 1 is Chion.jl's surface layer. With fine
+    ! near-surface layers chion applies them also to the first layer below
+    ! the fine ones (docs/porting_notes.md D32), see remesh_near_surface_layers.
     !
     ! CALLING CONVENTION (docs/porting_notes.md D8): every routine takes
     ! contiguous column slices -- mass(:,icol), mass_w(:,icol), ... -- together
@@ -41,10 +49,10 @@ module snow_layers
     ! THRESHOLDS: the three "empty" tests are used deliberately and differently
     ! within this file, exactly as in Julia. Do not unify them
     ! (docs/PLAN.md section 5, item 1):
-    !   > 0                free_slot_for_surface_split bottom-mass test,
+    !   > 0                free_slot_for_split bottom-mass test,
     !                      depth-cap layer inclusion, mass-weighted-mean guard
     !   > TOL_TINY         depletion remainder loop, depth-cap density guard
-    !   < TOL_EMPTY_LAYER  merge_surface_layer single-layer collapse,
+    !   < TOL_EMPTY_LAYER  merge_layer single-layer collapse,
     !                      continuous_bottom_deplete empty-layer skip and trim
     !
     ! DEPTH CAP: enforce_snow_depth_cap caps the total solid depth at the
@@ -55,10 +63,13 @@ module snow_layers
     ! NEAR_SURFACE_LAYERS layers at maximum thicknesses h_max(k) [m] (0 = no
     ! limit, Julia's Inf; the limited layers are a leading block,
     ! bessi_par_validate). It conserves solid mass, liquid water, volume and
-    ! sensible enthalpy (temperature by mass_weighted_mean, D31).
+    ! sensible enthalpy (temperature by mass_weighted_mean, D31). chion then
+    ! splits and merges the first layer below them by mass (D32; not under
+    ! legacy_chion).
 
     use chion_defs, only : wp, wp_acc, io_unit_err, TOL_TINY, TOL_EMPTY_LAYER, &
                            BESSI_REFERENCE_SNOW_DEPTH_M, &
+                           NEAR_SURFACE_SPLIT_MERGE_BELOW, &
                            chion_const_class
 
     implicit none
@@ -66,13 +77,14 @@ module snow_layers
     private
 
     public :: reset_layer_at_index
-    public :: split_surface_layer
-    public :: merge_surface_layer
+    public :: split_layer
+    public :: merge_layer
     public :: merge_bottom_layer
     public :: remove_surface_layer
     public :: remove_depleted_surface_and_route_water
     public :: continuous_bottom_deplete
-    public :: free_slot_for_surface_split
+    public :: free_slot_for_split
+    public :: rebalance_layer
     public :: enforce_snow_depth_cap
     public :: near_surface_layer_count
     public :: cap_near_surface_layer_thicknesses
@@ -185,19 +197,19 @@ contains
     end subroutine reset_layer_at_index
 
     ! =====================================================================
-    ! split_surface_layer
-    ! Chion.jl layer_structure.jl:51-91
+    ! split_layer
+    ! Chion.jl layer_structure.jl:51-91 (_split_surface_layer!, k = 1)
     ! =====================================================================
 
-    subroutine split_surface_layer(mass,mass_w,density,temperature,n,Ntot,mass_max,mass_split)
-        ! Split the surface layer in two when it exceeds mass_max, provided a
-        ! free slot exists (n < Ntot). Layer 2 receives exactly mass_split and
-        ! layer 1 keeps the remainder; density and temperature are copied
-        ! unchanged into both halves, and liquid water is partitioned by the
-        ! solid-mass fraction.
+    subroutine split_layer(mass,mass_w,density,temperature,n,k,Ntot,mass_max,mass_split)
+        ! Split mass layer k in two when it exceeds mass_max, provided a free
+        ! slot exists (n < Ntot). The new layer k+1 receives exactly
+        ! mass_split and layer k keeps the remainder; density and temperature
+        ! are copied unchanged into both halves, and liquid water is
+        ! partitioned by the solid-mass fraction. Layers below k shift down.
         !
         ! No-ops unless BOTH conditions hold. The caller is responsible for
-        ! freeing a slot first (free_slot_for_surface_split) when n == Ntot.
+        ! freeing a slot first (free_slot_for_split) when n == Ntot.
 
         implicit none
 
@@ -206,69 +218,71 @@ contains
         real(wp), intent(INOUT) :: density(:)
         real(wp), intent(INOUT) :: temperature(:)
         integer,  intent(INOUT) :: n                ! active layer count
+        integer,  intent(IN)    :: k                ! mass layer to split, 1 <= k <= Ntot
         integer,  intent(IN)    :: Ntot             ! maximum layer count
         real(wp), intent(IN)    :: mass_max         ! [kg m-2] split trigger
         real(wp), intent(IN)    :: mass_split       ! [kg m-2] target layer mass
 
         ! Local variables
-        integer  :: k, new_n
-        real(wp) :: surface_mass, surface_mass_w
-        real(wp) :: surface_density, surface_temperature
+        integer  :: j, new_n
+        real(wp) :: layer_mass, layer_mass_w
+        real(wp) :: layer_density, layer_temperature
         real(wp) :: water_fraction
 
-        surface_mass = mass(1)
+        layer_mass = mass(k)
 
         ! Julia: if !(n < Ntot && surface_mass > mass_max) return
         ! Both operands are safe to evaluate, so a single .and. is fine here.
-        if (.not. (n .lt. Ntot .and. surface_mass .gt. mass_max)) return
+        ! An inactive slot k > n holds no mass, so it never splits.
+        if (.not. (n .lt. Ntot .and. layer_mass .gt. mass_max)) return
 
-        surface_mass_w      = mass_w(1)
-        surface_density     = density(1)
-        surface_temperature = temperature(1)
+        layer_mass_w      = mass_w(k)
+        layer_density     = density(k)
+        layer_temperature = temperature(k)
 
         new_n = n + 1
         n     = new_n
 
-        ! Shift layers 2..new_n-1 down by one, leaving slot 2 free.
-        do k = new_n, 3, -1
-            mass(k)        = mass(k-1)
-            mass_w(k)      = mass_w(k-1)
-            density(k)     = density(k-1)
-            temperature(k) = temperature(k-1)
+        ! Shift layers k+1..new_n-1 down by one, leaving slot k+1 free.
+        do j = new_n, k+2, -1
+            mass(j)        = mass(j-1)
+            mass_w(j)      = mass_w(j-1)
+            density(j)     = density(j-1)
+            temperature(j) = temperature(j-1)
         end do
 
-        mass(2) = mass_split
-        mass(1) = surface_mass - mass_split
+        mass(k+1) = mass_split
+        mass(k)   = layer_mass - mass_split
 
-        ! surface_mass > mass_max >= 0, so this division is safe.
-        water_fraction = mass_split / surface_mass
-        mass_w(2)      = surface_mass_w * water_fraction
-        mass_w(1)      = surface_mass_w * (1.0_wp - water_fraction)
+        ! layer_mass > mass_max >= 0, so this division is safe.
+        water_fraction = mass_split / layer_mass
+        mass_w(k+1)    = layer_mass_w * water_fraction
+        mass_w(k)      = layer_mass_w * (1.0_wp - water_fraction)
 
-        density(1)     = surface_density
-        density(2)     = surface_density
-        temperature(1) = surface_temperature
-        temperature(2) = surface_temperature
+        density(k)       = layer_density
+        density(k+1)     = layer_density
+        temperature(k)   = layer_temperature
+        temperature(k+1) = layer_temperature
 
         return
 
-    end subroutine split_surface_layer
+    end subroutine split_layer
 
     ! =====================================================================
-    ! merge_surface_layer
-    ! Chion.jl layer_structure.jl:99-172
+    ! merge_layer
+    ! Chion.jl layer_structure.jl:99-172 (_merge_surface_layer!, k = 1)
     ! =====================================================================
 
-    subroutine merge_surface_layer(mass,mass_w,density,temperature,n,mass_split,mass_min,c)
-        ! Rebalance or merge the top two layers when the surface layer falls
+    subroutine merge_layer(mass,mass_w,density,temperature,n,k,mass_split,mass_min,c)
+        ! Rebalance or merge mass layer k with layer k+1 when layer k falls
         ! below mass_min. Three outcomes:
-        !   1. n == 1 and the surface layer is essentially empty
-        !      (< TOL_EMPTY_LAYER): the column collapses to zero layers.
-        !   2. combined mass > 2*mass_split: PARTIAL TRANSFER. The surface layer
-        !      is topped back up to exactly mass_split from layer 2; the layer
+        !   1. n == k and layer k is essentially empty (< TOL_EMPTY_LAYER): it
+        !      is dropped (k = 1: the column collapses to zero layers).
+        !   2. combined mass > 2*mass_split: PARTIAL TRANSFER. Layer k is
+        !      topped back up to exactly mass_split from layer k+1; the layer
         !      count is unchanged.
-        !   3. otherwise: FULL MERGE. Layers 1 and 2 are combined into layer 1
-        !      and everything below shifts up by one.
+        !   3. otherwise: FULL MERGE. Layers k and k+1 are combined into layer
+        !      k and everything below shifts up by one.
         !
         ! PORTING NOTE: the Julia signature also carries Ntot, which its body
         ! never uses. Dropped here rather than carried as an unused dummy.
@@ -280,84 +294,85 @@ contains
         real(wp), intent(INOUT) :: density(:)
         real(wp), intent(INOUT) :: temperature(:)
         integer,  intent(INOUT) :: n
+        integer,  intent(IN)    :: k                ! mass layer to merge, k >= 1
         real(wp), intent(IN)    :: mass_split       ! [kg m-2] target layer mass
         real(wp), intent(IN)    :: mass_min         ! [kg m-2] merge trigger
         type(chion_const_class), intent(IN) :: c
 
         ! Local variables
-        integer  :: k, new_n
-        real(wp) :: surface_mass, subsurface_mass
-        real(wp) :: transferred_to_surface, transferred_water
+        integer  :: j, new_n
+        real(wp) :: layer_mass, below_mass
+        real(wp) :: transferred_to_layer, transferred_water
         real(wp) :: dens_1, dens_2, temp_1, temp_2
         real(wp_acc) :: combined_mass
 
-        if (n .gt. 0) then
-            surface_mass = mass(1)
+        if (n .ge. k) then
+            layer_mass = mass(k)
         else
-            surface_mass = 0.0_wp
+            layer_mass = 0.0_wp
         end if
 
         ! Threshold here is TOL_EMPTY_LAYER (strict <), not TOL_TINY.
-        if (n .eq. 1 .and. real(surface_mass,wp_acc) .lt. TOL_EMPTY_LAYER) then
-            n = 0
-            call reset_layer_at_index(mass,mass_w,density,temperature,1,c)
+        if (n .eq. k .and. real(layer_mass,wp_acc) .lt. TOL_EMPTY_LAYER) then
+            n = k - 1
+            call reset_layer_at_index(mass,mass_w,density,temperature,k,c)
             return
-        else if (n .le. 1 .or. surface_mass .ge. mass_min) then
+        else if (n .le. k .or. layer_mass .ge. mass_min) then
             return
         end if
 
-        subsurface_mass = mass(2)
-        combined_mass   = real(surface_mass,wp_acc) + real(subsurface_mass,wp_acc)
+        below_mass    = mass(k+1)
+        combined_mass = real(layer_mass,wp_acc) + real(below_mass,wp_acc)
 
-        dens_1 = density(1)
-        dens_2 = density(2)
-        temp_1 = temperature(1)
-        temp_2 = temperature(2)
+        dens_1 = density(k)
+        dens_2 = density(k+1)
+        temp_1 = temperature(k)
+        temp_2 = temperature(k+1)
 
         if (combined_mass .gt. 2.0_wp_acc*real(mass_split,wp_acc)) then
 
-            ! --- Partial transfer: top the surface layer back up to mass_split.
-            ! subsurface_mass = combined - surface > 2*mass_split - mass_min,
-            ! which is strictly positive for any sane parameter set, so the
+            ! --- Partial transfer: top layer k back up to mass_split.
+            ! below_mass = combined - layer > 2*mass_split - mass_min, which
+            ! is strictly positive for any sane parameter set, so the
             ! division below is safe. Julia does not guard it either.
-            transferred_to_surface = mass_split - surface_mass
-            transferred_water      = transferred_to_surface / subsurface_mass * mass_w(2)
+            transferred_to_layer = mass_split - layer_mass
+            transferred_water    = transferred_to_layer / below_mass * mass_w(k+1)
 
-            mass(1)   = mass_split
-            mass(2)   = real(combined_mass - real(mass_split,wp_acc),wp)
-            mass_w(1) = mass_w(1) + transferred_water
-            mass_w(2) = mass_w(2) - transferred_water
+            mass(k)     = mass_split
+            mass(k+1)   = real(combined_mass - real(mass_split,wp_acc),wp)
+            mass_w(k)   = mass_w(k)   + transferred_water
+            mass_w(k+1) = mass_w(k+1) - transferred_water
 
-            density(1)     = mass_weighted_mean(surface_mass,dens_1, &
-                                                transferred_to_surface,dens_2)
-            temperature(1) = mass_weighted_mean(surface_mass,temp_1, &
-                                                transferred_to_surface,temp_2)
+            density(k)     = mass_weighted_mean(layer_mass,dens_1, &
+                                                transferred_to_layer,dens_2)
+            temperature(k) = mass_weighted_mean(layer_mass,temp_1, &
+                                                transferred_to_layer,temp_2)
             return
 
         end if
 
-        ! --- Full merge of layers 1 and 2.
-        mass(1)   = real(combined_mass,wp)
-        mass_w(1) = mass_w(1) + mass_w(2)
+        ! --- Full merge of layers k and k+1.
+        mass(k)   = real(combined_mass,wp)
+        mass_w(k) = mass_w(k) + mass_w(k+1)
 
-        density(1)     = mass_weighted_mean(surface_mass,dens_1,subsurface_mass,dens_2)
-        temperature(1) = mass_weighted_mean(surface_mass,temp_1,subsurface_mass,temp_2)
+        density(k)     = mass_weighted_mean(layer_mass,dens_1,below_mass,dens_2)
+        temperature(k) = mass_weighted_mean(layer_mass,temp_1,below_mass,temp_2)
 
         new_n = n - 1
         n     = new_n
 
-        do k = 2, new_n
-            mass(k)        = mass(k+1)
-            mass_w(k)      = mass_w(k+1)
-            density(k)     = density(k+1)
-            temperature(k) = temperature(k+1)
+        do j = k+1, new_n
+            mass(j)        = mass(j+1)
+            mass_w(j)      = mass_w(j+1)
+            density(j)     = density(j+1)
+            temperature(j) = temperature(j+1)
         end do
 
         call reset_layer_at_index(mass,mass_w,density,temperature,new_n+1,c)
 
         return
 
-    end subroutine merge_surface_layer
+    end subroutine merge_layer
 
     ! =====================================================================
     ! merge_bottom_layer
@@ -648,19 +663,20 @@ contains
     end subroutine continuous_bottom_deplete
 
     ! =====================================================================
-    ! free_slot_for_surface_split
-    ! Chion.jl layer_structure.jl:374-434
+    ! free_slot_for_split
+    ! Chion.jl layer_structure.jl:374-434 (_free_slot_for_surface_split!, k = 1)
     ! =====================================================================
 
-    subroutine free_slot_for_surface_split(mass,mass_w,density,temperature,n, &
-                                           mass_base,smb_ice,runoff,t_srf,albedo, &
-                                           Ntot,mass_max,c)
-        ! Make room for a surface split when the column is already at Ntot.
+    subroutine free_slot_for_split(mass,mass_w,density,temperature,n,k, &
+                                   mass_base,smb_ice,runoff,t_srf,albedo, &
+                                   Ntot,mass_max,c)
+        ! Make room for a split of mass layer k when the column is already at
+        ! Ntot.
         !
-        ! Ntot == 1 SPECIAL CASE: there is no slot to free, so instead the
-        ! surface layer's own overflow beyond mass_max is exported basally.
-        ! This is the only path by which a single-layer column sheds mass at
-        ! the base during accumulation.
+        ! Ntot == k SPECIAL CASE: layer k is the last slot, so there is none
+        ! to free; instead its own overflow beyond mass_max is exported
+        ! basally. For k = 1 (Ntot == 1) this is the only path by which a
+        ! single-layer column sheds mass at the base during accumulation.
         !
         ! Otherwise the deepest layer is depleted in full (routing its water to
         ! runoff), or simply reset if it carries no mass.
@@ -672,6 +688,7 @@ contains
         real(wp), intent(INOUT) :: density(:)
         real(wp), intent(INOUT) :: temperature(:)
         integer,  intent(INOUT) :: n
+        integer,  intent(IN)    :: k                ! mass layer to be split
         real(wp_acc), intent(INOUT) :: mass_base
         real(wp_acc), intent(INOUT) :: smb_ice
         real(wp_acc), intent(INOUT) :: runoff
@@ -684,9 +701,9 @@ contains
         ! Local variables
         real(wp_acc) :: overflow, bottom_mass
 
-        if (Ntot .eq. 1) then
+        if (Ntot .eq. k) then
 
-            overflow = max(real(mass(1),wp_acc) - real(mass_max,wp_acc), 0.0_wp_acc)
+            overflow = max(real(mass(k),wp_acc) - real(mass_max,wp_acc), 0.0_wp_acc)
 
             if (overflow .gt. 0.0_wp_acc) then
                 call continuous_bottom_deplete(mass,mass_w,density,temperature,n, &
@@ -702,7 +719,7 @@ contains
         ! with n == 0 that is an out-of-bounds read. chion makes the
         ! precondition explicit (docs/PLAN.md section 4.1, "fix outright bugs").
         if (n .lt. 1) then
-            write(io_unit_err,*) "free_slot_for_surface_split:: Error: &
+            write(io_unit_err,*) "free_slot_for_split:: Error: &
                                  &called on a column with no active layers."
             write(io_unit_err,*) "n, Ntot = ", n, Ntot
             stop "Program stopped."
@@ -722,7 +739,80 @@ contains
 
         return
 
-    end subroutine free_slot_for_surface_split
+    end subroutine free_slot_for_split
+
+    ! =====================================================================
+    ! rebalance_layer
+    ! Chion.jl accumulation.jl:110-131 (the split and merge loops of
+    ! _apply_accumulation_resolved!, k = 1)
+    ! =====================================================================
+
+    subroutine rebalance_layer(mass,mass_w,density,temperature,n,k, &
+                               mass_base,smb_ice,runoff,t_srf,albedo, &
+                               Ntot,mass_max,mass_split,mass_min,c)
+        ! Keep mass layer k within [mass_min, mass_max]:
+        !   split loop  while mass(k) > mass_max: split off mass_split below
+        !               it, first freeing a slot at Ntot -- by depleting the
+        !               bottom layer when at most two mass layers fit below
+        !               the k-1 above (k = 1: Ntot <= 2), else by merging the
+        !               two deepest layers;
+        !   merge loop  while n > k and mass(k) < mass_min: merge or top up
+        !               from layer k+1.
+        ! k = 1 is Chion.jl's surface rebalance in accumulation.
+
+        implicit none
+
+        real(wp), intent(INOUT) :: mass(:)
+        real(wp), intent(INOUT) :: mass_w(:)
+        real(wp), intent(INOUT) :: density(:)
+        real(wp), intent(INOUT) :: temperature(:)
+        integer,  intent(INOUT) :: n
+        integer,  intent(IN)    :: k                ! mass layer, 1 <= k <= Ntot
+        real(wp_acc), intent(INOUT) :: mass_base
+        real(wp_acc), intent(INOUT) :: smb_ice
+        real(wp_acc), intent(INOUT) :: runoff
+        real(wp), intent(INOUT) :: t_srf
+        real(wp), intent(INOUT) :: albedo
+        integer,  intent(IN)    :: Ntot
+        real(wp), intent(IN)    :: mass_max         ! [kg m-2] split trigger
+        real(wp), intent(IN)    :: mass_split       ! [kg m-2] mass left below
+        real(wp), intent(IN)    :: mass_min         ! [kg m-2] merge trigger
+        type(chion_const_class), intent(IN) :: c
+
+        ! --- Split loop. mass(k) is in bounds for any n (k <= Ntot), so the
+        !     single .and. is safe.
+        do while (n .ge. k .and. mass(k) .gt. mass_max)
+
+            if (n .eq. Ntot) then
+
+                if (Ntot - k .le. 1) then
+                    call free_slot_for_split(mass,mass_w,density,temperature,n,k, &
+                                             mass_base,smb_ice,runoff,t_srf,albedo, &
+                                             Ntot,mass_max,c)
+                else
+                    call merge_bottom_layer(mass,mass_w,density,temperature,n, &
+                                            mass_base,smb_ice,c)
+                end if
+
+                ! Re-test after freeing a slot: either layer k is gone or it
+                ! is already back under mass_max.
+                if (n .lt. k) exit
+                if (mass(k) .le. mass_max) exit
+
+            end if
+
+            call split_layer(mass,mass_w,density,temperature,n,k,Ntot,mass_max,mass_split)
+
+        end do
+
+        ! --- Merge loop.
+        do while (n .gt. k .and. mass(k) .lt. mass_min)
+            call merge_layer(mass,mass_w,density,temperature,n,k,mass_split,mass_min,c)
+        end do
+
+        return
+
+    end subroutine rebalance_layer
 
     ! =====================================================================
     ! enforce_snow_depth_cap
@@ -1023,10 +1113,22 @@ contains
 
     end subroutine fill_near_surface_layer_thicknesses
 
-    subroutine remesh_near_surface_layers(mass,mass_w,density,temperature,n,Ntot,h_max,c)
+    subroutine remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
+                                          mass_base,smb_ice,runoff,t_srf,albedo, &
+                                          Ntot,mass_max,mass_split,mass_min,h_max,c)
         ! Conservative remesh of the fine near-surface layers: cap downward,
         ! then fill upward. Called twice per (sub)step by the BESSI kernel,
         ! after accumulation and after refreezing. A no-op without limits.
+        !
+        ! DEVIATION (docs/porting_notes.md D32; not under legacy_chion): the
+        ! first layer below the fine ones, k0, is then kept within
+        ! [mass_min, mass_max] by the mass-based split and merge that Chion.jl
+        ! applies to the surface layer only (rebalance_layer at k0). In
+        ! Chion.jl everything the cap pushes below the fine layers stays in
+        ! layer k0, which is never split or merged, so a firn column ends as
+        ! the fine layers over one cell of up to the 22.5 m depth cap. The
+        ! accumulators are touched only when the split frees a slot at Ntot
+        ! (bottom merge or depletion, as in accumulation).
 
         implicit none
 
@@ -1035,12 +1137,33 @@ contains
         real(wp), intent(INOUT) :: density(:)
         real(wp), intent(INOUT) :: temperature(:)
         integer,  intent(INOUT) :: n
+        real(wp_acc), intent(INOUT) :: mass_base
+        real(wp_acc), intent(INOUT) :: smb_ice
+        real(wp_acc), intent(INOUT) :: runoff
+        real(wp), intent(INOUT) :: t_srf
+        real(wp), intent(INOUT) :: albedo
         integer,  intent(IN)    :: Ntot
-        real(wp), intent(IN)    :: h_max(:)          ! (NEAR_SURFACE_LAYERS) [m], 0 = no limit
+        real(wp), intent(IN)    :: mass_max         ! [kg m-2] split trigger
+        real(wp), intent(IN)    :: mass_split       ! [kg m-2] mass left below
+        real(wp), intent(IN)    :: mass_min         ! [kg m-2] merge trigger
+        real(wp), intent(IN)    :: h_max(:)         ! (NEAR_SURFACE_LAYERS) [m], 0 = no limit
         type(chion_const_class), intent(IN) :: c
+
+        ! Local variables
+        integer :: k0
 
         call cap_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n,Ntot,h_max,c)
         call fill_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n,h_max,c)
+
+        if (.not. NEAR_SURFACE_SPLIT_MERGE_BELOW) return
+
+        k0 = near_surface_layer_count(h_max) + 1
+
+        if (k0 .gt. 1 .and. k0 .le. Ntot) then
+            call rebalance_layer(mass,mass_w,density,temperature,n,k0, &
+                                 mass_base,smb_ice,runoff,t_srf,albedo, &
+                                 Ntot,mass_max,mass_split,mass_min,c)
+        end if
 
         return
 
