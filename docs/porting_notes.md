@@ -355,8 +355,9 @@ capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
 
 ### D24. `legacy_chion=1` build variant
 **What:** `make ... legacy_chion=1` defines `CHION_LEGACY`, which reverts the
-deliberate physics corrections (currently D22's R = 8.314, D25's g = 9.81, D27's ITM
-`tsrf` scaling and D30's aging-albedo refresh) to Chion.jl's values. Builds land in `libchion/{include,bin}[-dp]-legacy`
+deliberate physics corrections to Chion.jl's values (D22's R = 8.314, D25's g = 9.81,
+D27's ITM `tsrf` scaling, D30's aging-albedo refresh, D32, D35, D38, D39, D40's
+thin-snow blend and D41's land columns; the list is in `chion_defs.F90`). Builds land in `libchion/{include,bin}[-dp]-legacy`
 (`-legacy-fpsafe` for validation/).
 
 **Why:** "is the port faithful?" and "is the reference correct?" are different
@@ -500,25 +501,32 @@ Identical to Chion.jl except in the sliver window above (tested in `test_bessi` 
 BESSI closure identity no longer needs rain withheld. Reported upstream.
 
 ### D30. Aging albedo: snowfall rejuvenates in proportion to its mass
-**What:** under `albedo_scheme = "aging"`, a step's snowfall `S` [kg m-2] scales the aging
-progress `E = -ln((a - alpha_wet)/(alpha_dry - alpha_wet))` and `snow_age_days` by
-`1 - f`, `f = min(1, S/aging_snowfall_ref)` (default 10 kg m-2, about 3 cm of fresh snow).
-In albedo space `a <- alpha_wet + (alpha_dry - alpha_wet)*x**(1-f)`. It acts in the
-accumulation step's snowfall refresh (`albedo_aging_rejuvenate`), before the step's
-aging relaxation, which then always runs. The dynamic scheme's refresh is unchanged.
+**What:** under `albedo_scheme = "aging"`, a step's snowfall `S` [kg m-2] onto aged
+snow scales the aging progress `E = -ln((a - alpha_wet)/(alpha_dry - alpha_wet))` and
+`snow_age_days` by `1 - f = exp(-S/aging_snowfall_ref)` (default 10 kg m-2, about 3 cm
+of fresh snow). In albedo space `a <- alpha_wet + (alpha_dry - alpha_wet)*x**(1-f)`.
+Snow onto a bare surface is all fresh: `alpha_dry`, age 0, however little falls. It acts
+in the accumulation step's snowfall refresh (`albedo_aging_rejuvenate`), on the snow
+albedo (`albedo_snow`, D40), before the step's aging relaxation, which then always runs.
+The dynamic scheme's refresh is unchanged.
 
 **Why:** Chion.jl (`6d06af6`) resets to `alpha_dry` and age 0 on any snowfall rate > 0,
 so a trace of snow fully rejuvenates the surface. With a host that spreads monthly
 precipitation over every day (yelmox), the ablation-zone albedo then never leaves
 `alpha_dry`. `E = sum(dt/tau)` for this scheme, so scaling `E` is exact even though `tau`
-switches between the cold and melting timescales.
+switches between the cold and melting timescales. The exponential composes exactly,
+`exp(-S1/S_ref)*exp(-S2/S_ref) = exp(-(S1+S2)/S_ref)`, so a day's snowfall refreshes the
+same in one step as in the 8 diurnal substeps of the default (review Q14); the former
+linear `f = min(1, S/S_ref)` gave 66 % of a full refresh over 8 substeps. Snow on a bare
+surface has no aged snow to refresh (its `E` is infinite: the background clamped up to
+`alpha_wet`); fresh, it is bright, and its thinness is the snow-cover fraction's business
+(D40), not the snow albedo's.
 
-**Impact:** `S = 0`: no change; `S >= aging_snowfall_ref`: Chion.jl's reset, except that
-the step's relaxation follows (end-of-step age `dt`, not 0). Refreshes compose as
-`E*(1-f1)*(1-f2)`. Snow at exactly `alpha_wet` (infinite `E`, e.g. the first snow on a
-bare column, whose `alpha_ice` is clamped up to `alpha_wet`) is restored only by a full
-refresh. Reverted under `legacy_chion` (`ALBEDO_AGING_BINARY_REFRESH`), so the harness'
-aging configuration stays gated. To raise with Chion.jl (PLAN_dev_nils N5).
+**Impact:** `S = 0`: no change; a trace: almost none; `S = S_ref`: `E` and the age scaled
+by `1/e`; never quite Chion.jl's reset on aged snow. On a bare surface Chion.jl's reset,
+except that the step's relaxation follows (end-of-step age `dt`, not 0). Reverted under
+`legacy_chion` (`ALBEDO_AGING_BINARY_REFRESH`), so the harness' aging configuration stays
+gated. To raise with Chion.jl (PLAN_dev_nils N5, N10).
 
 ### D31. Mass-weighted mean of two layers is `x1 + w2*(x2 - x1)`
 **What:** `snow_layers:mass_weighted_mean` (surface and bottom merges, density and
@@ -714,6 +722,68 @@ monthly climatology interpolated to days) and calendar mismatches at the polar-n
 Real daily reanalysis shortwave is zero there. The harness' diurnal configuration has it
 on 240 column-days at 70 N (4 columns x 60 polar-night days) and gates Julia's behaviour
 under `legacy_chion`.
+
+### D40. Thin-snow albedo: the snow albedo is blended with the background by a snow-cover fraction
+**What:** the surface energy balance sees `alpha = f*alpha_snow + (1 - f)*alpha_bg`
+(`bessi_surface_albedo`), in the snow step and on the final column (written as
+`albedo`). `alpha_snow` is the snow's own albedo, a new state `albedo_snow` that the
+schemes age and refresh unblended (restart field; an older restart starts it at
+`albedo`; output `albedo_snow`). Snow-cover fraction:
+- dynamic, aging, constant: `f = min(1, SWE/swe_crit_albedo)`, `SWE` the column's snow
+  water equivalent (solid + liquid over the snow layers, not the ice substrate),
+  `swe_crit_albedo = 10 kg m-2` (`&chion_const`); `swe_crit_albedo = 0` turns the blend
+  off (`f = 1` on any surface snow);
+- `albedo_scheme = "semix"`: CLIMBER-X's `f = tanh(h_snow/(c_fsnow*z0m_ice))*f_orog`,
+  `f_orog = h_snow/(h_snow + c_fsnow_orog*z_sur_std + 1e-10)` when the host gives
+  `z_sur_std`, else 1 (`smb_surface_par.f90:106-116`; `c_fsnow = 10`,
+  `c_fsnow_orog = 2e-4`, `z0m_ice = 0.002 m`); `h_snow` is the solid thickness of the
+  snow layers (CLIMBER-X: SWE over a fixed 250 kg m-3);
+- prescribed: never blended.
+No surface snow: `f = 0`. Background `alpha_bg`: the bare-ice albedo (`alpha_ice`, or the
+host's `alb_ice_host`) where `H_ice > 0`, `alpha_land` (0.2) on a land column (D41). A
+bare column also stores `alpha_bg` in `albedo_snow`, as Chion.jl stores the bare albedo
+in its one albedo; the old bare-ice path (no substrate) absorbs shortwave with it too
+(Chion.jl: `alpha_ice` there whatever the host gives). Reverted under `legacy_chion`
+(`ALBEDO_THIN_SNOW_BLEND`: `f = 1`, so `albedo = albedo_snow` under snow, bit for bit).
+
+**Why:** BESSI treats any surface layer as full snow cover: a trace of snow on bare ice
+(a host spreading monthly precipitation over every day gives one at +2 to +5 C) jumps the
+albedo from `alpha_ice` to at least `alpha_wet`, so `alpha_ice` is almost never seen. In
+yelmox GRL-8KM an `alpha_ice` sweep 0.2/0.3/0.4 gave identical melt (PLAN_dev_nils
+WP17). ITM and CLIMBER-X SEMIX both blend. The fraction is the column's SWE, not the
+surface layer's mass (plan T2, revised by review Q15): fine near-surface layers hold
+`mass(1)` near 6 kg m-2 on any column, 3000 m of firn included.
+
+**Impact:** seasonal snow over ice and fresh snow on bare ice show the ice through a
+cover thinner than 10 kg m-2 (about 3 cm); `alpha_ice` acts in the ablation zone again.
+Firn columns: none (`f = 1`). The harness gates Chion.jl's switch under `legacy_chion`.
+To raise with Chion.jl (PLAN_dev_nils N5).
+
+### D41. Land columns: a land background albedo and no ice ablation
+**What:** a column with `forc%H_ice <= 0` (land) has no ice under its snow:
+- its background albedo is `alpha_land` (`&chion_const`, 0.2, ITM's `alb_land`) (D40);
+- snow-free, it does nothing: no melt, sublimation, `smb_ice` or runoff (rain has already
+  run off, D29), no latent heat flux; `Tsrf` is set to the air temperature, its albedo
+  (and `albedo_snow`) to `alpha_land`;
+- under snow, a melt demand the snow cannot meet is not charged to ice: `melt` is the snow
+  actually melted (on ice it is the demand, the shortfall melting ice, `smb_ice -=`,
+  `runoff +=`), the shortfall energy is dropped;
+- no ice substrate (D34).
+Reverted under `legacy_chion` (`LAND_COLUMNS_WITHOUT_ICE`: bare ice under every column).
+
+**Why:** Chion.jl has no ice thickness, so it melts bare ice under every column and
+credits it to `smb_ice` (plan T9). BESSI has no ground model, so snow-free land has no
+energy budget to close: the cleanest consistent state is a surface in equilibrium with
+the air (`Tsrf = T_air`, which the next snowfall takes too, step 3) and no exchange,
+rather than an energy balance over a surface of unknown heat capacity, or ice melt that
+would feed a host ice model `smb_ice` where there is no ice. The land albedo is ITM's
+(plan T8; constant, not ITM's PDD-weighted land/forest mix).
+
+**Impact:** only where a host passes `H_ice = 0`. A host must fill `forc%H_ice` for BESSI
+(yelmox: for ITM only so far): without it every column is land and nothing ablates ice.
+`chion_column.x` reads `&ctrl H_ice` (1000 m in `par/chion_column.nml`), `chion_grid.x`
+`H_ice_default` (domain) or `name_hice` (file; `"None"` = land). Mass still closes. The
+harness' configurations without `HI` are land for chion, gated under `legacy_chion`.
 
 ### D21. `chion_grid.x` stamps output at the end of the step, not the start
 **What:** the driver wrote the post-step state under the pre-step time, and its

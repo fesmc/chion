@@ -42,6 +42,7 @@ module snow_accumulation
                            CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, &
                            io_unit_err
     use snow_albedo, only : albedo_refresh_from_snowfall
+    use snow_column_utils, only : surface_has_snow
 
     use snow_layers, only : rebalance_layer, enforce_snow_depth_cap
 
@@ -132,7 +133,10 @@ contains
         !   5. depth cap.
         !
         ! NOTE the albedo call here is the snowfall REFRESH, not the aging
-        ! update. Aging happens later in the step (albedo_update).
+        ! update. Aging happens later in the step (albedo_update). The albedo
+        ! is the SNOW albedo (bessi's albedo_snow, D40); whether the snow
+        ! fell onto a bare surface is sampled on entry, for the aging
+        ! scheme's refresh (D30).
 
         implicit none
 
@@ -161,6 +165,9 @@ contains
         ! Local variables
         real(wp) :: m_prev, m_added, m_new
         real(wp) :: rho_fresh, rho_prev, rho_new
+        logical  :: onto_bare
+
+        onto_bare = .not. surface_has_snow(mass,n)
 
         ! --- Step 0: empty column -------------------------------------------
         if (n .eq. 0) then
@@ -199,7 +206,7 @@ contains
 
             mass(1) = m_new
 
-            call albedo_refresh_from_snowfall(albedo,snow_age_days,c,m_added)
+            call albedo_refresh_from_snowfall(albedo,snow_age_days,c,m_added,onto_bare)
 
         end if
 

@@ -355,6 +355,8 @@ contains
                 call chion_write_col(filename,v,chn%bsi%now%albedo,chn%grd,n,ncid)
             case("snow_age_days")
                 call chion_write_col(filename,v,chn%bsi%now%snow_age_days,chn%grd,n,ncid)
+            case("albedo_snow")
+                call chion_write_col(filename,v,chn%bsi%now%albedo_snow,chn%grd,n,ncid)
             case("N")
                 ! Written as a float so that unmapped grid cells can carry MV.
                 ! The restart writes n_lay as an integer.
@@ -753,6 +755,7 @@ contains
                 ! Instantaneous per-column scalars.
                 call chion_restart_write_col(filename,"t_srf", chn%bsi%now%t_srf, "K",ncid)
                 call chion_restart_write_col(filename,"albedo",chn%bsi%now%albedo,"1",ncid)
+                call chion_restart_write_col(filename,"albedo_snow",chn%bsi%now%albedo_snow,"1",ncid)
                 call chion_restart_write_col(filename,"snow_age_days",chn%bsi%now%snow_age_days,"day",ncid)
 
                 ! Diagnostics. Not prognostic -- summarize_domain_state
@@ -925,6 +928,15 @@ contains
 
                 call chion_restart_read_col(filename,"t_srf", chn%bsi%now%t_srf, nt,ncid)
                 call chion_restart_read_col(filename,"albedo",chn%bsi%now%albedo,nt,ncid)
+
+                ! The snow albedo (D40). A restart written before it starts it
+                ! at the albedo: the same value under full snow cover and on a
+                ! bare column.
+                if (nc_exists_var(filename,"albedo_snow")) then
+                    call chion_restart_read_col(filename,"albedo_snow",chn%bsi%now%albedo_snow,nt,ncid)
+                else
+                    chn%bsi%now%albedo_snow = chn%bsi%now%albedo
+                end if
 
                 ! Thermal ice substrate, after t_srf: a restart without one
                 ! (written with none, or before the substrate existed) starts

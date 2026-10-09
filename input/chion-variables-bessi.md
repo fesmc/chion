@@ -6,8 +6,8 @@ enough on its own: it also needs a `case` in `chion_write_var_bessi`.
 
 Names, units and long names are taken verbatim from `Chion.jl/src/io.jl`
 `NETCDF_METADATA` so that a chion output file and a Chion.jl output file are
-directly comparable variable by variable (WP16). Two entries (`vapor_mass`,
-`smb`) have no Chion.jl counterpart and are flagged below.
+directly comparable variable by variable (WP16). Three entries (`vapor_mass`,
+`smb`, `albedo_snow`) have no Chion.jl counterpart and are flagged below.
 
 The `dimensions` column is LOGICAL, not literal. `column` is expanded by the
 writer to `xc, yc` when a spatial mapping has been attached with
@@ -37,6 +37,7 @@ appended by the writer and is always the unlimited dimension.
 | 19 | density              | layer, column | kg m-3      | Layer density                                        |
 | 20 | temperature          | layer, column | K           | Layer temperature                                    |
 | 21 | snow_age_days        | column        | day         | Time since the latest snowfall event                 |
+| 22 | albedo_snow          | column        | 1           | Snow albedo before the thin-snow blend               |
 
 Notes.
 
@@ -46,6 +47,11 @@ Notes.
 * `smb` (id 16) is a chion addition: the model-agnostic ice-facing flux returned
   by `chion_get_smb`, averaged over the step just completed. It is 0 before the
   first `chion_update`. Chion.jl has no equivalent.
+* `albedo_snow` (id 22) is a chion addition (D40): the snow's own albedo, which
+  the albedo schemes age and refresh. `albedo` (id 14) is what the surface
+  energy balance sees, `albedo_snow` blended with the background by the
+  snow-cover fraction; the two agree under full snow cover and in Chion.jl,
+  which has no blend.
 * `N` (id 15) is written as a float in output files so that unmapped grid cells
   can carry the missing value. The restart file writes it as an integer.
 * `latent_heat_flux_sum` is in W m-2 days, not W m-2 — the accumulator is

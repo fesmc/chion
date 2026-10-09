@@ -26,8 +26,11 @@ module snow_bessi
     !   5  no surface snow -> bare-ice ablation, accumulate diagnostics, RETURN
     !      (percolation and refreezing are skipped ENTIRELY -- trap, see below);
     !      with an ice substrate, the substrate energy solve instead of the
-    !      surface held at T0 (bessi_bare_ice_substrate_step)
-    !   6  albedo update (prescribed | semix | aging | dynamic-or-constant)
+    !      surface held at T0 (bessi_bare_ice_substrate_step); on a land column
+    !      (H_ice = 0) nothing at all (D41)
+    !   6  snow albedo update (prescribed | semix | aging | dynamic-or-constant),
+    !      then the albedo the energy balance sees: the snow albedo blended
+    !      with the background by the snow-cover fraction (D40)
     !   7  HTESSEL only: snapshot mass_w(1:n) BEFORE the energy solve
     !   8  accumulation_rate -> densification
     !   9  latent-heat coefficients -> implicit energy solve
@@ -37,7 +40,7 @@ module snow_bessi
     !  13  HTESSEL only: liquid-water compaction, using the step-7 snapshot
     !  14  refreezing
     !  15  near-surface remesh (fine layers only)
-    !  16  final albedo fixup (and snow age)
+    !  16  final albedo fixup (and snow age), the blend on the final column
     !
     ! ---------------------------------------------------------------------
     ! Traps honoured here (docs/PLAN.md section 5)
@@ -67,6 +70,7 @@ module snow_bessi
 
     use chion_defs, only : wp, wp_acc, io_unit_err, &
                            TOL_TINY, TOL_EMPTY_LAYER, &
+                           ALBEDO_THIN_SNOW_BLEND, LAND_COLUMNS_WITHOUT_ICE, &
                            DEF_NTOT, DEF_MASS_MAX, DEF_MASS_SPLIT, DEF_MASS_MIN, &
                            DEF_DENSITY_INIT, DEF_TEMPERATURE_INIT, &
                            DEF_ICE_SUBSTRATE_LAYERS, DEF_ICE_SUBSTRATE_TOP_THICKNESS, &
@@ -81,9 +85,10 @@ module snow_bessi
 
     use snow_accumulation,  only : apply_accumulation
     use snow_layers,        only : remesh_near_surface_layers
-    use snow_albedo,        only : albedo_update, albedo_update_aging
+    use snow_albedo,        only : albedo_update, albedo_update_aging, &
+                                   snow_cover_fraction, thin_snow_albedo
     use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration, &
-                                   semix_daily_coszm
+                                   semix_daily_coszm, semix_snow_cover_fraction
     use snow_densify,       only : densify_column, apply_htessel_liquid_water_compaction
     use snow_energy,        only : snow_energy_flux, snow_energy_result_class
     use snow_surface_fluxes,only : bare_ice_ablation_class, bare_ice_ablation_mass, &
@@ -174,9 +179,15 @@ module snow_bessi
         real(wp_acc), allocatable :: sublimation(:)           ! [kg m-2] >= 0
         real(wp_acc), allocatable :: latent_heat_flux_sum(:)  ! [W m-2 d]
 
-        ! Instantaneous per-column scalars
+        ! Instantaneous per-column scalars. albedo is what the surface energy
+        ! balance sees (and what is written out): the snow albedo blended with
+        ! the background by the snow-cover fraction (D40). albedo_snow is the
+        ! snow's own, the prognostic one the schemes age and refresh; on a
+        ! bare column it holds the background, as Chion.jl's single albedo
+        ! does. Without the blend (legacy_chion) the two agree under snow.
         real(wp), allocatable :: t_srf(:)          ! (ncol) [K] snow-air interface temperature
-        real(wp), allocatable :: albedo(:)         ! (ncol) [1]
+        real(wp), allocatable :: albedo(:)         ! (ncol) [1] effective
+        real(wp), allocatable :: albedo_snow(:)    ! (ncol) [1] snow
 
         ! Time since the latest snowfall (albedo_scheme = "aging"); 0 on a
         ! bare column and under every other scheme. Chion.jl snow_age_days.
@@ -455,6 +466,7 @@ contains
 
         allocate(bsi%now%t_srf(ncol))
         allocate(bsi%now%albedo(ncol))
+        allocate(bsi%now%albedo_snow(ncol))
         allocate(bsi%now%snow_age_days(ncol))
         allocate(bsi%now%w_snow_old(ncol))
         allocate(bsi%now%w_snow_max(ncol))
@@ -492,6 +504,7 @@ contains
 
         if (allocated(bsi%now%t_srf))  deallocate(bsi%now%t_srf)
         if (allocated(bsi%now%albedo)) deallocate(bsi%now%albedo)
+        if (allocated(bsi%now%albedo_snow)) deallocate(bsi%now%albedo_snow)
         if (allocated(bsi%now%snow_age_days)) deallocate(bsi%now%snow_age_days)
         if (allocated(bsi%now%w_snow_old)) deallocate(bsi%now%w_snow_old)
         if (allocated(bsi%now%w_snow_max)) deallocate(bsi%now%w_snow_max)
@@ -550,6 +563,7 @@ contains
 
         bsi%now%t_srf  = c%T0
         bsi%now%albedo = c%alpha_dry
+        bsi%now%albedo_snow = c%alpha_dry
         bsi%now%snow_age_days = 0.0_wp
         bsi%now%w_snow_old = 0.0_wp
         bsi%now%w_snow_max = 0.0_wp
@@ -617,6 +631,7 @@ contains
 
             bsi%now%t_srf(icol)  = c%T0
             bsi%now%albedo(icol) = c%alpha_dry
+            bsi%now%albedo_snow(icol) = c%alpha_dry
             bsi%now%snow_age_days(icol) = 0.0_wp
             bsi%now%w_snow_old(icol) = 0.0_wp
             bsi%now%w_snow_max(icol) = 0.0_wp
@@ -679,7 +694,10 @@ contains
 
         ! Bare-ice albedo actually used: chion's own constant unless the host
         ! supplies one per column (e.g. CLIMBER-X's slow firn-aging ice albedo).
-        real(wp) :: alb_ice_use
+        ! The background under thin or no snow: that under ice, alpha_land on
+        ! a land column (D40, D41).
+        real(wp) :: alb_ice_use, alb_bg
+        logical  :: is_land
 
         if (icol .lt. 1 .or. icol .gt. bsi%now%ncol) then
             write(io_unit_err,*) "bessi_column_step_core:: Error: column index out of range."
@@ -708,6 +726,7 @@ contains
                   lhf_sum     => bsi%now%latent_heat_flux_sum(icol),&
                   t_srf       => bsi%now%t_srf(icol),               &
                   albedo      => bsi%now%albedo(icol),              &
+                  albedo_snow => bsi%now%albedo_snow(icol),         &
                   snow_age    => bsi%now%snow_age_days(icol),       &
                   w_snow_old  => bsi%now%w_snow_old(icol),          &
                   w_snow_max  => bsi%now%w_snow_max(icol),          &
@@ -736,6 +755,15 @@ contains
         if (forc%has_alb_ice_host) &
             alb_ice_use = min(max(forc%alb_ice_host,0.0_wp),1.0_wp)
 
+        ! A land column (H_ice = 0) has no ice under its snow: a land
+        ! background albedo, no ice ablation (D41; Chion.jl, and legacy_chion,
+        ! put bare ice under every column).
+        is_land = .FALSE.
+        if (LAND_COLUMNS_WITHOUT_ICE) is_land = .not. (forc%H_ice .gt. 0.0_wp)
+
+        alb_bg = alb_ice_use
+        if (is_land) alb_bg = c%alpha_land
+
         uses_htessel = (c%low_density_densification .eq. CHION_DENSIFY_HTESSEL)
 
         ! The fine layers own the surface geometry: with layer 1 limited, the
@@ -747,7 +775,7 @@ contains
         ! === Step 2: accumulation ============================================
 
         call apply_accumulation(mass,mass_w,density,temperature,n, &
-                                mass_base,smb_ice,runoff,t_srf,albedo,snow_age, &
+                                mass_base,smb_ice,runoff,t_srf,albedo_snow,snow_age, &
                                 c,par%Ntot,par%mass_max,par%mass_split,surface_mass_min, &
                                 forc%snowfall_rate,forc%rainfall_rate,dt_seconds, &
                                 forc%air_temperature,forc%wind_speed)
@@ -767,14 +795,17 @@ contains
         ! Fine layers: cap the fresh snow down into the column (after the air
         ! temperature is set, so every layer it reaches carries it).
         call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                        mass_base,smb_ice,runoff,t_srf,albedo, &
+                                        mass_base,smb_ice,runoff,t_srf,albedo_snow, &
                                         par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
                                         par%near_surface_layer_max_thicknesses,c)
 
         ! === Step 4: prescribed albedo, applied before the bare test =========
+        ! It replaces the snow albedo too, as it does Chion.jl's one albedo,
+        ! and is never blended (D40).
 
         if (use_prescribed_albedo) then
-            albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
+            albedo_snow = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
+            albedo      = albedo_snow
         end if
 
         ! === Step 5: bare surface -> ablate the ice underneath and RETURN ====
@@ -793,8 +824,21 @@ contains
 
         if (.not. has_surface_snow) then
 
-            if (.not. use_prescribed_albedo) albedo = alb_ice_use
+            if (.not. use_prescribed_albedo) then
+                albedo_snow = alb_bg
+                albedo      = alb_bg
+            end if
             snow_age = 0.0_wp
+
+            ! Snow-free land (D41): BESSI has no ground model, so the column
+            ! exchanges neither mass nor energy with the atmosphere; its
+            ! surface temperature is the air temperature, which is also what
+            ! the next snowfall starts at (step 3). Rain has already run off
+            ! (D29).
+            if (is_land) then
+                t_srf = forc%air_temperature
+                return
+            end if
 
             if (n_ice .gt. 0) then
                 call bessi_bare_ice_substrate_step(mass,density,temperature,n, &
@@ -806,7 +850,7 @@ contains
                 return
             end if
 
-            bare_ice_fluxes = bare_ice_ablation_mass(c,forc,dt_seconds)
+            bare_ice_fluxes = bare_ice_ablation_mass(c,forc,dt_seconds,albedo)
 
             ! Accumulate directly into the wp_acc accumulators.
             smb_ice     = smb_ice     + real(bare_ice_fluxes%net_mass_change,wp_acc)
@@ -824,9 +868,11 @@ contains
         end if
 
         ! === Step 6: albedo update ===========================================
+        ! The schemes update the SNOW albedo; the energy balance then sees it
+        ! blended with the background by the snow-cover fraction (D40).
 
         if (use_prescribed_albedo) then
-            albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
+            albedo_snow = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
         else if (c%albedo_scheme .eq. CHION_ALBEDO_SEMIX) then
             ! Column SWE and its seasonal peak drive the dust melt-amplification:
             ! meltwater scavenges little dust, so what remains concentrates as
@@ -853,15 +899,18 @@ contains
             if (forc%has_z_sur_std) z_sur_std = forc%z_sur_std
 
             call semix_surface_albedo(c,temperature(1),forc%snowfall_rate, &
-                                      coszm,cloud,z_sur_std,dust_con,albedo)
+                                      coszm,cloud,z_sur_std,dust_con,albedo_snow)
 
             w_snow_old = w_snow
         else if (c%albedo_scheme .eq. CHION_ALBEDO_AGING) then
             call albedo_update_aging(mass,temperature,n,c,forc%snowfall_rate,forc%dt_days, &
-                                     albedo,snow_age)
+                                     albedo_snow,snow_age)
         else
-            call albedo_update(mass,mass_w,density,temperature,n,c,forc%dt_days,albedo)
+            call albedo_update(mass,mass_w,density,temperature,n,c,forc%dt_days,albedo_snow)
         end if
+
+        albedo = bessi_surface_albedo(mass,mass_w,density,n,c,forc,use_prescribed_albedo, &
+                                      albedo_snow,alb_bg)
 
         ! === Step 7: HTESSEL snapshot ========================================
         ! Taken BEFORE densification and the energy solve, consumed in step 13.
@@ -912,7 +961,7 @@ contains
         ! inside the solve (trap 2).
 
         call apply_snow_surface_vapor_mass_flux(mass,mass_w,density,temperature,n, &
-                                                runoff,t_srf,albedo,c,forc,dt_seconds, &
+                                                runoff,t_srf,albedo_snow,c,forc,dt_seconds, &
                                                 par%mass_split,surface_mass_min, &
                                                 snow_vapor_fluxes)
 
@@ -931,23 +980,31 @@ contains
         ! and runoff gains it. Both halves of that guard matter -- a shortfall
         ! with layers still present (which apply_melt's general path can
         ! produce) is silently dropped.
+        !
+        ! A land column has no ice to charge (D41): its melt is the snow
+        ! actually melted, and the shortfall energy is dropped, as on
+        ! snow-free land.
 
         if (energy%needs_melt) then
 
             melt_mass = real(energy%melt_energy_available/real(c%Lm,wp_acc),wp)
 
-            call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo, &
+            call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo_snow, &
                             par%mass_split,surface_mass_min,melt_mass,c,melted)
 
-            if (melted .lt. real(melt_mass,wp_acc)) then
-                if (n .eq. 0) then
-                    ice_melt = real(melt_mass,wp_acc) - melted
-                    smb_ice  = smb_ice - ice_melt
-                    runoff   = runoff  + ice_melt
+            if (is_land) then
+                melt = melt + melted
+            else
+                if (melted .lt. real(melt_mass,wp_acc)) then
+                    if (n .eq. 0) then
+                        ice_melt = real(melt_mass,wp_acc) - melted
+                        smb_ice  = smb_ice - ice_melt
+                        runoff   = runoff  + ice_melt
+                    end if
                 end if
-            end if
 
-            melt = melt + real(melt_mass,wp_acc)
+                melt = melt + real(melt_mass,wp_acc)
+            end if
 
         end if
 
@@ -999,7 +1056,7 @@ contains
         ! in Julia (steps 12-14 above are guarded on liquid water).
 
         call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                        mass_base,smb_ice,runoff,t_srf,albedo, &
+                                        mass_base,smb_ice,runoff,t_srf,albedo_snow, &
                                         par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
                                         par%near_surface_layer_max_thicknesses,c)
 
@@ -1008,12 +1065,16 @@ contains
         ! case the albedo diagnosed in step 6 no longer describes the surface.
         ! A bare column carries zero snow age; Chion.jl resets it only under
         ! the aging scheme, the only one that advances it, so this is the same.
+        ! The written albedo is the blend on the final column (D40).
 
         if (use_prescribed_albedo) then
-            albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
+            albedo_snow = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
         else if (.not. surface_has_snow(mass,n)) then
-            albedo = alb_ice_use
+            albedo_snow = alb_bg
         end if
+
+        albedo = bessi_surface_albedo(mass,mass_w,density,n,c,forc,use_prescribed_albedo, &
+                                      albedo_snow,alb_bg)
 
         if (.not. surface_has_snow(mass,n)) snow_age = 0.0_wp
 
@@ -1022,6 +1083,66 @@ contains
         return
 
     end subroutine bessi_column_step_core
+
+    pure function bessi_surface_albedo(mass,mass_w,density,n,c,forc,use_prescribed_albedo, &
+                                       albedo_snow,alb_bg) result(alb)
+        ! The albedo the surface energy balance sees (chion, D40):
+        !
+        !   prescribed        -> the prescribed albedo (albedo_snow holds it)
+        !   no surface snow   -> alb_bg
+        !   otherwise         -> f*albedo_snow + (1 - f)*alb_bg
+        !
+        ! with the snow-cover fraction f
+        !   albedo_scheme = semix: CLIMBER-X's tanh(h_snow/(c_fsnow*z0m_ice)),
+        !       times its orography factor when the host gives z_sur_std;
+        !       h_snow = solid thickness of the snow layers;
+        !   dynamic, aging, constant: min(1, SWE/swe_crit_albedo), SWE = solid
+        !       plus liquid mass of the snow layers. The column's, not the
+        !       surface layer's: fine near-surface layers hold mass(1) near
+        !       6 kg m-2 on any column (review Q15).
+        ! Without ALBEDO_THIN_SNOW_BLEND (legacy_chion) f = 1: Chion.jl's
+        ! switch from the snow albedo to the bare one.
+
+        implicit none
+
+        real(wp),                       intent(IN) :: mass(:)      ! (Ntot) [kg m-2]
+        real(wp),                       intent(IN) :: mass_w(:)    ! (Ntot) [kg m-2]
+        real(wp),                       intent(IN) :: density(:)   ! (Ntot) [kg m-3]
+        integer,                        intent(IN) :: n
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        logical,                        intent(IN) :: use_prescribed_albedo
+        real(wp),                       intent(IN) :: albedo_snow  ! [1]
+        real(wp),                       intent(IN) :: alb_bg       ! [1]
+        real(wp) :: alb
+
+        ! Local variables
+        real(wp) :: f
+
+        if (use_prescribed_albedo) then
+            alb = albedo_snow
+            return
+        end if
+
+        if (.not. surface_has_snow(mass,n)) then
+            alb = alb_bg
+            return
+        end if
+
+        if (.not. ALBEDO_THIN_SNOW_BLEND) then
+            f = 1.0_wp
+        else if (c%albedo_scheme .eq. CHION_ALBEDO_SEMIX) then
+            f = semix_snow_cover_fraction(sum(mass(1:n)/density(1:n)),forc%z_sur_std, &
+                                          forc%has_z_sur_std,c)
+        else
+            f = snow_cover_fraction(sum(mass(1:n)) + sum(mass_w(1:n)),c%swe_crit_albedo)
+        end if
+
+        alb = thin_snow_albedo(f,albedo_snow,alb_bg)
+
+        return
+
+    end function bessi_surface_albedo
 
     subroutine bessi_bare_ice_substrate_step(mass,density,temperature,n,ice_temperature, &
                                              t_srf,albedo,smb_ice,runoff,melt,vapor_mass, &

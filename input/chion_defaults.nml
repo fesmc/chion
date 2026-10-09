@@ -140,7 +140,13 @@
     albedo_scheme             = "dynamic"   ! "constant" | "dynamic" | "prescribed" | "semix" | "aging"
     aging_cold_timescale_days    = 20.0     ! [d] Aging e-folding time, surface below T0 (albedo_scheme = "aging")
     aging_melting_timescale_days = 2.0      ! [d] Aging e-folding time, surface at T0
-    aging_snowfall_ref        = 10.0        ! [kg m-2] Step snowfall that fully rejuvenates the aging albedo
+    aging_snowfall_ref        = 10.0        ! [kg m-2] e-folding snowfall of the aging albedo's rejuvenation
+
+    ! ## Thin-snow albedo (chion; D40, D41) ##
+    swe_crit_albedo           = 10.0        ! [kg m-2] Column SWE of full snow cover (0 = off: any snow covers)
+    alpha_land                = 0.2         ! [1] Background albedo of a land column (H_ice = 0)
+    c_fsnow                   = 10.0        ! [1] SEMIX snow cover tanh(h_snow/(c_fsnow*z0m_ice)) (CLIMBER-X)
+    c_fsnow_orog              = 2e-4        ! [1] SEMIX orography h_snow/(h_snow + c_fsnow_orog*z_sur_std)
 
     ! ## SEMIX spectral albedo (albedo_scheme = "semix"; CLIMBER-X) ##
     frac_vu                   = 0.45        ! [1]  Visible+UV fraction of incoming solar
@@ -197,11 +203,30 @@
 !   alpha = alpha_wet + (alpha - alpha_wet)*exp(-dt/tau), tau = the
 !   melting timescale when the surface is at T0, else the cold one.
 !   Requires 0 <= alpha_wet <= alpha_dry <= 1. Snowfall S [kg m-2] in a
-!   step rejuvenates it by f = min(1, S/aging_snowfall_ref): the aging
-!   progress -ln((alpha-alpha_wet)/(alpha_dry-alpha_wet)) and
-!   snow_age_days are scaled by (1-f), so S >= aging_snowfall_ref resets
-!   to alpha_dry and a trace of snow does almost nothing (D30). Chion.jl
-!   resets on any snowfall; legacy_chion builds do the same.
+!   step rejuvenates aged snow by f = 1 - exp(-S/aging_snowfall_ref): the
+!   aging progress -ln((alpha-alpha_wet)/(alpha_dry-alpha_wet)) and
+!   snow_age_days are scaled by (1-f), so a trace of snow does almost
+!   nothing, and a day's snowfall refreshes the same in one step as in
+!   diurnal substeps. Snow onto a bare surface starts fresh (alpha_dry),
+!   its thinness left to the snow-cover fraction (D30). Chion.jl resets on
+!   any snowfall; legacy_chion builds do the same.
+!
+! swe_crit_albedo, alpha_land, c_fsnow, c_fsnow_orog (chion; D40, D41)
+!   The surface energy balance sees the snow albedo blended with the
+!   background, f*alpha_snow + (1-f)*alpha_bg, so a trace of snow on bare
+!   ice no longer hides the ice albedo. Snow-cover fraction f =
+!   min(1, SWE/swe_crit_albedo), SWE the column's snow water equivalent
+!   (solid + liquid over the snow layers), under the dynamic, aging and
+!   constant schemes; 0 turns the blend off (f = 1 on any surface snow,
+!   Chion.jl's switch). Under albedo_scheme = "semix" CLIMBER-X's own
+!   f = tanh(h_snow/(c_fsnow*z0m_ice)), h_snow the snow depth, times
+!   h_snow/(h_snow + c_fsnow_orog*z_sur_std) when the host gives z_sur_std.
+!   A prescribed albedo is never blended. Background alpha_bg: alpha_ice
+!   (or the host's alb_ice_host) where forc%H_ice > 0; alpha_land on a land
+!   column (H_ice = 0), which also has no ice ablation: snow-free land
+!   exchanges nothing, its Tsrf is the air temperature (D41). A host must
+!   therefore fill H_ice for BESSI. legacy_chion: no blend, bare ice under
+!   every column.
 !
 ! seb_scheme, turbulent_flux_scheme
 !   Chion.jl's split (d0146e1): seb_scheme selects the longwave

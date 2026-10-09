@@ -27,6 +27,12 @@ module snow_albedo
     ! Note on magnitudes: a single snowfall event can brighten the surface by
     ! at most (alpha_dry - alpha_wet), because the brightening increment is
     ! (alpha_dry-alpha_wet)*(1-exp(-dm/3)) < (alpha_dry-alpha_wet).
+    !
+    ! THIN SNOW (chion, docs/porting_notes.md D40): the schemes here compute
+    ! the albedo of the SNOW (bessi's albedo_snow). What the surface energy
+    ! balance sees is that blended with the background by a snow-cover
+    ! fraction, thin_snow_albedo(snow_cover_fraction(SWE), alpha_snow,
+    ! alpha_bg), assembled by the caller (snow_bessi).
 
     use chion_defs, only : wp, wp_acc, TOL_TINY, TOL_EMPTY_LAYER, &
                            chion_const_class, CHION_ALBEDO_CONSTANT, CHION_ALBEDO_AGING, &
@@ -51,6 +57,8 @@ module snow_albedo
     public :: albedo_aging_rejuvenate
     public :: albedo_update
     public :: albedo_update_aging
+    public :: snow_cover_fraction
+    public :: thin_snow_albedo
 
 contains
 
@@ -119,7 +127,7 @@ contains
 
     end function surface_liquid_water_content
 
-    subroutine albedo_refresh_from_snowfall(albedo,snow_age_days,c,snowfall_mass)
+    subroutine albedo_refresh_from_snowfall(albedo,snow_age_days,c,snowfall_mass,onto_bare)
         ! Chion.jl/src/processes/albedo.jl:61-81.
         ! Brightening by fresh snow, applied inside the accumulation step.
         !
@@ -128,10 +136,12 @@ contains
         ! No-op below TOL_TINY of added mass. Under the CONSTANT scheme the
         ! albedo is simply reset to alpha_dry (and then recomputed from scratch
         ! by albedo_update, since the constant scheme is memoryless). Under the
-        ! AGING scheme chion rejuvenates in proportion to the snowfall
-        ! (albedo_aging_rejuvenate, D30); Chion.jl, and legacy_chion builds,
-        ! reset to alpha_dry (6d06af6) and leave the snow age to
-        ! albedo_update_aging.
+        ! AGING scheme chion rejuvenates aged snow in proportion to the
+        ! snowfall (albedo_aging_rejuvenate, D30); snow onto a bare surface
+        ! (onto_bare) is all fresh, alpha_dry and age 0, however little falls:
+        ! its thinness is the snow-cover fraction's business (D40). Chion.jl,
+        ! and legacy_chion builds, reset to alpha_dry on any snowfall
+        ! (6d06af6) and leave the snow age to albedo_update_aging.
         !
         ! Trap 9: the test is on the CONSTANT scheme only, so PRESCRIBED lands
         ! in the dynamic branch here, exactly as in Julia.
@@ -142,6 +152,7 @@ contains
         real(wp),                intent(INOUT) :: snow_age_days  ! [d] aging scheme only
         type(chion_const_class), intent(IN)    :: c
         real(wp),                intent(IN)    :: snowfall_mass  ! [kg m-2] added this step
+        logical,                 intent(IN)    :: onto_bare      ! no surface snow before it
 
         if (real(snowfall_mass,wp_acc) .le. TOL_TINY) return
 
@@ -153,6 +164,9 @@ contains
         if (c%albedo_scheme .eq. CHION_ALBEDO_AGING) then
             if (ALBEDO_AGING_BINARY_REFRESH) then
                 albedo = c%alpha_dry
+            else if (onto_bare) then
+                albedo        = c%alpha_dry
+                snow_age_days = 0.0_wp
             else
                 call albedo_aging_rejuvenate(albedo,snow_age_days,c,snowfall_mass)
             end if
@@ -167,27 +181,28 @@ contains
     end subroutine albedo_refresh_from_snowfall
 
     subroutine albedo_aging_rejuvenate(albedo,snow_age_days,c,snowfall_mass)
-        ! Partial rejuvenation of the aging albedo by fresh snow (chion
-        ! deviation, docs/porting_notes.md D30). With the refresh fraction
+        ! Partial rejuvenation of aged snow by fresh snow (chion deviation,
+        ! docs/porting_notes.md D30). With the refresh fraction
         !
-        !   f = min(1, S/aging_snowfall_ref),   S = snowfall_mass,
+        !   f = 1 - exp(-S/aging_snowfall_ref),   S = snowfall_mass,
         !
         ! the aging progress E = -ln((a - alpha_wet)/(alpha_dry - alpha_wet))
         ! (= sum of dt/tau, exact for the aging scheme) and the snow age are
-        ! scaled by (1 - f). In albedo space, with no extra state:
+        ! scaled by 1 - f = exp(-S/aging_snowfall_ref). In albedo space, with
+        ! no extra state:
         !
         !   a   <- alpha_wet + (alpha_dry - alpha_wet)*x**(1-f),
         !          x = (a - alpha_wet)/(alpha_dry - alpha_wet)
         !   age <- (1 - f)*age
         !
-        ! S = 0 changes nothing, S >= aging_snowfall_ref is Chion.jl's reset,
-        ! and refreshes compose: E*(1-f1)*(1-f2).
+        ! S = 0 changes nothing, a trace almost nothing, and refreshes compose
+        ! exactly: exp(-S1/S_ref)*exp(-S2/S_ref) = exp(-(S1+S2)/S_ref), so a
+        ! day's snowfall refreshes the same whether it falls in one step or in
+        ! diurnal substeps (review Q14).
         !
-        ! Two limits are explicit rather than left to the power:
-        !   f = 1      -> alpha_dry, age 0      (x**0, also for x = 0)
-        !   x = 0      -> alpha_wet             (E infinite: only a full
-        !                                        refresh restores it)
-        ! The second also covers alpha_dry = alpha_wet, where x is undefined.
+        ! x = 0 (E infinite, also alpha_dry = alpha_wet, where x is undefined)
+        ! stays alpha_wet: no partial refresh restores it. Snow onto a bare
+        ! surface does not come here (albedo_refresh_from_snowfall).
 
         implicit none
 
@@ -200,13 +215,7 @@ contains
         real(wp) :: f_keep, alb, span
 
         ! 1 - f: the fraction of the aging progress that survives.
-        f_keep = 1.0_wp - min(1.0_wp, max(snowfall_mass,0.0_wp)/c%aging_snowfall_ref)
-
-        if (f_keep .le. 0.0_wp) then
-            albedo        = c%alpha_dry
-            snow_age_days = 0.0_wp
-            return
-        end if
+        f_keep = exp(-max(snowfall_mass,0.0_wp)/c%aging_snowfall_ref)
 
         snow_age_days = f_keep*snow_age_days
 
@@ -382,5 +391,53 @@ contains
         return
 
     end subroutine albedo_update_aging
+
+    pure function snow_cover_fraction(swe,swe_crit) result(f)
+        ! Snow-cover fraction of the thin-snow albedo (chion, D40):
+        !
+        !   f = min(1, SWE/swe_crit)     swe_crit > 0
+        !   f = 1                        swe_crit = 0 (blend off)
+        !
+        ! SWE is the column's snow water equivalent [kg m-2], solid plus
+        ! liquid over the snow layers (not the ice substrate): a column of
+        ! firn covers fully, fresh snow on bare ice partly. Whether there is
+        ! surface snow at all (f = 0 without) is the caller's test.
+
+        implicit none
+
+        real(wp), intent(IN) :: swe        ! [kg m-2]
+        real(wp), intent(IN) :: swe_crit   ! [kg m-2] >= 0
+        real(wp) :: f
+
+        if (swe_crit .gt. 0.0_wp) then
+            f = min(1.0_wp, max(swe,0.0_wp)/swe_crit)
+        else
+            f = 1.0_wp
+        end if
+
+        return
+
+    end function snow_cover_fraction
+
+    pure function thin_snow_albedo(f,alb_snow,alb_bg) result(alb)
+        ! The albedo the surface energy balance sees (D40):
+        !
+        !   alpha = f*alpha_snow + (1 - f)*alpha_bg
+        !
+        ! Written as two products so f = 1 returns alpha_snow and f = 0
+        ! alpha_bg exactly.
+
+        implicit none
+
+        real(wp), intent(IN) :: f          ! [1] snow-cover fraction
+        real(wp), intent(IN) :: alb_snow   ! [1] snow albedo
+        real(wp), intent(IN) :: alb_bg     ! [1] background albedo
+        real(wp) :: alb
+
+        alb = f*alb_snow + (1.0_wp - f)*alb_bg
+
+        return
+
+    end function thin_snow_albedo
 
 end module snow_albedo

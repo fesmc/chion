@@ -191,6 +191,15 @@ module chion_defs
     !   * TURB_SEMIX_R_AIR_LITERAL -> .TRUE., i.e. the semix turbulence's air
     !     density uses Chion.jl's literal 287.05 instead of c%R_dry
     !     (docs/porting_notes.md D38).
+    !   * ALBEDO_THIN_SNOW_BLEND -> .FALSE., i.e. any surface snow covers the
+    !     column (snow-cover fraction 1) and the albedo switches straight from
+    !     the snow albedo to the bare one, as in Chion.jl. chion blends the
+    !     two by a snow-cover fraction from the column's snow water
+    !     equivalent (docs/porting_notes.md D40).
+    !   * LAND_COLUMNS_WITHOUT_ICE -> .FALSE., i.e. a column with H_ice = 0
+    !     has bare ice under its snow (alpha_ice background, ice melt), as in
+    !     Chion.jl, which has no ice thickness. chion gives it a land
+    !     background albedo and no ice ablation (docs/porting_notes.md D41).
     !   * DIURNAL_SINGLE_INTERVAL_AVERAGED -> .TRUE., i.e. with diurnal
     !     substeps on, a day that is not split still takes the interval
     !     averages over [-pi, pi], which zero its shortwave when the solar
@@ -212,6 +221,8 @@ module chion_defs
     logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .FALSE.
     logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .TRUE.
     logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .TRUE.
+    logical,      parameter, public :: ALBEDO_THIN_SNOW_BLEND = .FALSE.
+    logical,      parameter, public :: LAND_COLUMNS_WITHOUT_ICE = .FALSE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
@@ -222,6 +233,8 @@ module chion_defs
     logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .TRUE.
     logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .FALSE.
     logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .FALSE.
+    logical,      parameter, public :: ALBEDO_THIN_SNOW_BLEND = .TRUE.
+    logical,      parameter, public :: LAND_COLUMNS_WITHOUT_ICE = .TRUE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
 #endif
 
@@ -336,8 +349,22 @@ module chion_defs
         ! relaxation towards alpha_wet, cold vs melting surface.
         real(wp) :: aging_cold_timescale_days     ! [d]
         real(wp) :: aging_melting_timescale_days  ! [d]
-        ! Step snowfall that fully rejuvenates the aging albedo (D30).
+        ! e-folding step snowfall of the aging albedo's rejuvenation (D30).
         real(wp) :: aging_snowfall_ref            ! [kg m-2]
+
+        ! Thin-snow albedo (chion only, D40): the albedo the surface energy
+        ! balance sees is f*alpha_snow + (1-f)*alpha_bg. Snow-cover fraction
+        ! f = min(1, SWE/swe_crit_albedo) from the column's snow water
+        ! equivalent (dynamic, aging, constant; swe_crit_albedo = 0 is off,
+        ! f = 1 on any surface snow); under albedo_scheme = semix CLIMBER-X's
+        ! tanh(h_snow/(c_fsnow*z0m_ice)), times h_snow/(h_snow +
+        ! c_fsnow_orog*z_sur_std) when the host gives a subgrid orography.
+        ! Background alpha_bg: the bare-ice albedo under ice, alpha_land on a
+        ! land column (H_ice = 0, D41).
+        real(wp) :: swe_crit_albedo               ! [kg m-2]
+        real(wp) :: alpha_land                    ! [1]
+        real(wp) :: c_fsnow                       ! [1]
+        real(wp) :: c_fsnow_orog                  ! [1]
 
         ! SEMIX spectral albedo (CHION_ALBEDO_SEMIX). Warren & Wiscombe 1980
         ! bands, collapsed to broadband by the incoming-SW spectral weights.
@@ -682,6 +709,13 @@ contains
         c%aging_melting_timescale_days =  2.0_wp
         c%aging_snowfall_ref           = 10.0_wp
 
+        ! Thin-snow albedo (D40, D41); c_fsnow and c_fsnow_orog are CLIMBER-X's
+        ! smb_par values.
+        c%swe_crit_albedo = 10.0_wp
+        c%alpha_land      = 0.2_wp
+        c%c_fsnow         = 10.0_wp
+        c%c_fsnow_orog    = 2.0e-4_wp
+
         ! SEMIX spectral albedo defaults (CLIMBER-X smb_par / constants).
         c%frac_vu          = 0.45_wp
         c%alb_snow_vis_new = 0.99_wp
@@ -775,6 +809,10 @@ contains
         write(*,"(a25,g14.6,a)") "aging_cold_timescale_days = ",    c%aging_cold_timescale_days,    "  [d]"
         write(*,"(a25,g14.6,a)") "aging_melting_timescale_days = ", c%aging_melting_timescale_days, "  [d]"
         write(*,"(a25,g14.6,a)") "aging_snowfall_ref = ", c%aging_snowfall_ref, "  [kg m-2]"
+        write(*,"(a25,g14.6,a)") "swe_crit_albedo = ", c%swe_crit_albedo, "  [kg m-2]"
+        write(*,"(a25,g14.6,a)") "alpha_land = ", c%alpha_land, "  [1]"
+        write(*,"(a25,g14.6,a)") "c_fsnow = ", c%c_fsnow, "  [1]"
+        write(*,"(a25,g14.6,a)") "c_fsnow_orog = ", c%c_fsnow_orog, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_air  = ", c%eps_air,  "  [1]"
         write(*,"(a25,i14)")     "longwave_scheme = ", c%longwave_scheme
         write(*,"(a37,g14.6,a)") "lw_emissivity_base = ", c%lw_emissivity_base, "  [1]"
@@ -804,7 +842,9 @@ contains
         ! fraction in [0,1], the semix turbulence's karman constant, height,
         ! roughness lengths, roughness ratio and exchange factors positive and
         ! its stable coefficient non-negative. Plus chion's
-        ! aging_snowfall_ref > 0 (D30).
+        ! aging_snowfall_ref > 0 (D30), and for the thin-snow albedo (D40,
+        ! D41) swe_crit_albedo >= 0, alpha_land in [0,1], c_fsnow > 0 and
+        ! c_fsnow_orog >= 0.
 
         implicit none
 
@@ -853,6 +893,21 @@ contains
         if (c%aging_snowfall_ref .le. 0.0_wp) then
             write(io_unit_err,*) "chion_const_validate:: Error: aging_snowfall_ref must be positive."
             write(io_unit_err,*) "aging_snowfall_ref = ", c%aging_snowfall_ref
+            stop "Program stopped."
+        end if
+
+        if (.not. (c%swe_crit_albedo .ge. 0.0_wp .and. c%c_fsnow .gt. 0.0_wp &
+                   .and. c%c_fsnow_orog .ge. 0.0_wp)) then
+            write(io_unit_err,*) "chion_const_validate:: Error: swe_crit_albedo and &
+                                 &c_fsnow_orog must be non-negative, c_fsnow positive."
+            write(io_unit_err,*) "swe_crit_albedo, c_fsnow, c_fsnow_orog = ", &
+                                 c%swe_crit_albedo, c%c_fsnow, c%c_fsnow_orog
+            stop "Program stopped."
+        end if
+
+        if (.not. (c%alpha_land .ge. 0.0_wp .and. c%alpha_land .le. 1.0_wp)) then
+            write(io_unit_err,*) "chion_const_validate:: Error: alpha_land must be in [0,1]."
+            write(io_unit_err,*) "alpha_land = ", c%alpha_land
             stop "Program stopped."
         end if
 

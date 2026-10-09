@@ -150,8 +150,8 @@ Genuinely prognostic, and implemented:
 - `w_snow_max(:)` — seasonal max column SWE (drives dust melt amplification)
 
 Not implemented (see [What is left](#what-is-left)):
-- `dt_snowfree(:)` / `f_snow` / `alb_bg` — SEMIX's continuous snow-cover-fraction
-  blend between snow and background albedo
+- `dt_snowfree(:)` (the snow-cover-fraction blend `f_snow`/`alb_bg` itself is
+  implemented since C12, D40)
 - albedo state broadened scalar → 4 bands: the bands are computed but collapsed
   to broadband immediately rather than carried as state
 
@@ -473,14 +473,15 @@ assumed spectral weights (`frac_vu`, cloud dir/dif split). That is a fair
 approximation offline at daily steps, and it is *not* sufficient for the
 CLIMBER-X swap, where the host already carries `swd_sur_{vis,nir}_{dir,dif}`.
 
-**3. SEMIX's snow-cover-fraction blend (`f_snow`).** SEMIX blends snow albedo
-into a background (ice/soil) albedo continuously,
-`f_snow = tanh(h_snow/(c_fsnow·z0m))·f_snow_orog`
-(`smb_surface_par.f90:110-129`), and tracks `dt_snowfree` and `alb_bg`. chion
-switches discretely between the snow column and bare ice at `TOL_EMPTY_LAYER`.
-Structural difference, not a bug — chion's layer model makes the hard switch
-natural — but it will show up at the margin, which is exactly where the SEMIX
-configurations diverge most from MAR. Worth revisiting if margin skill matters.
+**3. SEMIX's snow-cover-fraction blend (`f_snow`).** Done (C12,
+`porting_notes.md` D40): under `albedo_scheme = "semix"` the energy balance sees
+`f_snow·alpha_snow + (1 − f_snow)·alpha_bg` with CLIMBER-X's
+`f_snow = tanh(h_snow/(c_fsnow·z0m_ice))·f_snow_orog`
+(`smb_surface_par.f90:106-116`; `c_fsnow`, `c_fsnow_orog` in `&chion_const`,
+the orography factor when the host gives `z_sur_std`), `h_snow` chion's snow
+depth. The background is `alpha_ice` (or the host's `alb_ice_host`) under ice and
+`alpha_land` on land (D41), not CLIMBER-X's `f_ice`-weighted ice/soil mix.
+`dt_snowfree` is not carried.
 
 **4. `Ch_neutral` caching (performance).** `semix_resistance` recomputes two
 `log()` per call, and the neutral exchange coefficient depends only on snow

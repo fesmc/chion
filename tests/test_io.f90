@@ -269,6 +269,7 @@ contains
                 call check_eq_acc("latent_heat_flux_sum",b%bsi%now%latent_heat_flux_sum,a%bsi%now%latent_heat_flux_sum,nfail)
                 call check_eq_r1 ("t_srf",               b%bsi%now%t_srf,               a%bsi%now%t_srf,               nfail)
                 call check_eq_r1 ("albedo",              b%bsi%now%albedo,              a%bsi%now%albedo,              nfail)
+                call check_eq_r1 ("albedo_snow",         b%bsi%now%albedo_snow,         a%bsi%now%albedo_snow,         nfail)
                 call check_eq_r1 ("snow_age_days",       b%bsi%now%snow_age_days,       a%bsi%now%snow_age_days,       nfail)
                 call check_eq_r1 ("thickness",           b%bsi%now%thickness,           a%bsi%now%thickness,           nfail)
                 call check_eq_r1 ("wet_mass",            b%bsi%now%wet_mass,            a%bsi%now%wet_mass,            nfail)

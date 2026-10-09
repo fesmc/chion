@@ -1085,6 +1085,10 @@ contains
         call nml_read(filename,group,"aging_cold_timescale_days",   c%aging_cold_timescale_days,   init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"aging_melting_timescale_days",c%aging_melting_timescale_days,init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"aging_snowfall_ref",       c%aging_snowfall_ref,      init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"swe_crit_albedo",          c%swe_crit_albedo,         init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"alpha_land",               c%alpha_land,              init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"c_fsnow",                  c%c_fsnow,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"c_fsnow_orog",             c%c_fsnow_orog,            init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"frac_vu",                  c%frac_vu,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"alb_snow_vis_new",         c%alb_snow_vis_new,        init=init_pars,defaults_file=def_file,defaults_group=def_const)

@@ -23,7 +23,7 @@ program test_surface
 
     use chion_defs,          only : wp, wp_acc, chion_const_class, &
                                     chion_step_forcing_class, chion_const_init, &
-                                    CHION_ALBEDO_PRESCRIBED, DEF_SEA_LEVEL_AIR_PRESSURE, &
+                                    DEF_SEA_LEVEL_AIR_PRESSURE, &
                                     CHION_SEB_BESSI, CHION_SEB_SEMIX, &
                                     CHION_TURB_BESSI, CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                                     CHION_LONGWAVE_GRAYBODY, CHION_LONGWAVE_CLOUD_PROXY
@@ -173,7 +173,7 @@ program test_surface
     nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,H_NONE,.FALSE.)
     call check_close("bare ice at T0 stays solid: Q = (Lv+Lm)*E(T0)", nsw%latent, &
                      (c%Lv + c%Lm)*E0, 1.0e-5_wp, nfail)
-    abl = bare_ice_ablation_mass(c,forc,86400.0_wp)
+    abl = bare_ice_ablation_mass(c,forc,86400.0_wp,c%alpha_ice)
     call check_close("bare ice vapour mass = E(T0)*dt", abl%vapor_mass, E0*86400.0_wp, &
                      1.0e-5_wp, nfail)
 
@@ -487,7 +487,7 @@ program test_surface
     forc%relative_humidity     = 0.60_wp
 
     bif = resolved_bare_ice_surface_flux_components(c,forc,c%alpha_ice)
-    abl = bare_ice_ablation_mass(c,forc,dt_seconds)
+    abl = bare_ice_ablation_mass(c,forc,dt_seconds,c%alpha_ice)
 
     q_net = bif%shortwave_absorbed + bif%longwave + bif%sensible + bif%latent + bif%rain
 
@@ -513,7 +513,7 @@ program test_surface
     ! Sign convention, dry air: ea < es -> latent flux negative -> mass is lost
     ! by sublimation, so vapor_mass < 0 and sublimation_mass = -vapor_mass > 0.
     forc%relative_humidity = 0.10_wp
-    abl = bare_ice_ablation_mass(c,forc,dt_seconds)
+    abl = bare_ice_ablation_mass(c,forc,dt_seconds,c%alpha_ice)
     call check("dry air -> negative latent flux", abl%latent_heat_flux .lt. 0.0_wp, nfail)
     call check("dry air -> vapor_mass < 0 (mass loss)", abl%vapor_mass .lt. 0.0_wp, nfail)
     call check_close("sublimation_mass = -vapor_mass", &
@@ -522,7 +522,7 @@ program test_surface
     ! Sign convention, saturated warm air: ea > es -> deposition -> mass gain,
     ! and sublimation_mass is clipped at zero.
     forc%relative_humidity = 1.0_wp
-    abl = bare_ice_ablation_mass(c,forc,dt_seconds)
+    abl = bare_ice_ablation_mass(c,forc,dt_seconds,c%alpha_ice)
     call check("saturated warm air -> positive latent flux", &
                abl%latent_heat_flux .gt. 0.0_wp, nfail)
     call check("deposition -> vapor_mass > 0 (mass gain)", abl%vapor_mass .gt. 0.0_wp, nfail)
@@ -533,30 +533,20 @@ program test_surface
     call forcing_init(forc)
     forc%air_temperature = 240.0_wp
     forc%shortwave_down  = 0.0_wp
-    abl = bare_ice_ablation_mass(c,forc,dt_seconds)
+    abl = bare_ice_ablation_mass(c,forc,dt_seconds,c%alpha_ice)
     call check_close("melt_mass = 0 when Q_net < 0", abl%melt_mass, 0.0_wp, 1.0e-6_wp, nfail)
 
-    ! Prescribed albedo is used only when the scheme is PRESCRIBED *and* the
-    ! forcing carries one; otherwise bare ice uses alpha_ice.
+    ! The albedo is the caller's (snow_bessi: the prescribed one, or the
+    ! background, D40): the absorbed shortwave follows it.
     call forcing_init(forc)
     forc%air_temperature        = 275.0_wp
     forc%shortwave_down         = 400.0_wp
-    forc%prescribed_albedo      = 0.90_wp
-    forc%has_prescribed_albedo  = .TRUE.
 
-    abl = bare_ice_ablation_mass(c,forc,dt_seconds)                ! scheme = dynamic
-    bif = resolved_bare_ice_surface_flux_components(c,forc,c%alpha_ice)
-    q_net = bif%shortwave_absorbed + bif%longwave + bif%sensible + bif%latent + bif%rain
-    call check_close("has_prescribed_albedo ignored unless scheme is PRESCRIBED", &
-                     abl%melt_mass*c%Lm, max(q_net,0.0_wp)*dt_seconds, 1.0e-5_wp, nfail)
-
-    c%albedo_scheme = CHION_ALBEDO_PRESCRIBED
-    abl = bare_ice_ablation_mass(c,forc,dt_seconds)
+    abl = bare_ice_ablation_mass(c,forc,dt_seconds,0.90_wp)
     bif = resolved_bare_ice_surface_flux_components(c,forc,0.90_wp)
     q_net = bif%shortwave_absorbed + bif%longwave + bif%sensible + bif%latent + bif%rain
-    call check_close("scheme PRESCRIBED + flag -> prescribed albedo used", &
+    call check_close("the albedo argument sets the absorbed shortwave", &
                      abl%melt_mass*c%Lm, max(q_net,0.0_wp)*dt_seconds, 1.0e-5_wp, nfail)
-    c%albedo_scheme = 2                                            ! back to dynamic
 
     ! === diagnose_latent_heat_flux_coefficients =========================
     write(*,*)

@@ -37,7 +37,7 @@ module snow_surface_fluxes
     use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
 
     use chion_defs, only : wp, wp_acc, TOL_EMPTY_LAYER, io_unit_err, &
-                           CHION_ALBEDO_PRESCRIBED, CHION_SEB_SEMIX, &
+                           CHION_SEB_SEMIX, &
                            CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                            CHION_LONGWAVE_CLOUD_PROXY, &
                            chion_const_class, chion_step_forcing_class
@@ -489,7 +489,7 @@ contains
 
     end function resolved_turbulent_latent_heat_flux
 
-    pure function bare_ice_ablation_mass(c,forc,dt_seconds) result(abl)
+    pure function bare_ice_ablation_mass(c,forc,dt_seconds,surface_albedo) result(abl)
         ! Chion.jl/src/processes/surface_fluxes.jl:104-185
         ! (_bare_ice_surface_mass_fluxes_resolved + _bare_ice_ablation_mass).
         !
@@ -501,28 +501,23 @@ contains
         ! went into sublimation/deposition, and the vapor mass always uses
         ! (Lv + Lm) on bare ice regardless of temperature. Preserve both.
         !
-        ! Albedo selection mirrors surface_fluxes.jl:181-183: the prescribed
-        ! albedo is used only when the scheme is PRESCRIBED *and* the forcing
-        ! actually carries one; otherwise bare ice uses c%alpha_ice.
+        ! The albedo is the caller's: the column's bare-surface albedo, i.e.
+        ! the prescribed one when the scheme is PRESCRIBED *and* the forcing
+        ! carries one (surface_fluxes.jl:181-183), else the background
+        ! (alpha_ice, or the host's alb_ice_host; D40). Chion.jl takes
+        ! alpha_ice here whatever the host gives.
 
         implicit none
 
         type(chion_const_class),        intent(IN) :: c
         type(chion_step_forcing_class), intent(IN) :: forc
-        real(wp),                       intent(IN) :: dt_seconds   ! [s]
+        real(wp),                       intent(IN) :: dt_seconds       ! [s]
+        real(wp),                       intent(IN) :: surface_albedo   ! [1]
         type(bare_ice_ablation_class) :: abl
 
         ! Local variables
-        real(wp)                  :: surface_albedo
         type(bare_ice_flux_class) :: flx
         real(wp_acc)              :: q_net
-
-        surface_albedo = c%alpha_ice
-        if (c%albedo_scheme .eq. CHION_ALBEDO_PRESCRIBED) then
-            if (forc%has_prescribed_albedo) then
-                surface_albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
-            end if
-        end if
 
         flx = resolved_bare_ice_surface_flux_components(c,forc,surface_albedo)
 

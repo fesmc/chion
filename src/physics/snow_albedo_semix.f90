@@ -25,6 +25,11 @@ module snow_albedo_semix
     ! Dang et al. 2015, which is what CLIMBER-X itself defaults to. Both take
     ! the diagnosed grain size and the dust concentration; grain aging and
     ! dust-in-snow darkening are shared by the two.
+    !
+    ! The snow albedo is blended with the background by CLIMBER-X's own
+    ! snow-cover fraction (semix_snow_cover_fraction; smb_surface_par.f90:
+    ! 106-116), in snow_bessi (docs/porting_notes.md D40). Linear in the band
+    ! albedos, the blend commutes with the broadband collapse.
 
     use chion_defs, only : wp, chion_const_class, SEMIX_SNOW_ALBEDO_DANG
     use phys_constants, only : sec_day
@@ -44,6 +49,7 @@ module snow_albedo_semix
     public :: semix_bands_dang
     public :: semix_broadband_albedo
     public :: semix_daily_coszm
+    public :: semix_snow_cover_fraction
 
 contains
 
@@ -392,5 +398,42 @@ contains
         return
 
     end function semix_daily_coszm
+
+    pure function semix_snow_cover_fraction(h_snow,z_sur_std,has_z_sur_std,c) result(f_snow)
+        ! CLIMBER-X subgrid snow-cover fraction (smb_surface_par.f90:106-116;
+        ! Niu and Yang 2007, Roesch 2001):
+        !
+        !   f_snow = tanh(h_snow/(c_fsnow*z0m_ice))*f_snow_orog
+        !   f_snow_orog = h_snow/(h_snow + c_fsnow_orog*z_sur_std + eps)
+        !
+        ! with f_snow_orog = 1 when the host gives no subgrid orography
+        ! (CLIMBER-X's l_fsnow_orog, on by default there). z0m_ice is the
+        ! CLIMBER-X ice roughness (c%z0m_ice, 0.002 m), so f_snow = 0.76 at
+        ! 2 cm of snow. h_snow is chion's snow depth, the solid thickness of
+        ! the snow layers; CLIMBER-X's is SWE over a fixed 250 kg m-3.
+
+        implicit none
+
+        real(wp),                intent(IN) :: h_snow         ! [m] snow depth
+        real(wp),                intent(IN) :: z_sur_std      ! [m] subgrid height std dev
+        logical,                 intent(IN) :: has_z_sur_std
+        type(chion_const_class), intent(IN) :: c
+        real(wp) :: f_snow
+
+        ! Local variables
+        real(wp), parameter :: EPS_OROG = 1.0e-10_wp   ! [m] CLIMBER-X eps
+        real(wp) :: f_snow_orog, h
+
+        h = max(h_snow,0.0_wp)
+
+        f_snow_orog = 1.0_wp
+        if (has_z_sur_std) &
+            f_snow_orog = h/(h + c%c_fsnow_orog*max(z_sur_std,0.0_wp) + EPS_OROG)
+
+        f_snow = tanh(h/(c%c_fsnow*c%z0m_ice))*f_snow_orog
+
+        return
+
+    end function semix_snow_cover_fraction
 
 end module snow_albedo_semix

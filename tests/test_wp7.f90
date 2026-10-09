@@ -331,7 +331,7 @@ contains
         ! === snowfall brightening =========================================
         ! Saturates at alpha_dry, however large the event.
         alb = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb,age,cc,1.0e6_wp)
+        call albedo_refresh_from_snowfall(alb,age,cc,1.0e6_wp,.FALSE.)
         call check_val("snowfall brightening saturates at alpha_dry", alb, cc%alpha_dry, nfail)
 
         ! A single event cannot brighten by more than alpha_dry - alpha_wet.
@@ -339,7 +339,7 @@ contains
         do k = 1, 8
             alb_prev = cc%alpha_wet + real(k-1,wp)*span/8.0_wp
             alb      = alb_prev
-            call albedo_refresh_from_snowfall(alb,age,cc,1.0e9_wp)
+            call albedo_refresh_from_snowfall(alb,age,cc,1.0e9_wp,.FALSE.)
             if (alb - alb_prev .gt. span + 8.0_wp*epsilon(1.0_wp)) ok = .FALSE.
             if (alb .gt. cc%alpha_dry) ok = .FALSE.
         end do
@@ -347,20 +347,20 @@ contains
 
         ! e-folding is 3 kg m-2: dm = 3 gives exactly (1-1/e) of the span.
         alb = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb,age,cc,ALBEDO_SNOWFALL_EFOLD_MASS)
+        call albedo_refresh_from_snowfall(alb,age,cc,ALBEDO_SNOWFALL_EFOLD_MASS,.FALSE.)
         call check_val("snowfall e-folding mass is 3 kg m-2", &
                        alb, cc%alpha_wet + span*(1.0_wp - exp(-1.0_wp)), nfail)
 
         ! Below TOL_TINY of added mass it is a no-op.
         alb = 0.73_wp
-        call albedo_refresh_from_snowfall(alb,age,cc,0.0_wp)
+        call albedo_refresh_from_snowfall(alb,age,cc,0.0_wp,.FALSE.)
         call check_val("zero snowfall mass -> no-op", alb, 0.73_wp, nfail)
 
         ! Monotone non-darkening in the added mass.
         alb_a = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb_a,age,cc,1.0_wp)
+        call albedo_refresh_from_snowfall(alb_a,age,cc,1.0_wp,.FALSE.)
         alb_b = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb_b,age,cc,10.0_wp)
+        call albedo_refresh_from_snowfall(alb_b,age,cc,10.0_wp,.FALSE.)
         call check("snowfall brightening increases with added mass", alb_b .gt. alb_a, nfail)
 
         ! === constant scheme is memoryless ================================
@@ -391,7 +391,7 @@ contains
 
         ! Constant-scheme snowfall refresh resets to alpha_dry outright.
         alb = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb,age,cc,0.001_wp)
+        call albedo_refresh_from_snowfall(alb,age,cc,0.001_wp,.FALSE.)
         call check_val("constant, snowfall refresh -> alpha_dry", alb, cc%alpha_dry, nfail)
 
         ! === prescribed takes the DYNAMIC path (trap 9) ===================
@@ -505,17 +505,25 @@ contains
 
         ! === snowfall refresh in the accumulation slot ====================
         ! Legacy: Chion.jl's reset. Otherwise D30's partial refresh, which a
-        ! trace of snow on fully aged snow leaves at alpha_wet.
+        ! trace of snow on fully aged snow leaves at alpha_wet, and fresh
+        ! snow on a bare surface, which starts at alpha_dry.
         alb = cc%alpha_wet
         age = 4.0_wp
-        call albedo_refresh_from_snowfall(alb,age,cc,0.001_wp)
+        call albedo_refresh_from_snowfall(alb,age,cc,0.001_wp,.FALSE.)
         if (ALBEDO_AGING_BINARY_REFRESH) then
             call check_val("aging (legacy), snowfall refresh -> alpha_dry", alb, cc%alpha_dry, nfail)
         else
             call check_val("aging, trace snowfall on alpha_wet stays alpha_wet", alb, cc%alpha_wet, nfail)
-            call check_val("aging, trace snowfall scales the age by (1-f)", age, &
-                           4.0_wp*(1.0_wp - 0.001_wp/cc%aging_snowfall_ref), nfail)
+            call check_val("aging, trace snowfall scales the age by exp(-S/S_ref)", age, &
+                           4.0_wp*exp(-0.001_wp/cc%aging_snowfall_ref), nfail)
         end if
+
+        alb = cc%alpha_ice
+        age = 4.0_wp
+        call albedo_refresh_from_snowfall(alb,age,cc,0.001_wp,.TRUE.)
+        call check_val("aging, a trace onto a bare surface -> alpha_dry", alb, cc%alpha_dry, nfail)
+        if (.not. ALBEDO_AGING_BINARY_REFRESH) &
+            call check_val("aging, a trace onto a bare surface -> snow age 0", age, 0.0_wp, nfail)
 
         write(*,*)
 
@@ -524,9 +532,9 @@ contains
     end subroutine test_albedo_aging
 
     subroutine test_albedo_aging_rejuvenate(c,nfail)
-        ! D30: partial rejuvenation f = min(1, S/S_ref) of the aging albedo,
-        ! E = -ln((a-alpha_wet)/(alpha_dry-alpha_wet)) <- (1-f)*E. Tested on
-        ! the routine itself, which legacy_chion builds do not call.
+        ! D30: partial rejuvenation f = 1 - exp(-S/S_ref) of the aging
+        ! albedo, E = -ln((a-alpha_wet)/(alpha_dry-alpha_wet)) <- (1-f)*E.
+        ! Tested on the routine itself, which legacy_chion builds do not call.
 
         implicit none
 
@@ -535,7 +543,7 @@ contains
 
         ! Local variables
         type(chion_const_class) :: cc
-        real(wp) :: alb, age, alb_a, age_a, alb_prev, span, e0, e2, s1, s2
+        real(wp) :: alb, age, alb_a, age_a, alb_b, age_b, alb_prev, span, e0, e2, s1, s2
         integer  :: k
         logical  :: ok
 
@@ -552,29 +560,32 @@ contains
         call check_val("rejuvenate, S = 0 leaves albedo unchanged", alb, 0.75_wp, nfail)
         call check_val("rejuvenate, S = 0 leaves snow age unchanged", age, 6.0_wp, nfail)
 
-        ! S >= S_ref: Chion.jl's reset, from anywhere, including alpha_wet.
-        alb = cc%alpha_wet
-        age = 30.0_wp
-        call albedo_aging_rejuvenate(alb,age,cc,cc%aging_snowfall_ref)
-        call check_val("rejuvenate, S = S_ref -> alpha_dry", alb, cc%alpha_dry, nfail)
-        call check_val("rejuvenate, S = S_ref -> snow age 0", age, 0.0_wp, nfail)
-
-        alb = 0.74_wp
-        age = 3.0_wp
-        call albedo_aging_rejuvenate(alb,age,cc,5.0_wp*cc%aging_snowfall_ref)
-        call check_val("rejuvenate, S > S_ref -> alpha_dry", alb, cc%alpha_dry, nfail)
-        call check_val("rejuvenate, S > S_ref -> snow age 0", age, 0.0_wp, nfail)
-
-        ! Half the reference snowfall halves the aging progress E.
+        ! S = S_ref scales E and the snow age by exp(-1); S = S_ref*ln 2
+        ! halves them.
         alb = 0.75_wp
         age = 8.0_wp
         e0  = -log((alb - cc%alpha_wet)/span)
-        call albedo_aging_rejuvenate(alb,age,cc,0.5_wp*cc%aging_snowfall_ref)
-        call check_val("rejuvenate, S = S_ref/2 halves E", &
-                       -log((alb - cc%alpha_wet)/span), 0.5_wp*e0, nfail)
-        call check_val("rejuvenate, S = S_ref/2 halves the snow age", age, 4.0_wp, nfail)
+        call albedo_aging_rejuvenate(alb,age,cc,cc%aging_snowfall_ref)
+        call check_val("rejuvenate, S = S_ref scales E by exp(-1)", &
+                       -log((alb - cc%alpha_wet)/span), exp(-1.0_wp)*e0, nfail)
+        call check_val("rejuvenate, S = S_ref scales the snow age by exp(-1)", &
+                       age, 8.0_wp*exp(-1.0_wp), nfail)
 
-        ! Successive refreshes compose: E*(1-f1)*(1-f2).
+        alb = 0.75_wp
+        age = 8.0_wp
+        call albedo_aging_rejuvenate(alb,age,cc,log(2.0_wp)*cc%aging_snowfall_ref)
+        call check_val("rejuvenate, S = S_ref*ln2 halves E", &
+                       -log((alb - cc%alpha_wet)/span), 0.5_wp*e0, nfail)
+        call check_val("rejuvenate, S = S_ref*ln2 halves the snow age", age, 4.0_wp, nfail)
+
+        ! A heavy snowfall all but restores alpha_dry.
+        alb = 0.74_wp
+        age = 3.0_wp
+        call albedo_aging_rejuvenate(alb,age,cc,5.0_wp*cc%aging_snowfall_ref)
+        call check("rejuvenate, S = 5 S_ref -> within 1% of the span of alpha_dry", &
+                   cc%alpha_dry - alb .lt. 0.01_wp*span .and. alb .le. cc%alpha_dry, nfail)
+
+        ! Successive refreshes compose exactly: E*exp(-S1/S_ref)*exp(-S2/S_ref).
         s1  = 0.3_wp*cc%aging_snowfall_ref
         s2  = 0.6_wp*cc%aging_snowfall_ref
         alb = 0.72_wp
@@ -583,10 +594,23 @@ contains
         call albedo_aging_rejuvenate(alb,age,cc,s1)
         call albedo_aging_rejuvenate(alb,age,cc,s2)
         e2  = -log((alb - cc%alpha_wet)/span)
-        call check_val("rejuvenate, two refreshes compose as E*(1-f1)*(1-f2)", &
-                       e2, e0*(1.0_wp - 0.3_wp)*(1.0_wp - 0.6_wp), nfail)
+        call check_val("rejuvenate, two refreshes compose as E*exp(-(S1+S2)/S_ref)", &
+                       e2, e0*exp(-0.9_wp), nfail)
         call check_val("rejuvenate, two refreshes compose on the snow age", &
-                       age, 10.0_wp*(1.0_wp - 0.3_wp)*(1.0_wp - 0.6_wp), nfail)
+                       age, 10.0_wp*exp(-0.9_wp), nfail)
+
+        ! Substep invariance (review Q14): a day's S in 8 equal substeps is
+        ! the same refresh as in one step.
+        alb_a = 0.72_wp
+        age_a = 10.0_wp
+        call albedo_aging_rejuvenate(alb_a,age_a,cc,cc%aging_snowfall_ref)
+        alb_b = 0.72_wp
+        age_b = 10.0_wp
+        do k = 1, 8
+            call albedo_aging_rejuvenate(alb_b,age_b,cc,cc%aging_snowfall_ref/8.0_wp)
+        end do
+        call check_val("rejuvenate, 8 substeps of S/8 == one step of S (albedo)", alb_b, alb_a, nfail)
+        call check_val("rejuvenate, 8 substeps of S/8 == one step of S (age)", age_b, age_a, nfail)
 
         ! Monotone in S: more snow never darkens, from below alpha_dry.
         ok = .TRUE.
@@ -601,8 +625,10 @@ contains
         end do
         call check("rejuvenate, albedo monotone non-decreasing in S, within bounds", ok, nfail)
 
-        ! alpha_wet exactly (E infinite): only a full refresh restores it, and
-        ! alpha_dry = alpha_wet is well defined (no 0/0).
+        ! alpha_wet exactly (E infinite): no partial refresh restores it (snow
+        ! onto a bare surface starts at alpha_dry instead, see
+        ! albedo_refresh_from_snowfall), and alpha_dry = alpha_wet is well
+        ! defined (no 0/0).
         alb = cc%alpha_wet
         age = 2.0_wp
         call albedo_aging_rejuvenate(alb,age,cc,0.9_wp*cc%aging_snowfall_ref)
