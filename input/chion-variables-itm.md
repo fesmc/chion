@@ -2,12 +2,13 @@
 
 Output variable table for `model = "itm"`, read by `chion_io.f90`.
 
-ITM has NO Chion.jl counterpart (`build_model(:itm,...)` errors upstream), so
-there is no `NETCDF_METADATA` entry to match. Where a quantity has the same
-meaning as a BESSI/Chion.jl one, the Chion.jl NAME and UNITS are reused
-deliberately, so that a host can read `smb_ice`, `runoff`, `melt`,
-`refreezing`, `albedo` and `Tsrf` from any chion output file without knowing
-which model produced it. The remaining entries carry smbpal's own names.
+Where a quantity has the same meaning as a BESSI/Chion.jl one, the Chion.jl
+BESSI NAME and UNITS are reused deliberately, so that a host can read
+`smb_ice`, `runoff`, `melt`, `refreezing`, `albedo` and `Tsrf` from any chion
+output file without knowing which model produced it. The remaining entries
+carry smbpal's own names. Chion.jl's `ITMModel` (added later, ported from
+chion) writes `alb_s`, `smb_cum`, `melt_cum`, `runoff_cum`, `refreezing_cum`
+for ids 2 and 5-8; validation/compare.jl `ITM_PAIRS` maps them.
 
 Note ITM works internally in [mm w.e.] and [mm w.e. d-1]; mm w.e. is kg m-2 by
 definition, so `mmWE` is used throughout for consistency with the other tables.

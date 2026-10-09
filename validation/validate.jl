@@ -86,7 +86,7 @@ loosen it further (PLAN.md WP16).
 """
 const TOL_ULP_DP = 4.0
 
-const GATED_VARS = vcat(BESSI_VARS, PDD_VARS)
+const GATED_VARS = vcat(BESSI_VARS, PDD_VARS, ITM_VARS)
 
 function gate(diffs::Vector{FieldDiff}, label::AbstractString)
     nfail = 0
@@ -145,13 +145,88 @@ function check_coverage(cov::Vector{NamedTuple})
 end
 
 """
-ITM has no Chion.jl counterpart -- `build_model(:itm, ...)` deliberately errors
-there -- so its reference is smbpal, and that comparison already exists as the
-WP12 acceptance test. It is run here rather than reimplemented, so there is one
-statement of ITM equivalence rather than two that can drift apart.
+ITM coverage, read off the chion dp+legacy output: each column must reach the
+background-albedo branch and the part of the budget it exists for.
+"""
+function check_itm_coverage(chion_path::AbstractString, names::Vector{String})
+    local hs, alb, smbi, melt, refr
+    NCDataset(chion_path) do dc
+        hs, _ = read_canonical(dc, "H_snow")
+        alb, _ = read_canonical(dc, "albedo")
+        smbi, _ = read_canonical(dc, "smb_ice")
+        melt, _ = read_canonical(dc, "melt")
+        refr, _ = read_canonical(dc, "refreezing")
+    end
+    # Record 1 is chion's initial state; columns are the scenarios in order.
+    col(a, name) = Float64.(a[2:end, 1, findfirst(==(name), names)])
+    steps(a, name) = diff(Float64.(a[:, 1, findfirst(==(name), names)]))
+    p = ITM_PARAMS
+    alb_land = p.alb_land * 0.5 + p.alb_forest * 0.5      # PDDA = 500
+    checks = [
+        ("ice_ablation melts out (H_snow -> 0)",
+         () -> minimum(col(hs, "ice_ablation")) == 0.0),
+        ("ice_ablation melts ice with no snow",
+         () -> any((col(hs, "ice_ablation") .== 0.0) .& (steps(smbi, "ice_ablation") .< 0.0))),
+        ("ice_ablation melts snow",
+         () -> any((col(hs, "ice_ablation") .> 0.0) .& (steps(melt, "ice_ablation") .> 0.0))),
+        ("ice_ablation refreezes",
+         () -> last(col(refr, "ice_ablation")) > 0.0),
+        ("ice_ablation snow-free albedo is alb_ice",
+         () -> any((col(hs, "ice_ablation") .== 0.0) .& (col(alb, "ice_ablation") .== p.alb_ice))),
+        ("ice_accum_cap holds H_snow at H_snow_max",
+         () -> all(col(hs, "ice_accum_cap") .== p.H_snow_max)),
+        ("ice_accum_cap exports the excess to ice",
+         () -> last(col(smbi, "ice_accum_cap")) > 0.0),
+        ("land_seasonal snow-free albedo is the land background",
+         () -> any((col(hs, "land_seasonal") .== 0.0) .&
+                   (abs.(col(alb, "land_seasonal") .- alb_land) .<= 1e-12))),
+        ("ocean snow-free albedo is alb_ocean",
+         () -> any((col(hs, "ocean") .== 0.0) .& (col(alb, "ocean") .== p.alb_ocean))),
+    ]
+    nfail = 0
+    println()
+    println("--- ITM coverage assertions ---")
+    for (label, f) in checks
+        ok = try f() catch; false end
+        println(ok ? "  ok   : $label" : "  FAIL : $label")
+        ok || (nfail += 1)
+    end
+    return nfail
+end
+
+"""
+ITM against Chion.jl's ITMModel (ported from chion, 29eb867): dp+legacy, so
+chion's tsrf uses the daily melt_net as Chion.jl does (D27), and all eight
+written fields are gated.
+"""
+function run_itm_julia(nstep::Int)
+    println("\n[3/3] ITM: $(length(ITM_SCENARIOS)) columns x $nstep daily steps")
+    for (sc, g) in ITM_SCENARIOS
+        println("      - $(rpad(sc.name, 16)) $(sc.what)")
+    end
+    fitm = joinpath(WORKDIR, "forcing_itm.nc")
+    write_forcing(fitm, first.(ITM_SCENARIOS); nstep=nstep, dt_days=1.0,
+                  geometry=last.(ITM_SCENARIOS))
+
+    jl_itm = run_julia_itm(; forcing=fitm, outfile="julia_itm.nc", workdir=WORKDIR)
+    ch_itm = run_chion(; precision=:dp, legacy=true, forcing=fitm,
+                       outfile="chion_itm_dp_legacy.nc", workdir=WORKDIR,
+                       model="itm", dt_out=1.0, dt=1.0, nml_extra=itm_nml(),
+                       name_hice="HI", name_pdds="PDDA")
+    d = compare_files(ch_itm, jl_itm, ITM_PAIRS; eps_wp=eps_of(:dp))
+    report(d, "ITM port fidelity: chion dp+legacy vs Chion.jl")
+    nfail = gate(d, "ITM port fidelity")
+    nfail += check_itm_coverage(ch_itm, [sc.name for (sc, g) in ITM_SCENARIOS])
+    return nfail
+end
+
+"""
+ITM's production reference is smbpal, and that comparison already exists as
+the WP12 acceptance test. It is run here rather than reimplemented, so there is
+one statement of smbpal equivalence rather than two that can drift apart.
 """
 function run_itm_check()
-    println("\n[3/3] ITM: smbpal equivalence (tests/test_itm.x, both precisions)")
+    println("\n      ITM: smbpal equivalence (tests/test_itm.x, both precisions)")
     nfail = 0
     for prec in (:dp, :sp)
         exe = joinpath(CHION_ROOT, bindir(prec), "test_itm.x")
@@ -281,6 +356,7 @@ function main()
         end
     end
 
+    nfail += run_itm_julia(QUICK ? 365 : 3 * 365)
     nfail += run_itm_check()
 
     println()

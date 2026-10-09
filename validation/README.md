@@ -37,7 +37,7 @@ tests use the same builds (`libchion/bin*-fpsafe/test_*.x`); production
 |---|---|---|
 | BESSI | Chion.jl | authoritative — tight tolerances |
 | PDD | Chion.jl, and its own mass closure | authoritative since Chion.jl adopted chion's budget (D23, `ce6a68d`); both `pdd_method`s gated |
-| ITM | smbpal | no Chion.jl ITM exists; runs `test_itm.x`, not a reimplementation |
+| ITM | Chion.jl, and smbpal | Chion.jl's `ITMModel` (ported from chion, `29eb867`): gated at dp+legacy, all 8 written fields (D27 reverted). smbpal, the production reference: runs `test_itm.x`, not a reimplementation |
 
 One forcing file drives both models per target, so a difference is attributable
 to the models rather than to two generators drifting apart.
@@ -119,7 +119,9 @@ claim: it asserts the layer *structure* is identical, not merely similar.
 Worst field, port-fidelity gate (dp+legacy vs Chion.jl): **0.47 ulp**
 (`temperature`, `density`). `N` is exactly 0 — the layer counts agree at every
 step of every column. ITM agrees with smbpal to 1.1e-07 relative at sp and
-5.1e-15 at dp. PDD mass closure: 2.3e-15 at dp.
+5.1e-15 at dp. PDD vs Chion.jl (dp, 60 monthly steps): worst 0.37 ulp
+(`simple`) and 0.41 ulp (`pism`). PDD mass closure: 2.3e-15 at dp, 3.8e-07 at
+sp.
 
 Reported, not gated:
 
@@ -145,6 +147,9 @@ column actually reached and asserts it:
 | `bare_recover` | ablation to bare ice, early-return bare path, recovery | N→0 then back to 2, melt 10139 |
 | `ntot_capacity` | `Ntot` capacity, bottom merge, depth cap | N=15, base export 8350 kg m⁻² |
 | PDD monthly | `simple` and `pism` (Calov–Greve) integrals | 60 steps at dt=30 d each |
+| ITM `ice_ablation` | ice background; melts out, then bare-ice melt; rain refreezing | asserted |
+| ITM `ice_accum_cap` | `H_snow_max` cap, excess to ice | asserted |
+| ITM `land_seasonal`, `ocean` | land (tundra PDDs) and ocean backgrounds | asserted |
 
 This caught two real weaknesses: three of the four columns originally never
 split a layer, and `mass_base` was identically zero on both sides — so its
@@ -162,6 +167,13 @@ split a layer, and `mass_base` was identically zero on both sides — so its
 - **Chion.jl writes no time coordinate variable** — only a bare `t` dimension,
   so its output cannot be interpreted without knowing the forcing that produced
   it. Alignment is checked structurally as a result.
+- **Chion.jl's `load_forcing_file` reads no ITM ice thickness or annual PDDs.**
+  The ITM forcing carries them as `HI` / `PDDA`; `run_julia_itm` merges them
+  into the loaded forcing, and `chion_grid.x` reads them via `name_hice` /
+  `name_pdds`.
+- **ITM output names differ.** chion writes the cumulative accumulators under
+  BESSI's names (`melt`, `runoff`, `refreezing`, `smb_total`, `albedo`),
+  Chion.jl as `*_cum`, `smb_cum` and `alb_s`; `ITM_PAIRS` maps them.
 - **Chion.jl cannot read a CF time axis.** The forcing file carries the time
   axis twice — CF numeric for `chion_grid.x`, and YYYY/MM/DD/HH for Chion.jl.
   See the note in `forcing.jl` and the upstream defect list.

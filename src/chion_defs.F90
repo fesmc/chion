@@ -14,6 +14,7 @@ module chion_defs
     use, intrinsic :: iso_fortran_env, only : error_unit
     use precision, only : sp, dp
     use nml, only : nml_replace
+    use phys_constants, only : sec_year_360d, sec_day
 
     implicit none
 
@@ -151,16 +152,25 @@ module chion_defs
     !     docs/porting_notes.md D22). Drop once Chion.jl uses 8.31446...
     !   * DENSIFY_GRAVITY -> 9.81, Chion.jl's second gravity constant
     !     (docs/porting_notes.md D25).
+    !   * ITM_FIRN_DAYS_YEAR -> 1, i.e. ITM's tsrf applies firn_fac to the
+    !     daily melt_net rate, as Chion.jl's ITMModel does (docs/porting_notes.md
+    !     D27). chion scales it to the annual rate firn_fac is calibrated on.
     !
     ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
     ! the plain build is gated against Chion.jl for PDD.
+    !
+    ! ITM_FIRN_DAYS_YEAR: days per year of the calendar ITM's firn_fac is
+    ! calibrated on. smbpal's annual totals are on a 360-day year; a property
+    ! of the calibration, not of the host's calendar.
 #ifdef CHION_LEGACY
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = 8.314_wp_acc
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc
+    real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = 1.0_wp
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = real(DEF_GRAVITY,wp_acc)
+    real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = real(sec_year_360d/sec_day,wp)
     logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
 #endif
 

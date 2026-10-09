@@ -61,6 +61,7 @@ program chion_grid
     !       name_x  = "x"   name_y = "y"   name_time = "time"
     !       name_t2m = "TT" name_sf = "SF" name_rf = "RF" name_swd = "SWD"
     !       name_mask = "mask"  name_lat = "LAT"  name_zs = "SH"
+    !       name_hice = "None"  name_pdds = "None" ! ITM: ice thickness [m], annual PDDs [K d]
     !       t2m_in_celsius     = .FALSE.   ! convert TT by +273.15
     !       precip_in_mmwe_day = .FALSE.   ! convert SF/RF by /86400
     !       dt             = -1.0          ! [d] <=0 -> infer from the time axis
@@ -99,7 +100,7 @@ program chion_grid
     character(len=512) :: file_forcing
     character(len=56)  :: name_x, name_y, name_time
     character(len=56)  :: name_t2m, name_sf, name_rf, name_swd
-    character(len=56)  :: name_mask, name_lat, name_zs
+    character(len=56)  :: name_mask, name_lat, name_zs, name_hice, name_pdds
     real(wp) :: dt
     logical  :: t2m_in_celsius, precip_in_mmwe_day
 
@@ -125,6 +126,7 @@ program chion_grid
 
     real(wp), allocatable :: xc(:), yc(:), times(:)
     real(wp), allocatable :: mask2D(:,:), lat2D(:,:), zs2D(:,:)
+    real(wp), allocatable :: hice2D(:,:), pdds2D(:,:)
     real(wp), allocatable :: t2m(:,:), sf(:,:), rf(:,:), swd(:,:)
     integer,  allocatable :: col_is(:), col_js(:)
     real(wp), allocatable :: maskT(:,:)
@@ -192,6 +194,8 @@ program chion_grid
         call nml_read(path_par,"ctrl","name_mask",         name_mask)
         call nml_read(path_par,"ctrl","name_lat",          name_lat)
         call nml_read(path_par,"ctrl","name_zs",           name_zs)
+        call nml_read(path_par,"ctrl","name_hice",         name_hice)
+        call nml_read(path_par,"ctrl","name_pdds",         name_pdds)
         call nml_read(path_par,"ctrl","t2m_in_celsius",    t2m_in_celsius)
         call nml_read(path_par,"ctrl","precip_in_mmwe_day",precip_in_mmwe_day)
         call nml_read(path_par,"ctrl","dt",                dt)
@@ -273,6 +277,14 @@ program chion_grid
         zs2D = 0.0_wp
         if (trim(name_zs) .ne. "None") call nc_read(file_forcing,trim(name_zs),zs2D)
 
+        ! ITM's static inputs (BESSI and PDD ignore them). "None" keeps
+        ! chion's neutral 0 (land background, desert critical depth).
+        allocate(hice2D(nx,ny), pdds2D(nx,ny))
+        hice2D = 0.0_wp
+        if (trim(name_hice) .ne. "None") call nc_read(file_forcing,trim(name_hice),hice2D)
+        pdds2D = 0.0_wp
+        if (trim(name_pdds) .ne. "None") call nc_read(file_forcing,trim(name_pdds),pdds2D)
+
     end if
 
     ! =====================================================================
@@ -322,6 +334,14 @@ program chion_grid
         chn%forc%latitude_deg(i)   = lat2D(col_is(i),col_js(i))
         chn%forc%surface_height(i) = zs2D(col_is(i),col_js(i))
     end do
+    ! ITM ice thickness and annual PDDs: from the file here; the domain
+    ! source sets them below (H_ice_default, PDDs from the climatology).
+    if (.not. is_domain) then
+        do i = 1, ncol
+            chn%forc%H_ice(i) = hice2D(col_is(i),col_js(i))
+            chn%forc%PDDs(i)  = pdds2D(col_is(i),col_js(i))
+        end do
+    end if
     chn%forc%wind_speed = wind_default
 
     ! Uniform dust deposition, for SEMIX-albedo dust sensitivity experiments.

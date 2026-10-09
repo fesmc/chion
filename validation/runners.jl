@@ -58,7 +58,7 @@ make_cmd(target::AbstractString, precision::Symbol; legacy::Bool=false) =
 
 """
     run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra,
-              legacy, pdd_method)
+              legacy, pdd_method, name_hice, name_pdds)
 
 Write a namelist and run `chion_grid.x` in `workdir`. Returns the output path.
 The namelist and log are named after `outfile`, so runs sharing a `workdir`
@@ -72,7 +72,8 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
                    outfile::AbstractString, workdir::AbstractString,
                    model::AbstractString="bessi", dt_out::Float64=1.0,
                    dt::Float64=-1.0, nml_extra::AbstractString="",
-                   legacy::Bool=false, pdd_method::AbstractString="simple")
+                   legacy::Bool=false, pdd_method::AbstractString="simple",
+                   name_hice::AbstractString="None", name_pdds::AbstractString="None")
     mkpath(workdir)
     link = joinpath(workdir, "input")
     islink(link) || ispath(link) || symlink(joinpath(CHION_ROOT, "input"), link)
@@ -98,6 +99,8 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
     mask_threshold      = 0.0
     name_lat            = "LAT"
     name_zs             = "SH"
+    name_hice           = "$(name_hice)"
+    name_pdds           = "$(name_pdds)"
     t2m_in_celsius      = .FALSE.
     precip_in_mmwe_day  = .FALSE.
     wind_default        = 5.0
@@ -231,6 +234,73 @@ function run_julia_pdd(; forcing::AbstractString, outfile::AbstractString,
                      backend=:threads, write_netcdf=true,
                      netcdf_variables=PDD_VARS, netcdf_path=out,
                      name="wp16_pdd")
+    run!(sim)
+    return out
+end
+
+"""
+ITM parameters, set explicitly on both sides: chion's `&itm` (via
+`itm_nml`) and Chion.jl's `ITMModel` keywords. The values are chion's
+defaults (input/chion_defaults.nml), which Chion.jl's match today.
+"""
+const ITM_PARAMS = (trans_a=0.46, trans_b=6e-5, trans_c=0.01,
+                    itm_c=-45.0, itm_t=10.0, itm_b=-2.0, itm_lat0=65.0,
+                    H_snow_max=5000.0, Pmaxfrac=0.6,
+                    H_snow_crit_desert=10.0, H_snow_crit_forest=100.0,
+                    melt_crit=0.5, alb_ocean=0.1, alb_land=0.2, alb_forest=0.1,
+                    alb_ice=0.4, alb_snow_dry=0.8, alb_snow_wet=0.65,
+                    firn_fac=0.0266)
+
+"""The `&itm` namelist group carrying `ITM_PARAMS`."""
+itm_nml(p=ITM_PARAMS) =
+    "&itm\n" * join(("    $(k) = $(v)" for (k, v) in pairs(p)), "\n") * "\n/\n"
+
+"""
+    run_julia_itm(; forcing, outfile, workdir)
+
+Run Chion.jl's ITM. `load_forcing_file` does not read ITM's ice thickness and
+annual PDDs (it leaves them NaN), so they are read here from HI / PDDA and
+merged into the forcing's fields, per column in the loader's column order
+(`grid.is`, `grid.js`).
+"""
+function run_julia_itm(; forcing::AbstractString, outfile::AbstractString,
+                       workdir::AbstractString, years::Int=1)
+    mkpath(workdir)
+    out = joinpath(workdir, outfile)
+    isfile(out) && rm(out)
+
+    loaded = load_forcing_file(
+        abspath(forcing);
+        x_name="x", y_name="y", time_name="time",
+        air_temperature_name="TT", snowfall_name="SF",
+        rainfall_name="RF", shortwave_name="SWD",
+        wind_speed_name=nothing,
+        q_lw_down_name=nothing, q_sh_name=nothing, q_lh_name=nothing,
+        relative_humidity_name=nothing, air_pressure_name=nothing,
+        prescribed_albedo_name=nothing,
+        surface_height_name="SH", latitude_name="LAT",
+        mask_name="mask", mask_threshold=0.0,
+        air_temperature_in_celsius=false,
+        precipitation_in_mmwe_day=false,
+        wind_default=5.0,
+    )
+
+    g = loaded.grid
+    f = loaded.forcing
+    nt = size(f.air_temperature, 2)
+    columns(a) = repeat([Float64(a[g.is[k], g.js[k]]) for k in eachindex(g.is)], 1, nt)
+    hi, pdd = NCDataset(abspath(forcing)) do ds
+        (columns(Array(ds["HI"])), columns(Array(ds["PDDA"])))   # (x, y)
+    end
+    itm_forcing = Chion.SnowpackForcing(f.calendar,
+                                        merge(f.fields, (ice_thickness=hi, annual_pdd=pdd)))
+
+    model = ITMModel(g; ITM_PARAMS...)
+
+    sim = Simulation(model; forcing=itm_forcing, years=years,
+                     backend=:threads, write_netcdf=true,
+                     netcdf_variables=ITM_JULIA_VARS, netcdf_path=out,
+                     name="wp16_itm")
     run!(sim)
     return out
 end

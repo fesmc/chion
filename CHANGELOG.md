@@ -43,6 +43,10 @@ tag is the port itself, summarised rather than enumerated.
 - PDD: default `pdd_method = "simple"` (was `"pism"`), matching Chion.jl;
   set `"pism"` explicitly for monthly steps or smbpal-like melt. validation/
   gates PDD against Chion.jl for both methods.
+- ITM: `legacy_chion=1` reverts the D27 `tsrf` scaling (Chion.jl's daily
+  rate); validation/ gates ITM against Chion.jl's `ITMModel`. `chion_grid.x`
+  file forcing reads ITM ice thickness and annual PDDs (`name_hice`,
+  `name_pdds`; `"None"` = 0). Production ITM unchanged.
 
 ## [v0.1.0] — 2026-07-24
 

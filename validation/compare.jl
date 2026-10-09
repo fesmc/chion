@@ -41,6 +41,20 @@ const BESSI_VARS = ["thickness", "wet_mass", "bulk_density", "liquid_water",
 """The 4 variables both write for PDD."""
 const PDD_VARS = ["snowpack_swe", "smb_ice", "runoff", "pdd_sum"]
 
+"""
+ITM fields, chion name => Chion.jl name. chion writes the cumulative
+accumulators under BESSI's names (input/chion-variables-itm.md); Chion.jl
+writes them as `*_cum` next to per-step rates chion does not write. chion's
+`smb` (the step's ice-facing flux, kg m-2 s-1) is `smb_ice` differenced and is
+covered by it.
+"""
+const ITM_PAIRS = ["H_snow" => "H_snow", "albedo" => "alb_s", "Tsrf" => "Tsrf",
+                   "smb_ice" => "smb_ice", "runoff" => "runoff_cum",
+                   "melt" => "melt_cum", "refreezing" => "refreezing_cum",
+                   "smb_total" => "smb_cum"]
+const ITM_VARS = first.(ITM_PAIRS)
+const ITM_JULIA_VARS = last.(ITM_PAIRS)
+
 const TIME_NAMES = ("t", "time")
 const X_NAMES = ("x", "xc")
 const Y_NAMES = ("y", "yc")
@@ -93,13 +107,19 @@ end
 """
     compare_files(chion_path, julia_path, vars; eps_wp)
 
-Compare every variable in `vars`. `eps_wp` is the machine epsilon of the chion
-build being tested, so `ulps` expresses each difference in units of that build's
-own resolution rather than an absolute number that means different things in the
-sp and dp builds.
+Compare every variable in `vars`, either names both files share or
+`chion_name => julia_name` pairs; results carry the chion name. `eps_wp` is the
+machine epsilon of the chion build being tested, so `ulps` expresses each
+difference in units of that build's own resolution rather than an absolute
+number that means different things in the sp and dp builds.
 """
+compare_files(chion_path::AbstractString, julia_path::AbstractString,
+              vars::Vector{String}; kwargs...) =
+    compare_files(chion_path, julia_path, [v => v for v in vars]; kwargs...)
+
 function compare_files(chion_path::AbstractString, julia_path::AbstractString,
-                       vars::Vector{String}; eps_wp::Float64, drop_first::Bool=true)
+                       vars::Vector{Pair{String,String}}; eps_wp::Float64,
+                       drop_first::Bool=true)
     diffs = FieldDiff[]
     NCDataset(chion_path) do dc
         NCDataset(julia_path) do dj
@@ -125,9 +145,9 @@ function compare_files(chion_path::AbstractString, julia_path::AbstractString,
                     "for a per-step comparison.")
             end
 
-            for name in vars
+            for (name, jname) in vars
                 ac, layc = read_canonical(dc, name)
-                aj, layj = read_canonical(dj, name)
+                aj, layj = read_canonical(dj, jname)
                 layc == layj || error("'$name' is layer-resolved in one file only")
 
                 if drop_first

@@ -352,8 +352,9 @@ capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
 
 ### D24. `legacy_chion=1` build variant
 **What:** `make ... legacy_chion=1` defines `CHION_LEGACY`, which reverts the
-deliberate physics corrections (currently D22's R = 8.314 and D25's g = 9.81) to Chion.jl's values. Builds land
-in `libchion/{include,bin}[-dp]-legacy`.
+deliberate physics corrections (currently D22's R = 8.314, D25's g = 9.81 and D27's ITM
+`tsrf` scaling) to Chion.jl's values. Builds land in `libchion/{include,bin}[-dp]-legacy`
+(`-legacy-fpsafe` for validation/).
 
 **Why:** "is the port faithful?" and "is the reference correct?" are different
 questions. Without this, every upstream bug chion fixes turns into a WP16 gate
@@ -412,9 +413,10 @@ is the failure mode worth preventing.
   a stated error path.
 
 ### D27. ITM's per-step `tsrf` scales `melt_net` to an annual rate
-**What:** `itm_step` passes `melt_net*days_year_firn` to `calc_temp_surf`, with
-`days_year_firn = sec_year_360d/sec_day` (fesm-utils `phys_constants`). `firn_fac` is now
-documented as `[K (mm w.e. yr-1)-1]`.
+**What:** `itm_step` passes `melt_net*ITM_FIRN_DAYS_YEAR` to `calc_temp_surf`, with
+`ITM_FIRN_DAYS_YEAR = sec_year_360d/sec_day` (`chion_defs`, from fesm-utils `phys_constants`).
+`firn_fac` is now documented as `[K (mm w.e. yr-1)-1]`. Reverted under `legacy_chion=1`
+(`ITM_FIRN_DAYS_YEAR = 1`).
 
 **Why:** smbpal applies `calc_temp_surf` once per year to the annual net melt in
 `[mm w.e. yr-1]` (360-day year), and `firn_fac` is calibrated against that. chion applied it
@@ -426,6 +428,10 @@ convention rather than a parameter.
 remains a per-step value: `max(0,.)` and the `min(T0,.)` cap act per step, so its annual mean
 still differs from smbpal's annual-mean `tsrf` where either is active. `test_itm`'s reference
 scales the same way; `tsrf` stays bit-identical.
+
+Chion.jl's `ITMModel` (`29eb867`, ported from chion before this fix) applies `firn_fac` to the
+daily rate, so its firn warming is ~360x too small (reported upstream, PLAN_dev_nils §1c.3). The
+`legacy_chion` revert lets validation/ gate all ITM fields, `tsrf` included, against it.
 
 ### D28. Shared physical constants come from fesm-utils `phys_const_class`
 **What:** `chion_init(chn,filename,ncol,group,cnst)` takes an optional
