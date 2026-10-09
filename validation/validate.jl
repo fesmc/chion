@@ -228,11 +228,11 @@ function main()
                          drop_first=false),
            "BESSI precision cost: chion sp vs chion dp (reported)")
 
-    # PHYSICS CORRECTION (reported): the measured effect of using the gas
-    # constant in the densification Arrhenius terms (Chion.jl issue #18).
+    # PHYSICS CORRECTION (reported): the measured effect of chion's
+    # full-precision gas constant vs Chion.jl's 8.314, plus gravity (D22, D25).
     report(compare_files(ch_dp, ch_legacy, BESSI_VARS; eps_wp=eps_of(:dp),
                          drop_first=false),
-           "BESSI densification correction: gas constant vs 8.13 (reported)")
+           "BESSI legacy constants: R, g vs Chion.jl's 8.314, 9.81 (reported)")
 
     # =================================================================
     # PDD -- Chion.jl for STRUCTURE only. Monthly steps exercise the

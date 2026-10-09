@@ -22,8 +22,9 @@ module snow_densify
     ! D25). Impact measured at 3.6e-4 relative on the overburden, entering the
     ! mid/high branches cubed for ~1.1e-3 on those tendencies.
     !
-    ! DENSIFY_R_GAS: Chion.jl has 8.13. That is a typo for the gas constant.
-    ! Resolved rather than preserved, on provenance (docs/porting_notes.md D22):
+    ! DENSIFY_R_GAS: Chion.jl had 8.13 (fixed to 8.314 in dev_nils 408e91c).
+    ! That was a typo for the gas constant. Resolved rather than preserved, on
+    ! provenance (docs/porting_notes.md D22):
     !
     !   Herron & Langway (1980), "Firn densification: an empirical model",
     !   J. Glaciol. 25(93), give the rho < 550 stage as
@@ -77,7 +78,7 @@ module snow_densify
     ! chion_defs, because both are selected by the CHION_LEGACY preprocessor
     ! switch and chion_defs is the only preprocessed source. In a normal build
     ! they are standard gravity and the universal gas constant; under
-    ! legacy_chion=1 they revert to Chion.jl's 9.81 and 8.13.
+    ! legacy_chion=1 they revert to Chion.jl's 9.81 and 8.314.
 
     ! --- Density regime thresholds -----------------------------------------
     real(wp), parameter, public :: DENSIFY_RHO_LOW = 550.0_wp   ! [kg m-3] low  | mid boundary
@@ -99,9 +100,9 @@ contains
 
     pure function bessi_low_density_rate(density,temperature,rho_i,accumulation_rate) result(drho)
         ! Chion.jl/src/processes/densification.jl:5-11:
-        !     0.011*exp(-10160/(8.13*T))*(rho_i - rho)*max(A_t, 0)
-        ! chion uses the gas constant where Chion.jl has 8.13 -- this is
-        ! Herron & Langway (1980) stage 1. See the module header.
+        !     0.011*exp(-10160/(8.314*T))*(rho_i - rho)*max(A_t, 0)
+        ! chion uses the full-precision gas constant where Chion.jl has 8.314
+        ! -- this is Herron & Langway (1980) stage 1. See the module header.
 
         implicit none
 
@@ -191,8 +192,8 @@ contains
         ! Chion.jl/src/processes/densification.jl:138-153.
         !     r    = rho/rho_i
         !     f    = 10**(-29.166*r**3 + 84.422*r**2 - 87.425*r + 30.673)
-        !     drho = 25400*exp(-60000/(8.13*T))*rho*f*dP**3
-        ! NOTE 8.13 again; see the module header.
+        !     drho = 25400*exp(-60000/(8.314*T))*rho*f*dP**3
+        ! NOTE R again; see the module header.
 
         implicit none
 
@@ -226,7 +227,7 @@ contains
         !     den  = 1 - phi**(1/3)
         !     if abs(den) <= TOL_TINY -> 0
         !     f    = (3/16)*phi/den**3
-        !     drho = 25400*exp(-60000/(8.13*T))*rho*f*dP**3
+        !     drho = 25400*exp(-60000/(8.314*T))*rho*f*dP**3
         !
         ! The porosity and the 1 - phi**(1/3) difference are computed in wp_acc,
         ! so that the abs(den) <= TOL_TINY guard can actually fire (see

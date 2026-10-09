@@ -269,6 +269,11 @@ and never split.
 **What:** `DENSIFY_R_GAS` is the universal gas constant, not Chion.jl's `8.13`.
 Reported upstream as Chion.jl issue #18.
 
+**Update (dev_nils `408e91c`):** Chion.jl now uses the literal `8.314`. chion keeps the
+full-precision `8.31446261815324`; `8.314` differs by ~3e-4 in the Arrhenius term, so
+`legacy_chion` now reverts to `8.314` (not `8.13`). Nils asked to adopt the full value, after
+which R leaves the legacy switch.
+
 **Why:** provenance. The low-density branch is **Herron & Langway (1980)**,
 *Firn densification: an empirical model*, J. Glaciol. 25(93), stage 1:
 `k0 = 11*exp(-10160/(R*T))` with `R = 8.314 J K-1 mol-1`. The activation energy
@@ -344,7 +349,7 @@ capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
 
 ### D24. `legacy_chion=1` build variant
 **What:** `make ... legacy_chion=1` defines `CHION_LEGACY`, which reverts the
-deliberate physics corrections (currently D22) to Chion.jl's values. Builds land
+deliberate physics corrections (currently D22's R = 8.314 and D25's g = 9.81) to Chion.jl's values. Builds land
 in `libchion/{include,bin}[-dp]-legacy`.
 
 **Why:** "is the port faithful?" and "is the reference correct?" are different

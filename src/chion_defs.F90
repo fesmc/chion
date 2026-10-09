@@ -146,8 +146,9 @@ module chion_defs
     ! wrong. Nothing but validation/ should ever build with it.
     !
     ! Currently reverted under CHION_LEGACY:
-    !   * DENSIFY_R_GAS  -> 8.13, Chion.jl's typo for the gas constant
-    !     (Chion.jl issue #18, docs/porting_notes.md D22).
+    !   * DENSIFY_R_GAS  -> 8.314, Chion.jl's rounded gas constant (it had
+    !     the typo 8.13 until dev_nils 408e91c; Chion.jl issue #18,
+    !     docs/porting_notes.md D22). Drop once Chion.jl uses 8.31446...
     !   * DENSIFY_GRAVITY -> 9.81, Chion.jl's second gravity constant
     !     (docs/porting_notes.md D25).
     !
@@ -158,7 +159,7 @@ module chion_defs
     ! purpose. PDD is compared to Chion.jl as a REPORTED diagnostic instead,
     ! and gated on its own mass-closure identity.
 #ifdef CHION_LEGACY
-    real(wp_acc), parameter, public :: DENSIFY_R_GAS   = 8.13_wp_acc
+    real(wp_acc), parameter, public :: DENSIFY_R_GAS   = 8.314_wp_acc
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
