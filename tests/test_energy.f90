@@ -718,7 +718,7 @@ contains
 
         real(wp) :: mass(Ntot), density(Ntot), temperature(Ntot)
         real(wp) :: A(n,n), b(n), t_ref(n)
-        real(wp) :: K, dz, G_old, G_new, beta, lambda, F, t_srf, dt, worst
+        real(wp) :: K_u, dz, G_old, G_new, beta, lambda, F, t_srf, dt, worst
         real(wp) :: K1, K2, dz1, dz2, q, drop, drop_expect
         integer  :: i, j, k, step
 
@@ -756,9 +756,9 @@ contains
         t_srf = 250.0_wp
         dt    = 86400.0_wp
 
-        K      = conductivity(350.0_wp,250.0_wp,c)
+        K_u    = conductivity(350.0_wp,250.0_wp,c)
         dz     = 100.0_wp/350.0_wp
-        G_old  = (K*dz + K*dz)/((dz + dz)**2)
+        G_old  = (K_u*dz + K_u*dz)/((dz + dz)**2)
         beta   = -2.0_wp*dt/c%ci/100.0_wp
         lambda = dt/c%ci/100.0_wp
 
