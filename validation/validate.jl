@@ -148,9 +148,14 @@ end
 ITM coverage, read off the chion dp+legacy output: each column must reach the
 background-albedo branch and the part of the budget it exists for.
 """
-function check_itm_coverage(chion_path::AbstractString, names::Vector{String})
-    local hs, alb, smbi, melt, refr
+function check_itm_coverage(chion_path::AbstractString, forcing_path::AbstractString,
+                            names::Vector{String})
+    local hs, alb, smbi, melt, refr, tsrf, tt
+    NCDataset(forcing_path) do df
+        tt = Array(df["TT"])                                  # (x, y, time)
+    end
     NCDataset(chion_path) do dc
+        tsrf, _ = read_canonical(dc, "Tsrf")
         hs, _ = read_canonical(dc, "H_snow")
         alb, _ = read_canonical(dc, "albedo")
         smbi, _ = read_canonical(dc, "smb_ice")
@@ -171,6 +176,9 @@ function check_itm_coverage(chion_path::AbstractString, names::Vector{String})
          () -> any((col(hs, "ice_ablation") .> 0.0) .& (steps(melt, "ice_ablation") .> 0.0))),
         ("ice_ablation refreezes",
          () -> last(col(refr, "ice_ablation")) > 0.0),
+        ("ice_ablation firn warming fires (Tsrf > t2m, D27 path)",
+         () -> (i = findfirst(==("ice_ablation"), names);
+                any(col(tsrf, "ice_ablation") .> Float64.(tt[i, 1, :])))),
         ("ice_ablation snow-free albedo is alb_ice",
          () -> any((col(hs, "ice_ablation") .== 0.0) .& (col(alb, "ice_ablation") .== p.alb_ice))),
         ("ice_accum_cap holds H_snow at H_snow_max",
@@ -205,8 +213,10 @@ function run_itm_julia(nstep::Int)
         println("      - $(rpad(sc.name, 16)) $(sc.what)")
     end
     fitm = joinpath(WORKDIR, "forcing_itm.nc")
+    # Rain below T0 (t_snow_max < T0): the only way ITM's melt_net turns
+    # positive at t2m < T0, which is where firn warming (D27) shows in tsrf.
     write_forcing(fitm, first.(ITM_SCENARIOS); nstep=nstep, dt_days=1.0,
-                  geometry=last.(ITM_SCENARIOS))
+                  t_snow_max=271.15, geometry=last.(ITM_SCENARIOS))
 
     jl_itm = run_julia_itm(; forcing=fitm, outfile="julia_itm.nc", workdir=WORKDIR)
     ch_itm = run_chion(; precision=:dp, legacy=true, forcing=fitm,
@@ -216,7 +226,7 @@ function run_itm_julia(nstep::Int)
     d = compare_files(ch_itm, jl_itm, ITM_PAIRS; eps_wp=eps_of(:dp))
     report(d, "ITM port fidelity: chion dp+legacy vs Chion.jl")
     nfail = gate(d, "ITM port fidelity")
-    nfail += check_itm_coverage(ch_itm, [sc.name for (sc, g) in ITM_SCENARIOS])
+    nfail += check_itm_coverage(ch_itm, fitm, [sc.name for (sc, g) in ITM_SCENARIOS])
     return nfail
 end
 
