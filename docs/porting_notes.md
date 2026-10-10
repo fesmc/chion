@@ -921,21 +921,6 @@ cumulative `melt`/`runoff`/`refreezing` -> `*_cum`, `smb` [kg m-2 s-1] -> `smbi`
 The harness compares all 14 ITM fields by name. `diagnostics/compare_*.jl` read
 `runoff_cum` when present. Output only, not under `legacy_chion`.
 
-### D43. Energy solve: bottom-up Thomas, shared by the melting re-solve
-**What:** `solve_tridiagonal_thomas` eliminates from the base upward and substitutes from
-the top down (Julia: top-down elimination), and keeps the reciprocals of the reduced
-diagonal, so each row costs one division instead of two. `energy_flux_rows` eliminates rows
-`n_rows..2` once and closes row 1 against the reduced row 2; the melting re-solve, which
-changes only row 1 (its diagonal and right-hand side), reuses that elimination and costs
-one row-1 closure and one substitution instead of a second full solve.
-**Why:** performance (PERF, GRL-16KM 1 thread: ~4 % of the run). The Thomas solve is
-latency-bound by its chain of divisions and ran twice on every melting (sub)step.
-**Impact:** round-off only: the same tridiagonal system, solved exactly in exact
-arithmetic; the matrix is strictly diagonally dominant, so either order is stable. The
-production (`-Ofast`, sp) results move at the round-off noise floor of the model (the same
-spread as a recompile with `-ipo`); the harness gate (dp) is unaffected. Not under
-`legacy_chion` (no physics).
-
 ---
 
 ## WP-wide build note

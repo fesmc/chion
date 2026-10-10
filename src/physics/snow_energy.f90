@@ -10,7 +10,6 @@ module snow_energy
     ! Port of Chion.jl/src/processes/energy_flux.jl:
     !   _go_energy_flux_resolved!            -> snow_energy_flux
     !   _thomas_forward! / _thomas_backward! -> solve_tridiagonal_thomas
-    !                                           (bottom-up, D43)
     !   _snow_thermal_conductivity           -> snow_thermal_conductivity
     !   interface_conductance                -> interface_conductance
     !   _clamp_to_melt!                      -> inlined (clamp loop)
@@ -197,12 +196,7 @@ contains
     end function interface_conductance
 
     subroutine solve_tridiagonal_thomas(lower,diag,upper,rhs,n)
-        ! Thomas algorithm, Chion.jl/src/processes/energy_flux.jl:113-189,
-        ! run bottom-up (docs/porting_notes.md D43): the rows are eliminated
-        ! from the base upward and substituted from the top down. Julia
-        ! eliminates top-down; the two differ by round-off only. The energy
-        ! solve uses the two halves directly, so that its melting re-solve
-        ! shares the elimination (energy_flux_rows, step 4).
+        ! Thomas algorithm, Chion.jl/src/processes/energy_flux.jl:113-189.
         !
         ! INDEXING CONVENTION, taken verbatim from Julia:
         !     lower(k) is the SUB-diagonal entry of row k+1
@@ -215,7 +209,7 @@ contains
         ! (all off-diagonals are negative, the diagonal is 1 minus their sum,
         ! plus a non-negative surface term), so pivoting is unnecessary.
         !
-        ! DESTRUCTIVE: diag is overwritten by the elimination and rhs is
+        ! DESTRUCTIVE: diag is overwritten by the forward sweep and rhs is
         ! overwritten by the solution. Callers must copy diag before each solve.
 
         implicit none
@@ -226,73 +220,27 @@ contains
         real(wp), intent(INOUT) :: rhs(:)    ! (n) right-hand side; holds the solution
         integer,  intent(IN)    :: n
 
-        call thomas_eliminate_upward(lower,diag,upper,rhs,n,1)
-
-        rhs(1) = rhs(1)*diag(1)
-
-        call thomas_substitute_downward(lower,diag,rhs,n)
-
-        return
-
-    end subroutine solve_tridiagonal_thomas
-
-    subroutine thomas_eliminate_upward(lower,diag,upper,rhs,n,k_top)
-        ! Elimination half of the bottom-up Thomas algorithm: rows n-1 down
-        ! to k_top lose their super-diagonal against the (already reduced) row
-        ! below. Row k then reads lower(k-1)*x(k-1) + d(k)*x(k) = rhs(k),
-        ! and rows k_top..n no longer depend on any row above k_top. diag(k)
-        ! returns the RECIPROCAL 1/d(k) of the reduced diagonal, k_top..n:
-        ! each is formed once and used by both halves.
-
-        implicit none
-
-        real(wp), intent(IN)    :: lower(:)  ! (n) sub-diagonal, lower(k) in row k+1
-        real(wp), intent(INOUT) :: diag(:)   ! (n) main diagonal, reduced for rows k_top..n
-        real(wp), intent(IN)    :: upper(:)  ! (n) super-diagonal, upper(k) in row k
-        real(wp), intent(INOUT) :: rhs(:)    ! (n) right-hand side, reduced likewise
-        integer,  intent(IN)    :: n
-        integer,  intent(IN)    :: k_top     ! last row eliminated, >= 1
-
         ! Local variables
         integer  :: row
         real(wp) :: f
 
-        if (n .lt. k_top) return
-
-        diag(n) = 1.0_wp/diag(n)
-
-        do row = n-1, k_top, -1
-            f = upper(row)*diag(row+1)
-            diag(row) = 1.0_wp/(diag(row) - f*lower(row))
-            rhs(row)  = rhs(row) - f*rhs(row+1)
-        end do
-
-        return
-
-    end subroutine thomas_eliminate_upward
-
-    subroutine thomas_substitute_downward(lower,diag,rhs,n)
-        ! Substitution half: with rhs(1) holding the solution of row 1 and
-        ! rows 2..n reduced by thomas_eliminate_upward, rhs(2..n) receive the
-        ! rest of the solution, top down.
-
-        implicit none
-
-        real(wp), intent(IN)    :: lower(:)  ! (n) sub-diagonal, lower(k) in row k+1
-        real(wp), intent(IN)    :: diag(:)   ! (n) reciprocal reduced diagonal
-        real(wp), intent(INOUT) :: rhs(:)    ! (n) reduced rhs in; solution out
-        integer,  intent(IN)    :: n
-
-        ! Local variables
-        integer :: row
-
+        ! Forward elimination
         do row = 2, n
-            rhs(row) = (rhs(row) - lower(row-1)*rhs(row-1))*diag(row)
+            f = lower(row-1)/diag(row-1)
+            diag(row) = diag(row) - f*upper(row-1)
+            rhs(row)  = rhs(row)  - f*rhs(row-1)
+        end do
+
+        ! Back substitution
+        rhs(n) = rhs(n)/diag(n)
+
+        do row = n-1, 1, -1
+            rhs(row) = (rhs(row) - upper(row)*rhs(row+1))/diag(row)
         end do
 
         return
 
-    end subroutine thomas_substitute_downward
+    end subroutine solve_tridiagonal_thomas
 
     subroutine snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,albedo, &
                                 latent_heat_linear_coefficient, &
@@ -439,7 +387,6 @@ contains
         real(wp) :: beta_scale, beta_1
         real(wp) :: h_ice
         real(wp) :: G_s, surface_den, surface_const, surface_coef, boundary_term
-        real(wp) :: f_1, rhs_2, lower_1
         real(wp) :: ts_new
 
         logical  :: uses_semix_seb, uses_climberx_turb, uses_semix_turb
@@ -699,27 +646,10 @@ contains
             diag(k) = 1.0_wp - lower(k-1) - upper(k)
         end do
 
-        ! === Step 4: elimination, then row 1 ================================
-        ! Bottom-up Thomas (solve_tridiagonal_thomas, D43): rows n_rows..2 are
-        ! eliminated once, independently of row 1, the only row the melting
-        ! re-solve changes. Row 1 is then closed against the reduced row 2,
-        !     x1 = (rhs1 - f*rhs2')/(diag1 - f*lower1),  f = upper1/diag2',
-        ! (f = 0 for a single row), so each solve costs one row-1 closure and
-        ! one downward substitution.
+        ! === Step 4: first solve =============================================
 
         solver_diag(1:n_rows) = diag(1:n_rows)
-        call thomas_eliminate_upward(lower,solver_diag,upper,rhs,n_rows,2)
-
-        f_1      = 0.0_wp
-        rhs_2    = 0.0_wp
-        lower_1  = 0.0_wp
-        if (n_rows .gt. 1) then
-            f_1     = upper(1)*solver_diag(2)
-            rhs_2   = rhs(2)
-            lower_1 = lower(1)
-        end if
-
-        rhs(1) = (rhs(1) - f_1*rhs_2)/(diag(1) - f_1*lower_1)
+        call solve_tridiagonal_thomas(lower,solver_diag,upper,rhs,n_rows)
 
         ts_new = surface_const + surface_coef*rhs(1)
 
@@ -727,18 +657,24 @@ contains
         ! The interface is held at T0 as a Dirichlet value BEHIND the
         ! half-cell conductance: rhs(1) gains -bt*T0 and the diagonal loses
         ! the eliminated Robin coefficient bt*b, while row 1 KEEPS its
-        ! conduction coupling to row 2. Rows 2..n_rows are unchanged, rhs
-        ! included (the ORIGINAL temperatures; the state is only written at
-        ! step 6), so only row 1 is closed again.
+        ! conduction coupling to row 2.
 
         if (ts_new .gt. c%T0) then
 
             res%needs_melt = .TRUE.
 
-            rhs(1) = ((row_temperature(1) - boundary_term*c%T0) - f_1*rhs_2) &
-                     /((diag(1) - boundary_term*surface_coef) - f_1*lower_1)
+            ! Rebuild the rhs from the ORIGINAL temperatures. The state has
+            ! not been written yet, which is exactly why it is only updated at
+            ! step 6.
+            do k = 1, n_rows
+                rhs(k) = row_temperature(k)
+            end do
+            rhs(1) = rhs(1) - boundary_term*c%T0
 
-            call thomas_substitute_downward(lower,solver_diag,rhs,n_rows)
+            solver_diag(1:n_rows) = diag(1:n_rows)
+            solver_diag(1)        = diag(1) - boundary_term*surface_coef
+
+            call solve_tridiagonal_thomas(lower,solver_diag,upper,rhs,n_rows)
 
             do k = 1, n_rows
                 if (rhs(k) .gt. c%T0) rhs(k) = c%T0
@@ -756,8 +692,6 @@ contains
                     *real(dt_seconds,wp_acc), 0.0_wp_acc)
 
         else
-
-            call thomas_substitute_downward(lower,solver_diag,rhs,n_rows)
 
             do k = 1, n_rows
                 if (rhs(k) .gt. c%T0) rhs(k) = c%T0
