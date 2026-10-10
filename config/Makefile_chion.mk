@@ -29,107 +29,42 @@ $(objdir)/chion_forcing_monthly.o: $(srcdir)/chion_forcing_monthly.f90 \
 ## chion physics ###############################
 #
 # Single-column kernels. Each operates on contiguous column slices (see
-# docs/porting_notes.md D8) and depends only on chion_defs plus, where noted,
-# the layer utilities.
+# docs/porting_notes.md D8) and depends only on chion_defs and on each other.
+#
+# They are compiled as ONE translation unit, chion_physics.o: the wrapper
+# src/physics/chion_physics.f90 includes every snow_*.f90 in dependency order,
+# so the compiler inlines across the modules (as -ipo would) into an ordinary
+# object. Edit the modules as before; a new physics module goes into the
+# wrapper (after the modules it uses) and into chion_physics_src.
 
-$(objdir)/snow_column_utils.o: $(physdir)/snow_column_utils.f90 \
+chion_physics_src = $(physdir)/snow_column_utils.f90 \
+				$(physdir)/snow_layers.f90 \
+				$(physdir)/snow_vapor.f90 \
+				$(physdir)/snow_seb_semix.f90 \
+				$(physdir)/snow_turbulence.f90 \
+				$(physdir)/snow_diurnal.f90 \
+				$(physdir)/snow_surface_fluxes.f90 \
+				$(physdir)/snow_energy.f90 \
+				$(physdir)/snow_percolation.f90 \
+				$(physdir)/snow_refreezing.f90 \
+				$(physdir)/snow_melt.f90 \
+				$(physdir)/snow_albedo.f90 \
+				$(physdir)/snow_albedo_semix.f90 \
+				$(physdir)/snow_densify.f90 \
+				$(physdir)/snow_accumulation.f90 \
+				$(physdir)/snow_diagnostics.f90 \
+				$(physdir)/snow_bessi.f90 \
+				$(physdir)/snow_pdd.f90 \
+				$(physdir)/snow_itm.f90
+
+# The archive goes with it: libchion.a from before the unity build holds the
+# per-module physics objects, and `ar rc` (a host's generated Makefile may
+# predate the rebuild-from-scratch archive rule) would keep them next to
+# chion_physics.o.
+$(objdir)/chion_physics.o: $(physdir)/chion_physics.f90 $(chion_physics_src) \
 						  	$(objdir)/chion_defs.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_layers.o: $(physdir)/snow_layers.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-# snow_vapor is the lowest layer of the surface physics: the vapour-pressure
-# parameterizations, shared by snow_surface_fluxes, snow_energy and
-# snow_seb_semix.
-$(objdir)/snow_vapor.o: $(physdir)/snow_vapor.f90 \
-						  	$(objdir)/chion_defs.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-# snow_surface_fluxes uses snow_layers for the depleted-surface removal and
-# surface-merge loops inside apply_snow_surface_vapor_mass_flux, and
-# snow_diurnal for the cloud-proxy longwave's top-of-atmosphere shortwave.
-$(objdir)/snow_surface_fluxes.o: $(physdir)/snow_surface_fluxes.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_layers.o $(objdir)/snow_vapor.o \
-						  	$(objdir)/snow_seb_semix.o $(objdir)/snow_turbulence.o \
-						  	$(objdir)/snow_diurnal.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-# snow_seb_semix reuses snow_vapor's ice vapour-pressure helpers for the
-# semix_qsat = "bessi" variant.
-$(objdir)/snow_seb_semix.o: $(physdir)/snow_seb_semix.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_vapor.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-# snow_turbulence is Chion.jl's bulk turbulence (turbulent_flux_scheme =
-# "semix"), on snow_vapor's ice vapour pressure.
-$(objdir)/snow_turbulence.o: $(physdir)/snow_turbulence.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_vapor.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_energy.o: $(physdir)/snow_energy.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_vapor.o $(objdir)/snow_surface_fluxes.o \
-						  	$(objdir)/snow_seb_semix.o $(objdir)/snow_turbulence.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_percolation.o: $(physdir)/snow_percolation.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_refreezing.o: $(physdir)/snow_refreezing.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_melt.o: $(physdir)/snow_melt.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_layers.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_albedo.o: $(physdir)/snow_albedo.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_albedo_semix.o: $(physdir)/snow_albedo_semix.f90 \
-						  	$(objdir)/chion_defs.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_densify.o: $(physdir)/snow_densify.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_diurnal.o: $(physdir)/snow_diurnal.f90 \
-						  	$(objdir)/chion_defs.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_accumulation.o: $(physdir)/snow_accumulation.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_layers.o $(objdir)/snow_albedo.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_diagnostics.o: $(physdir)/snow_diagnostics.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_pdd.o: $(physdir)/snow_pdd.f90 \
-						  	$(objdir)/chion_defs.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_bessi.o: $(physdir)/snow_bessi.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o \
-						  	$(objdir)/snow_layers.o $(objdir)/snow_albedo.o \
-						  	$(objdir)/snow_albedo_semix.o \
-						  	$(objdir)/snow_accumulation.o $(objdir)/snow_densify.o \
-						  	$(objdir)/snow_diurnal.o $(objdir)/snow_surface_fluxes.o \
-						  	$(objdir)/snow_energy.o $(objdir)/snow_melt.o \
-						  	$(objdir)/snow_percolation.o $(objdir)/snow_refreezing.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
-
-$(objdir)/snow_itm.o: $(physdir)/snow_itm.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_column_utils.o
-	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+	rm -f $(objdir)/libchion.a
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -I$(physdir) -c -o $@ $<
 
 ## chion core ##################################
 #
@@ -137,26 +72,23 @@ $(objdir)/snow_itm.o: $(physdir)/snow_itm.f90 \
 # must be archived after them.
 
 $(objdir)/chion_model.o: $(srcdir)/chion_model.f90 \
-						  	$(objdir)/chion_defs.o $(objdir)/snow_bessi.o \
-						  	$(objdir)/snow_pdd.o $(objdir)/snow_itm.o $(objdir)/snow_diurnal.o
+						  	$(objdir)/chion_defs.o $(objdir)/chion_physics.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/chion_api.o: $(srcdir)/chion_api.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o \
-						  	$(objdir)/snow_bessi.o $(objdir)/snow_pdd.o $(objdir)/snow_itm.o
+						  	$(objdir)/chion_physics.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/chion_io.o: $(srcdir)/chion_io.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o $(objdir)/chion_api.o \
-						  	$(objdir)/snow_diagnostics.o
+						  	$(objdir)/chion_physics.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/chion.o: $(srcdir)/chion.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o $(objdir)/chion_api.o \
-						  	$(objdir)/chion_io.o \
-						  	$(objdir)/snow_bessi.o $(objdir)/snow_pdd.o $(objdir)/snow_itm.o \
-						  	$(objdir)/snow_diagnostics.o $(objdir)/chion_forcing_monthly.o \
-						  	$(objdir)/snow_diurnal.o
+						  	$(objdir)/chion_io.o $(objdir)/chion_physics.o \
+						  	$(objdir)/chion_forcing_monthly.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 ## driver-layer modules ########################
@@ -189,25 +121,7 @@ $(objdir)/chion_domain.o: $(libsdir)/domains/chion_domain.f90 \
 chion_base =    $(objdir)/chion_defs.o \
                 $(objdir)/chion_forcing_monthly.o
 
-chion_physics = $(objdir)/snow_column_utils.o \
-				$(objdir)/snow_layers.o \
-				$(objdir)/snow_vapor.o \
-				$(objdir)/snow_seb_semix.o \
-				$(objdir)/snow_turbulence.o \
-				$(objdir)/snow_diurnal.o \
-				$(objdir)/snow_surface_fluxes.o \
-				$(objdir)/snow_energy.o \
-				$(objdir)/snow_percolation.o \
-				$(objdir)/snow_refreezing.o \
-				$(objdir)/snow_melt.o \
-				$(objdir)/snow_albedo.o \
-				$(objdir)/snow_albedo_semix.o \
-				$(objdir)/snow_densify.o \
-				$(objdir)/snow_accumulation.o \
-				$(objdir)/snow_diagnostics.o \
-				$(objdir)/snow_bessi.o \
-				$(objdir)/snow_pdd.o \
-				$(objdir)/snow_itm.o
+chion_physics = $(objdir)/chion_physics.o
 
 chion_core =    $(objdir)/chion_model.o \
                 $(objdir)/chion_api.o \

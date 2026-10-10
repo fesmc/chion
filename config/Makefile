@@ -177,10 +177,13 @@ $(chion_base) $(chion_physics) $(chion_core): $(FESMUTILSLIBDIR)/libfesmutils.a
 
 # Static library compilation. The archive is a file target, so its mtime only
 # changes when an object does (hosts such as yelmox depend on it to rebuild
-# their own objects).
+# their own objects). It is written from scratch: `ar rc` only adds and
+# replaces members, so an object that has left the lists (the per-module
+# physics objects before chion_physics.o) would otherwise stay in it.
 chion-static: $(objdir)/libchion.a
 
 $(objdir)/libchion.a: $(chion_base) $(chion_physics) $(chion_core)
+	rm -f $@
 	ar rc $@ $(chion_base) $(chion_physics) $(chion_core)
 	ranlib $@
 	./check_githash > git_chion.txt
