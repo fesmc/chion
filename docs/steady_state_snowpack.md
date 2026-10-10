@@ -27,7 +27,7 @@ ln -s <chion>/input input                 # chion reads input/chion_defaults.nml
 Edit `path_ice_data` / `path_insol` in the par file. The conservative ERA5
 weight map is generated on the first run and cached under `maps/` (gitignored,
 regenerated if absent). A 50-year GRL-16KM BESSI run (7204 columns) takes
-32-45 s at 16 threads on Levante with the current physics (~430 s on one core;
+29-45 s at 16 threads on Levante with the current physics (~370 s on one core;
 the build is OpenMP by default, threads via `OMP_NUM_THREADS`); see *After the
 Chion.jl 9ec6cc7 sync*.
 
@@ -191,8 +191,9 @@ d-1 snowfall, WP6b) does not arise at the default; the remaining 0.03 is
 The new physics costs 1.6-2.9× per column-step (ice substrate, fine layers, 8
 diurnal substeps); node-to-node noise on `shared` is ±20 %. Set-up adds 13-20 s
 per Greenland run (ERA5 regrid), ~4 s for Antarctica.
-The PERF commits that followed take ~20 % off BESSI (GRL-16KM 50 yr, exclusive
-`compute` node: 40.3 -> 32.1 s at 16 threads, 549 -> 429 s on one core).
+The PERF commits that followed take ~30 % off BESSI (GRL-16KM 50 yr, exclusive
+`compute` node: 40.4 -> 29.1 s at 16 threads, 549 -> 371 s on one core). Of the
+remaining 16-thread time, ~4 s is the yearly netCDF output (deflate, serial).
 
 ## Result (GRL-16KM, BESSI, 50 yr, ERA5 shortwave)
 

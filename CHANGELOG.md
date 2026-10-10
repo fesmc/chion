@@ -84,11 +84,15 @@ against `9ec6cc7` in twelve BESSI configurations, PDD and ITM.
 - Performance: dynamic OpenMP schedule, solar geometry once per column-day
   (bit-identical); `chion_get_surface` and `chion_update` snapshots over active columns
   only, in parallel.
-- Performance (PERF): BESSI ~21 % faster serial, ~20 % at 16 threads (GRL-16KM 50 yr,
-  exclusive node: 549 -> 429 s, 40.3 -> 32.1 s): vectorised conductivities and no
+- Performance (PERF): BESSI ~32 % faster serial, ~28 % at 16 threads (GRL-16KM 50 yr,
+  exclusive node: 549 -> 371 s, 40.4 -> 29.1 s): vectorised conductivities and no
   per-row cross-module calls in the energy solve, water content from the pore volume in
   percolation, no sub-ulp near-surface remesh transfers (D43), vectorised densification
-  Arrhenius factors. Results move at the round-off noise floor (as for a recompile).
+  Arrhenius factors, solar declination once per step and substep sines once per
+  column-day, semix neutral exchange coefficients as derived constants
+  (`chion_const_derive`), and `src/physics` compiled as one translation unit
+  (`chion_physics.f90` includes the modules; cross-module inlining without `-ipo`).
+  Results move at the round-off noise floor (as for a recompile).
 - Layer merges mix as `x1 + w2*(x2 - x1)` (exact for equal values; D31).
 - `itm_par_load` takes optional `defaults_file`/`defaults_group` (sparse `&itm`).
 - `legacy_chion=1` reverts the deliberate corrections to Chion.jl's values for validation
