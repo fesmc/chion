@@ -88,6 +88,12 @@ module snow_densify
     real(wp_acc), parameter, public :: DENSIFY_RHO_E = 815.0_wp_acc     ! [kg m-3] close-off density
     real(wp_acc), parameter, public :: DENSIFY_P_ATM = 101325.0_wp_acc  ! [Pa] atmospheric pressure
 
+    ! --- Activation energies of the Arrhenius factors exp(-Ea/(R*T)) --------
+    ! Herron & Langway stage 1 (BESSI low-density rate) and ice creep (mid
+    ! and high branches); see the header. densify_column forms the factor.
+    real(wp_acc), parameter :: DENSIFY_EA_LOW   = 10160.0_wp_acc  ! [J mol-1]
+    real(wp_acc), parameter :: DENSIFY_EA_CREEP = 60000.0_wp_acc  ! [J mol-1]
+
     public :: bessi_low_density_rate
     public :: htessel_low_density_rate
     public :: bubble_pressure_mpa
@@ -98,22 +104,24 @@ module snow_densify
 
 contains
 
-    pure function bessi_low_density_rate(density,temperature,rho_i,accumulation_rate) result(drho)
+    pure function bessi_low_density_rate(density,arrhenius,rho_i,accumulation_rate) result(drho)
         ! Chion.jl/src/processes/densification.jl:5-11:
         !     0.011*exp(-10160/(8.314*T))*(rho_i - rho)*max(A_t, 0)
         ! chion uses the full-precision gas constant where Chion.jl has 8.314
         ! -- this is Herron & Langway (1980) stage 1. See the module header.
+        ! The Arrhenius factor exp(-10160/(R*T)) is passed in
+        ! (densify_column).
 
         implicit none
 
-        real(wp), intent(IN) :: density            ! [kg m-3]
-        real(wp), intent(IN) :: temperature        ! [K]
-        real(wp), intent(IN) :: rho_i              ! [kg m-3]
-        real(wp), intent(IN) :: accumulation_rate  ! [kg m-2 s-1] accumulation proxy A_t
-        real(wp) :: drho                           ! [kg m-3 s-1]
+        real(wp),     intent(IN) :: density            ! [kg m-3]
+        real(wp_acc), intent(IN) :: arrhenius          ! [1] exp(-10160/(R*T))
+        real(wp),     intent(IN) :: rho_i              ! [kg m-3]
+        real(wp),     intent(IN) :: accumulation_rate  ! [kg m-2 s-1] accumulation proxy A_t
+        real(wp) :: drho                               ! [kg m-3 s-1]
 
         drho = real(0.011_wp_acc &
-                    *exp(-10160.0_wp_acc/(DENSIFY_R_GAS*real(temperature,wp_acc))) &
+                    *arrhenius &
                     *real(rho_i - density,wp_acc) &
                     *max(real(accumulation_rate,wp_acc),0.0_wp_acc), wp)
 
@@ -188,17 +196,18 @@ contains
 
     end function bubble_pressure_mpa
 
-    pure function mid_density_tendency(density,temperature,dP,rho_i) result(drho)
+    pure function mid_density_tendency(density,arrhenius,dP,rho_i) result(drho)
         ! Chion.jl/src/processes/densification.jl:138-153.
         !     r    = rho/rho_i
         !     f    = 10**(-29.166*r**3 + 84.422*r**2 - 87.425*r + 30.673)
         !     drho = 25400*exp(-60000/(8.314*T))*rho*f*dP**3
-        ! NOTE R again; see the module header.
+        ! NOTE R again; see the module header. The Arrhenius factor
+        ! exp(-60000/(R*T)) is passed in (densify_column).
 
         implicit none
 
         real(wp),     intent(IN) :: density      ! [kg m-3]
-        real(wp),     intent(IN) :: temperature  ! [K]
+        real(wp_acc), intent(IN) :: arrhenius    ! [1] exp(-60000/(R*T))
         real(wp_acc), intent(IN) :: dP           ! [MPa] pressure excess
         real(wp),     intent(IN) :: rho_i        ! [kg m-3]
         real(wp) :: drho                         ! [kg m-3 s-1]
@@ -214,14 +223,14 @@ contains
                           + 30.673_wp_acc)
 
         drho = real(25400.0_wp_acc &
-                    *exp(-60000.0_wp_acc/(DENSIFY_R_GAS*real(temperature,wp_acc))) &
+                    *arrhenius &
                     *real(density,wp_acc)*f*dP**3, wp)
 
         return
 
     end function mid_density_tendency
 
-    pure function high_density_tendency(density,temperature,dP,rho_i) result(drho)
+    pure function high_density_tendency(density,arrhenius,dP,rho_i) result(drho)
         ! Chion.jl/src/processes/densification.jl:160-176.
         !     phi  = clamp(1 - rho/rho_i, 0, 1)
         !     den  = 1 - phi**(1/3)
@@ -232,12 +241,13 @@ contains
         ! The porosity and the 1 - phi**(1/3) difference are computed in wp_acc,
         ! so that the abs(den) <= TOL_TINY guard can actually fire (see
         ! docs/porting_notes.md D1b: a dp tolerance is only meaningful against a
-        ! dp-computed quantity).
+        ! dp-computed quantity). The Arrhenius factor exp(-60000/(R*T)) is
+        ! passed in (densify_column).
 
         implicit none
 
         real(wp),     intent(IN) :: density      ! [kg m-3]
-        real(wp),     intent(IN) :: temperature  ! [K]
+        real(wp_acc), intent(IN) :: arrhenius    ! [1] exp(-60000/(R*T))
         real(wp_acc), intent(IN) :: dP           ! [MPa] pressure excess
         real(wp),     intent(IN) :: rho_i        ! [kg m-3]
         real(wp) :: drho                         ! [kg m-3 s-1]
@@ -256,7 +266,7 @@ contains
         f = (3.0_wp_acc/16.0_wp_acc)*phi/den**3
 
         drho = real(25400.0_wp_acc &
-                    *exp(-60000.0_wp_acc/(DENSIFY_R_GAS*real(temperature,wp_acc))) &
+                    *arrhenius &
                     *real(density,wp_acc)*f*dP**3, wp)
 
         return
@@ -291,7 +301,22 @@ contains
         real(wp)     :: rho, temp, m_s, drho, sigma, rho_upd
         real(wp_acc) :: mass_above, p_ice_mpa, p_bubble_mpa, dP
 
+        ! Arrhenius factor exp(-Ea/(R*T)) of each active layer, its regime's.
+        ! Automatic, stack-local, OpenMP-private by construction.
+        real(wp_acc) :: arrhenius(size(mass))
+
         if (n .le. 0) return
+
+        ! The factors first, in a pass of their own: the layer loop below is
+        ! sequential (mass_above), and these exponentials, one per layer, are
+        ! most of its cost; here they vectorize. Ea is the low-density one
+        ! below DENSIFY_RHO_LOW (BESSI's rate; HTESSEL's does not use it), the
+        ! creep one above. A layer the loop skips gets one it never reads.
+        do k = 1, n
+            arrhenius(k) = exp(-merge(DENSIFY_EA_LOW,DENSIFY_EA_CREEP, &
+                                      density(k) .lt. DENSIFY_RHO_LOW) &
+                               /(DENSIFY_R_GAS*real(temperature(k),wp_acc)))
+        end do
 
         ! Accumulated overburden mass. wp_acc: a running sum over layers that
         ! feeds a pressure entering the mid/high branches cubed.
@@ -326,7 +351,8 @@ contains
                     ! The scheme flag selects ONLY this branch.
                     select case(c%low_density_densification)
                         case(CHION_DENSIFY_BESSI)
-                            drho = bessi_low_density_rate(rho,temp,c%rho_i,accumulation_rate)
+                            drho = bessi_low_density_rate(rho,arrhenius(k),c%rho_i, &
+                                                          accumulation_rate)
                         case(CHION_DENSIFY_HTESSEL)
                             drho = htessel_low_density_rate(c,sigma,temp,rho)
                         case DEFAULT
@@ -350,9 +376,9 @@ contains
                     dP           = p_ice_mpa - p_bubble_mpa
 
                     if (rho .lt. DENSIFY_RHO_MID) then
-                        drho = mid_density_tendency(rho,temp,dP,c%rho_i)
+                        drho = mid_density_tendency(rho,arrhenius(k),dP,c%rho_i)
                     else
-                        drho = high_density_tendency(rho,temp,dP,c%rho_i)
+                        drho = high_density_tendency(rho,arrhenius(k),dP,c%rho_i)
                     end if
 
                 end if
