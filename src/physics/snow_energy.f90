@@ -52,7 +52,7 @@ module snow_energy
     ! half-cell conductance, and row 1 keeps its coupling to row 2 -- see
     ! step 5 below.
 
-    use chion_defs, only : wp, wp_acc, io_unit_err, CHION_SEB_SEMIX, &
+    use chion_defs, only : wp, wp_acc, io_unit_err, TOL_TINY, CHION_SEB_SEMIX, &
                            CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                            chion_const_class, chion_step_forcing_class
 
@@ -74,8 +74,9 @@ module snow_energy
 
     ! Vapor-pressure / turbulent-latent helpers shared with the unlinearized
     ! twin used for bare ice and post-solve vapor mass (WP5, other half).
-    use snow_vapor, only : safe_positive, latent_vapor_flux_linearized, &
-                           latent_vapor_flux_lin_class
+    ! safe_positive is NOT taken from snow_vapor: a procedure of another
+    ! module is not inlined (no IPO), and the row loops below call it per row.
+    use snow_vapor, only : latent_vapor_flux_linearized, latent_vapor_flux_lin_class
 
     implicit none
 
@@ -107,6 +108,27 @@ module snow_energy
     end type snow_energy_result_class
 
 contains
+
+    pure function safe_positive(x) result(y)
+        ! snow_vapor's safe_positive (Chion.jl _safe_positive), the floor at
+        ! EPS_TINY that protects every division of the solve. A module-local
+        ! copy so that it inlines into the row loops (as snow_layers keeps its
+        ! own wp_acc one).
+
+        implicit none
+
+        real(wp), intent(IN) :: x
+        real(wp) :: y
+
+        if (real(x,wp_acc) .gt. TOL_TINY) then
+            y = x
+        else
+            y = real(TOL_TINY,wp)
+        end if
+
+        return
+
+    end function safe_positive
 
     pure function snow_thermal_conductivity(rho,T,rho_i) result(K)
         ! Calonne et al. (2019), Eq. (5); Chion.jl/src/processes/energy_flux.jl:40-59
@@ -346,11 +368,12 @@ contains
 
         ! Work arrays. Automatic, stack-local, OpenMP-private by construction.
         ! Five solver arrays (see the workspace note in the module header) and
-        ! the three row arrays, all sized for snow plus substrate.
+        ! the six row arrays, all sized for snow plus substrate.
         real(wp), dimension(size(mass)+size(ice_temperature)) :: lower, diag, upper, rhs, &
                                                                  solver_diag
         real(wp), dimension(size(mass)+size(ice_temperature)) :: row_mass, row_density, &
                                                                  row_temperature
+        real(wp), dimension(size(mass)+size(ice_temperature)) :: row_dz, row_K, row_beta
 
         ! Local variables
         integer  :: k, n_snow, n_ice, n_rows
@@ -360,8 +383,8 @@ contains
         real(wp) :: sw_abs, lw_const, lw_lin, sh_const, sh_lin
         real(wp) :: lh_turb_const, lh_turb_lin, lh_const, lh_lin
         real(wp) :: q_const, q_lin
-        real(wp) :: dz_prev, dz_k, K_prev, K_k, G_k
-        real(wp) :: beta_scale, beta_1, beta_km1, beta_k
+        real(wp) :: G_k
+        real(wp) :: beta_scale, beta_1
         real(wp) :: h_ice
         real(wp) :: G_s, surface_den, surface_const, surface_coef, boundary_term
         real(wp) :: ts_new
@@ -571,14 +594,23 @@ contains
         ! conductance (energy_flux.jl, physical interface conductance).
         beta_scale = -dt_seconds/c%ci
 
+        ! Per-row thickness, conductivity and -dt/(ci m) first, in a pass of
+        ! their own: the rows are independent, so it vectorizes (the
+        ! conductivity's two exponentials are most of the assembly). Each
+        ! value is the expression Julia evaluates where it uses it.
+        !
         ! NOTE the surface layer thickness uses the SAFE-POSITIVE mass m1,
         ! while every other layer uses its raw mass. Each layer's conductivity
         ! is at its own start-of-step temperature.
-        dz_prev = m1/safe_positive(row_density(1))
-        K_prev  = snow_thermal_conductivity(row_density(1),T1_n,c%rho_i)
+        do k = 1, n_rows
+            row_dz(k)   = row_mass(k)/safe_positive(row_density(k))
+            row_K(k)    = snow_thermal_conductivity(row_density(k),row_temperature(k),c%rho_i)
+            row_beta(k) = beta_scale/safe_positive(row_mass(k))
+        end do
+        row_dz(1) = m1/safe_positive(row_density(1))
 
         ! Robin boundary terms from the top cell's half-thickness.
-        G_s           = 2.0_wp*K_prev/safe_positive(dz_prev)
+        G_s           = 2.0_wp*row_K(1)/safe_positive(row_dz(1))
         surface_den   = safe_positive(q_lin + G_s)
         surface_const = q_const/surface_den
         surface_coef  = G_s/surface_den
@@ -589,21 +621,12 @@ contains
 
         do k = 2, n_rows
 
-            dz_k = row_mass(k)/safe_positive(row_density(k))
-            K_k  = snow_thermal_conductivity(row_density(k),row_temperature(k),c%rho_i)
+            G_k = interface_conductance(row_K(k-1),row_dz(k-1),row_K(k),row_dz(k))
 
-            G_k = interface_conductance(K_prev,dz_prev,K_k,dz_k)
-
-            beta_km1 = beta_scale/safe_positive(row_mass(k-1))
-            beta_k   = beta_scale/safe_positive(row_mass(k))
-
-            upper(k-1) = beta_km1*G_k      ! super-diagonal of row k-1
-            lower(k-1) = beta_k*G_k        ! sub-diagonal   of row k
+            upper(k-1) = row_beta(k-1)*G_k   ! super-diagonal of row k-1
+            lower(k-1) = row_beta(k)*G_k     ! sub-diagonal   of row k
 
             rhs(k) = row_temperature(k)
-
-            dz_prev = dz_k
-            K_prev  = K_k
 
         end do
 
