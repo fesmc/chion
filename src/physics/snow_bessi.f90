@@ -103,10 +103,11 @@ module snow_bessi
     use snow_refreezing,    only : apply_refreezing
     use snow_diurnal,       only : diurnal_geometry_class, diurnal_geometry, &
                                    solar_declination_class, &
-                                   diurnal_substep_count, diurnal_substep_bounds, &
-                                   diurnal_shortwave_interval_average, &
+                                   diurnal_substep_count, &
+                                   diurnal_tiling_class, diurnal_substep_tiling, &
+                                   diurnal_shortwave_substep_average, &
                                    diurnal_temperature_amplitude, &
-                                   diurnal_temperature_interval_average
+                                   diurnal_temperature_substep_average
 
     implicit none
 
@@ -1298,6 +1299,7 @@ contains
 
         type(chion_step_forcing_class) :: forc, subforc
         type(diurnal_geometry_class)   :: geom
+        type(diurnal_tiling_class)     :: tiling
 
         if (present(decl)) then
             geom = diurnal_geometry(forc_in%latitude_deg,decl)
@@ -1335,9 +1337,13 @@ contains
                                 bsi%par%diurnal_temperature_amplitude_max, &
                                 forc%surface_height)
 
+                ! The substep bounds and their sines, once for the day.
+                tiling = diurnal_substep_tiling(n_substeps,geom)
+
                 do k = 1, n_substeps
 
-                    call diurnal_substep_bounds(k,n_substeps,hour_angle_start,hour_angle_end)
+                    hour_angle_start = tiling%bounds(k-1)
+                    hour_angle_end   = tiling%bounds(k)
 
                     fraction = real((real(hour_angle_end,wp_acc) - real(hour_angle_start,wp_acc)) &
                                     /(2.0_wp_acc*PI_ACC),wp)
@@ -1350,19 +1356,17 @@ contains
                     subforc%dt_days = forc%dt_days*fraction
 
                     subforc%shortwave_down = &
-                        diurnal_shortwave_interval_average(forc%shortwave_down,geom, &
-                                                           hour_angle_start,hour_angle_end)
+                        diurnal_shortwave_substep_average(forc%shortwave_down,geom,tiling,k)
 
                     if (forc%has_q_sw_net) then
                         subforc%q_sw_net = &
-                            diurnal_shortwave_interval_average(forc%q_sw_net,geom, &
-                                                               hour_angle_start,hour_angle_end)
+                            diurnal_shortwave_substep_average(forc%q_sw_net,geom,tiling,k)
                     end if
 
                     if (bsi%par%diurnal_temperature_cycle) then
                         subforc%air_temperature = &
-                            diurnal_temperature_interval_average(forc%air_temperature, &
-                                                amplitude,hour_angle_start,hour_angle_end)
+                            diurnal_temperature_substep_average(forc%air_temperature, &
+                                                                amplitude,tiling,k)
                     end if
 
                     call bessi_column_step_core(bsi,icol,subforc,c)

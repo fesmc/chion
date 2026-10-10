@@ -4,9 +4,9 @@ module snow_diurnal
     !
     ! Port of Chion.jl/src/processes/diurnal_shortwave.jl.
     !
-    ! This module is PURE: it holds no state, touches no column arrays, and
-    ! depends only on chion_defs. Everything is a function of latitude, solar
-    ! longitude and a pair of hour angles.
+    ! This module holds no state, touches no column arrays, and depends only
+    ! on chion_defs. Everything is a function of latitude, solar longitude
+    ! and a pair of hour angles.
     !
     ! PRECISION: the geometry is evaluated in wp_acc internally and returned in
     ! wp. Two of the expressions are differences of nearly equal numbers --
@@ -84,6 +84,20 @@ module snow_diurnal
         real(wp_acc) :: B = 0.0_wp_acc           ! [1] cos(phi)*cos(delta)
     end type diurnal_geometry_class
 
+    ! The substep tiling of one column-day: the n_substeps + 1 hour-angle
+    ! bounds (diurnal_substep_bounds) and their sines, with the sines of the
+    ! sunset/sunrise hour angles +-h0 that clip the shortwave intervals. The
+    ! interval averages need these sines only; a substepped day forms each
+    ! once (diurnal_substep_tiling) instead of four per substep.
+    integer, parameter :: DIURNAL_MAX_SUBSTEPS = 24
+    type diurnal_tiling_class
+        integer      :: n_substeps = 0
+        real(wp)     :: bounds(0:DIURNAL_MAX_SUBSTEPS) = 0.0_wp      ! [rad]
+        real(wp_acc) :: sin_bounds(0:DIURNAL_MAX_SUBSTEPS) = 0.0_wp_acc
+        real(wp_acc) :: sin_h0 = 0.0_wp_acc       ! sin(h0)
+        real(wp_acc) :: sin_neg_h0 = 0.0_wp_acc   ! sin(-h0)
+    end type diurnal_tiling_class
+
     interface diurnal_geometry
         module procedure diurnal_geometry_lon
         module procedure diurnal_geometry_decl
@@ -124,6 +138,10 @@ module snow_diurnal
     public :: diurnal_temperature_interval_average
     public :: diurnal_substep_count
     public :: diurnal_substep_bounds
+    public :: diurnal_tiling_class
+    public :: diurnal_substep_tiling
+    public :: diurnal_shortwave_substep_average
+    public :: diurnal_temperature_substep_average
 
 contains
 
@@ -469,8 +487,35 @@ contains
         real(wp),                     intent(IN) :: hour_angle_end         ! [rad] h_b
         real(wp) :: q_sw                                                   ! [W m-2] interval mean
 
+        q_sw = shortwave_interval_average_sines(shortwave_daily_mean,geom, &
+                   hour_angle_start,hour_angle_end, &
+                   sin(real(hour_angle_start,wp_acc)),sin(real(hour_angle_end,wp_acc)), &
+                   sin(real(geom%h0,wp_acc)),sin(-real(geom%h0,wp_acc)))
+
+        return
+
+    end function diurnal_shortwave_interval_average_geom
+
+    pure function shortwave_interval_average_sines(shortwave_daily_mean,geom, &
+                                                   hour_angle_start,hour_angle_end, &
+                                                   sin_start,sin_end,sin_h0,sin_neg_h0) result(q_sw)
+        ! diurnal_shortwave_interval_average_geom given the sines of the bounds
+        ! and of +-h0: sin(d_a) and sin(d_b) are those of the clipped bounds.
+
+        implicit none
+
+        real(wp),                     intent(IN) :: shortwave_daily_mean   ! [W m-2] Qbar
+        type(diurnal_geometry_class), intent(IN) :: geom
+        real(wp),                     intent(IN) :: hour_angle_start       ! [rad] h_a
+        real(wp),                     intent(IN) :: hour_angle_end         ! [rad] h_b
+        real(wp_acc),                 intent(IN) :: sin_start              ! sin(h_a)
+        real(wp_acc),                 intent(IN) :: sin_end                ! sin(h_b)
+        real(wp_acc),                 intent(IN) :: sin_h0                 ! sin(h0)
+        real(wp_acc),                 intent(IN) :: sin_neg_h0             ! sin(-h0)
+        real(wp) :: q_sw                                                   ! [W m-2] interval mean
+
         ! Local variables
-        real(wp_acc) :: width, d_a, d_b, I_ab, scale
+        real(wp_acc) :: width, d_a, d_b, I_ab, scale, sin_a, sin_b
 
         q_sw = 0.0_wp
 
@@ -491,14 +536,19 @@ contains
 
         if (d_b .le. d_a) return
 
-        I_ab  = (d_b - d_a)*geom%A + geom%B*(sin(d_b) - sin(d_a))
+        sin_a = sin_start
+        if (real(hour_angle_start,wp_acc) .lt. -real(geom%h0,wp_acc)) sin_a = sin_neg_h0
+        sin_b = sin_end
+        if (real(hour_angle_end,wp_acc) .gt. real(geom%h0,wp_acc)) sin_b = sin_h0
+
+        I_ab  = (d_b - d_a)*geom%A + geom%B*(sin_b - sin_a)
         scale = real(shortwave_daily_mean,wp_acc)*2.0_wp_acc*PI_ACC/geom%I_day
 
         q_sw = real(max(scale*I_ab/width,0.0_wp_acc),wp)
 
         return
 
-    end function diurnal_shortwave_interval_average_geom
+    end function shortwave_interval_average_sines
 
     pure function diurnal_shortwave_peak_flux_lat(shortwave_daily_mean, &
                                                   latitude_deg,solar_longitude_deg) result(q_peak)
@@ -604,6 +654,29 @@ contains
         real(wp), intent(IN) :: hour_angle_end               ! [rad]
         real(wp) :: t_air                                    ! [K]
 
+        t_air = temperature_interval_average_sines(air_temperature_daily_mean,amplitude, &
+                    hour_angle_start,hour_angle_end, &
+                    sin(real(hour_angle_start,wp_acc)),sin(real(hour_angle_end,wp_acc)))
+
+        return
+
+    end function diurnal_temperature_interval_average
+
+    pure function temperature_interval_average_sines(air_temperature_daily_mean,amplitude, &
+                                                     hour_angle_start,hour_angle_end, &
+                                                     sin_start,sin_end) result(t_air)
+        ! diurnal_temperature_interval_average given the sines of the bounds.
+
+        implicit none
+
+        real(wp),     intent(IN) :: air_temperature_daily_mean   ! [K] Tbar
+        real(wp),     intent(IN) :: amplitude                    ! [K] A_T (half-amplitude)
+        real(wp),     intent(IN) :: hour_angle_start             ! [rad]
+        real(wp),     intent(IN) :: hour_angle_end               ! [rad]
+        real(wp_acc), intent(IN) :: sin_start                    ! sin(h_a)
+        real(wp_acc), intent(IN) :: sin_end                      ! sin(h_b)
+        real(wp) :: t_air                                        ! [K]
+
         ! Local variables
         real(wp_acc) :: width, dsin
 
@@ -615,14 +688,95 @@ contains
         if (width .le. 0.0_wp_acc)  return
 
         ! Difference of nearly equal sines for a narrow interval -> wp_acc.
-        dsin = sin(real(hour_angle_end,wp_acc)) - sin(real(hour_angle_start,wp_acc))
+        dsin = sin_end - sin_start
 
         t_air = real(real(air_temperature_daily_mean,wp_acc) &
                      + real(amplitude,wp_acc)*dsin/width, wp)
 
         return
 
-    end function diurnal_temperature_interval_average
+    end function temperature_interval_average_sines
+
+    function diurnal_substep_tiling(n_substeps,geom) result(tiling)
+        ! The day's substep tiling (diurnal_tiling_class): bounds from
+        ! diurnal_substep_bounds, so the end of substep k is bit for bit the
+        ! start of k+1, and each sine formed once.
+
+        implicit none
+
+        integer,                      intent(IN) :: n_substeps
+        type(diurnal_geometry_class), intent(IN) :: geom
+        type(diurnal_tiling_class) :: tiling
+
+        ! Local variables
+        integer  :: k
+        real(wp) :: hour_angle_start, hour_angle_end
+
+        if (n_substeps .gt. DIURNAL_MAX_SUBSTEPS) then
+            write(io_unit_err,*) "diurnal_substep_tiling:: Error: n_substeps exceeds ", &
+                                 DIURNAL_MAX_SUBSTEPS
+            write(io_unit_err,*) "n_substeps = ", n_substeps
+            stop "Program stopped."
+        end if
+
+        tiling%n_substeps = n_substeps
+
+        do k = 1, n_substeps
+            call diurnal_substep_bounds(k,n_substeps,hour_angle_start,hour_angle_end)
+            if (k .eq. 1) tiling%bounds(0) = hour_angle_start
+            tiling%bounds(k) = hour_angle_end
+        end do
+
+        do k = 0, n_substeps
+            tiling%sin_bounds(k) = sin(real(tiling%bounds(k),wp_acc))
+        end do
+
+        tiling%sin_h0     = sin(real(geom%h0,wp_acc))
+        tiling%sin_neg_h0 = sin(-real(geom%h0,wp_acc))
+
+        return
+
+    end function diurnal_substep_tiling
+
+    pure function diurnal_shortwave_substep_average(shortwave_daily_mean,geom,tiling,k) result(q_sw)
+        ! diurnal_shortwave_interval_average over substep k of the tiling.
+
+        implicit none
+
+        real(wp),                     intent(IN) :: shortwave_daily_mean   ! [W m-2]
+        type(diurnal_geometry_class), intent(IN) :: geom
+        type(diurnal_tiling_class),   intent(IN) :: tiling
+        integer,                      intent(IN) :: k
+        real(wp) :: q_sw                                                   ! [W m-2]
+
+        q_sw = shortwave_interval_average_sines(shortwave_daily_mean,geom, &
+                   tiling%bounds(k-1),tiling%bounds(k), &
+                   tiling%sin_bounds(k-1),tiling%sin_bounds(k), &
+                   tiling%sin_h0,tiling%sin_neg_h0)
+
+        return
+
+    end function diurnal_shortwave_substep_average
+
+    pure function diurnal_temperature_substep_average(air_temperature_daily_mean,amplitude, &
+                                                      tiling,k) result(t_air)
+        ! diurnal_temperature_interval_average over substep k of the tiling.
+
+        implicit none
+
+        real(wp),                   intent(IN) :: air_temperature_daily_mean   ! [K]
+        real(wp),                   intent(IN) :: amplitude                    ! [K]
+        type(diurnal_tiling_class), intent(IN) :: tiling
+        integer,                    intent(IN) :: k
+        real(wp) :: t_air                                                      ! [K]
+
+        t_air = temperature_interval_average_sines(air_temperature_daily_mean,amplitude, &
+                    tiling%bounds(k-1),tiling%bounds(k), &
+                    tiling%sin_bounds(k-1),tiling%sin_bounds(k))
+
+        return
+
+    end function diurnal_temperature_substep_average
 
     pure function diurnal_substep_count_lat(dt_days,shortwave_daily_mean,air_temperature, &
                                             min_air_temperature,latitude_deg,solar_longitude_deg, &
