@@ -70,7 +70,7 @@ module snow_surface_fluxes
     ! "semix": linearized about the surface temperature, so its exact flux at
     ! a known temperature is constant - linear*T.
     use snow_turbulence, only : turb_semix_lin_class, turb_semix_flux_linearized, &
-                                turb_semix_roughness, turb_semix_latent_heat
+                                turb_semix_neutral_exchange, turb_semix_latent_heat
 
     ! snow_layers supplies the layer removal/merge used by
     ! apply_snow_surface_vapor_mass_flux when sublimation empties the surface
@@ -381,7 +381,7 @@ contains
             tx = turb_semix_flux_linearized(c,surface_temperature,forc%air_temperature, &
                                             forc%relative_humidity,forc%air_pressure, &
                                             forc%wind_speed, &
-                                            turb_semix_roughness(c,.not. has_snow), &
+                                            turb_semix_neutral_exchange(c,.not. has_snow), &
                                             turb_semix_latent_heat(c,surface_temperature, &
                                                                    .not. has_snow))
         end if
@@ -524,7 +524,7 @@ contains
             tx = turb_semix_flux_linearized(c,surface_temperature,forc%air_temperature, &
                                             forc%relative_humidity,forc%air_pressure, &
                                             forc%wind_speed, &
-                                            turb_semix_roughness(c,.not. has_snow), &
+                                            turb_semix_neutral_exchange(c,.not. has_snow), &
                                             turb_semix_latent_heat(c,surface_temperature, &
                                                                    .not. has_snow))
             q_lh = tx%latent_constant - tx%latent_linear*surface_temperature

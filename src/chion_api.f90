@@ -66,6 +66,7 @@ module chion_api
                            chion_const_class, chion_param_class, &
                            chion_grid_class, chion_forcing_class, &
                            chion_const_init, chion_const_print, chion_const_validate, &
+                           chion_const_derive, &
                            chion_forcing_alloc, chion_forcing_dealloc, &
                            chion_grid_init, chion_grid_dealloc, &
                            chion_grid_set_active, &
@@ -1144,6 +1145,7 @@ contains
         c%fresh_snow_density_scheme = chion_fresh_snow_density_scheme_flag(fresh_snow_density_scheme)
         c%low_density_densification = chion_densify_scheme_flag(low_density_densification)
 
+        call chion_const_derive(c)
         call chion_const_validate(c)
 
         return

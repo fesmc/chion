@@ -383,7 +383,7 @@ program test_surface
     c%turbulent_flux_scheme = CHION_TURB_SEMIX
 
     tx  = turb_semix_flux_linearized(c,265.0_wp,268.0_wp,0.75_wp,forc%air_pressure, &
-                                     5.0_wp,c%semix_z0m_snow, &
+                                     5.0_wp,turb_semix_neutral_exchange(c,.FALSE.), &
                                      surface_vapor_latent_heat(265.0_wp,c))
     nsw = resolved_nonshortwave_surface_flux_components(c,forc,265.0_wp,H_DEEP,.TRUE.)
     call check_close("semix turbulence on snow: SH = const - lin*Ts", nsw%sensible, &
@@ -399,7 +399,7 @@ program test_surface
 
     ! Bare ice at T0: ice roughness and the ice latent heat.
     tx  = turb_semix_flux_linearized(c,c%T0,268.0_wp,0.75_wp,forc%air_pressure, &
-                                     5.0_wp,c%semix_z0m_ice, &
+                                     5.0_wp,turb_semix_neutral_exchange(c,.TRUE.), &
                                      turb_semix_latent_heat(c,c%T0,.TRUE.))
     bif = resolved_bare_ice_surface_flux_components(c,forc,0.30_wp)
     call check_close("semix turbulence on bare ice: ice roughness (sensible)", bif%sensible, &

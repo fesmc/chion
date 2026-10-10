@@ -43,6 +43,11 @@ module snow_turbulence
     ! Lm per kg sublimated; legacy_chion restores it
     ! (TURB_SEMIX_ICE_SUBLIMATION, docs/porting_notes.md D35).
     !
+    ! The neutral coefficient C_hn depends on the parameters only: it is a
+    ! derived constant of chion_const_class (semix_neutral_exchange_snow/_ice,
+    ! chion_const_derive), selected by turb_semix_neutral_exchange and passed
+    ! in, instead of two logarithms per call.
+    !
     ! Evaluated in Julia's order and grouping.
 
     use chion_defs, only : wp, DEF_GRAVITY, chion_const_class, &
@@ -79,13 +84,13 @@ module snow_turbulence
     public :: turb_semix_resistance
     public :: turb_semix_air_density
     public :: turb_semix_latent_heat
-    public :: turb_semix_roughness
+    public :: turb_semix_neutral_exchange
     public :: turb_semix_flux_linearized
 
 contains
 
     pure function turb_semix_resistance(c,surface_temperature,air_temperature, &
-                                        wind_speed,z0m) result(r_a)
+                                        wind_speed,neutral_ch) result(r_a)
         ! energy_flux.jl _semix_aerodynamic_resistance. Positive Ri is warm
         ! air over a colder surface (stable): exchange damped by 1/(1 + b Ri).
         ! Negative Ri is unstable: enhanced by sqrt(1 - 16 Ri).
@@ -96,16 +101,11 @@ contains
         real(wp),                intent(IN) :: surface_temperature   ! [K]
         real(wp),                intent(IN) :: air_temperature       ! [K]
         real(wp),                intent(IN) :: wind_speed            ! [m s-1]
-        real(wp),                intent(IN) :: z0m                   ! [m]
+        real(wp),                intent(IN) :: neutral_ch            ! [1] C_hn
         real(wp) :: r_a                                              ! [s m-1]
 
         ! Local variables
-        real(wp) :: z0h, neutral_ch, wind, bulk_richardson, stability_factor
-
-        z0h        = z0m/c%semix_zm_to_zh
-        neutral_ch = (c%semix_karman*c%semix_karman) &
-                     /safe_positive(log(c%semix_surface_height/z0m) &
-                                    *log(c%semix_surface_height/z0h))
+        real(wp) :: wind, bulk_richardson, stability_factor
 
         wind = max(wind_speed,TURB_SEMIX_WIND_MIN)
 
@@ -174,30 +174,30 @@ contains
 
     end function turb_semix_latent_heat
 
-    pure function turb_semix_roughness(c,surface_is_ice) result(z0m)
-        ! Momentum roughness of the surface: semix_z0m_ice on bare ice (and
-        ! the substrate's top layer), semix_z0m_snow otherwise. No snow-depth
-        ! blend, unlike CLIMBER-X.
+    pure function turb_semix_neutral_exchange(c,surface_is_ice) result(neutral_ch)
+        ! Neutral exchange coefficient of the surface, from its momentum
+        ! roughness: semix_z0m_ice on bare ice (and the substrate's top layer),
+        ! semix_z0m_snow otherwise. No snow-depth blend, unlike CLIMBER-X.
 
         implicit none
 
         type(chion_const_class), intent(IN) :: c
         logical,                 intent(IN) :: surface_is_ice
-        real(wp) :: z0m                                       ! [m]
+        real(wp) :: neutral_ch                                ! [1] C_hn
 
         if (surface_is_ice) then
-            z0m = c%semix_z0m_ice
+            neutral_ch = c%semix_neutral_exchange_ice
         else
-            z0m = c%semix_z0m_snow
+            neutral_ch = c%semix_neutral_exchange_snow
         end if
 
         return
 
-    end function turb_semix_roughness
+    end function turb_semix_neutral_exchange
 
     pure function turb_semix_flux_linearized(c,surface_temperature,air_temperature, &
                                              relative_humidity,air_pressure,wind_speed, &
-                                             z0m,latent_heat) result(x)
+                                             neutral_ch,latent_heat) result(x)
         ! energy_flux.jl _semix_turbulent_flux_linearized, with the latent heat
         ! passed in (turb_semix_latent_heat) instead of taken at
         ! surface_temperature. Both fluxes linearized about
@@ -215,7 +215,7 @@ contains
         real(wp),                intent(IN) :: relative_humidity     ! [1] or [%]
         real(wp),                intent(IN) :: air_pressure          ! [Pa]
         real(wp),                intent(IN) :: wind_speed            ! [m s-1]
-        real(wp),                intent(IN) :: z0m                   ! [m]
+        real(wp),                intent(IN) :: neutral_ch            ! [1] C_hn
         real(wp),                intent(IN) :: latent_heat           ! [J kg-1]
         type(turb_semix_lin_class) :: x
 
@@ -226,7 +226,7 @@ contains
 
         air_density = turb_semix_air_density(c,air_temperature,air_pressure)
         resistance  = turb_semix_resistance(c,surface_temperature,air_temperature, &
-                                            wind_speed,z0m)
+                                            wind_speed,neutral_ch)
 
         sensible_coefficient = c%semix_sensible_exchange_factor*air_density*c%cp_air &
                                /resistance

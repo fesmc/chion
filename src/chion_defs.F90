@@ -338,6 +338,14 @@ module chion_defs
         real(wp) :: semix_stable_coefficient        ! [1] b
         real(wp) :: semix_latent_exchange_factor    ! [1]
 
+        ! DERIVED from the five above by chion_const_derive (chion_const_init,
+        ! chion_const_load): the neutral exchange coefficient
+        ! k^2/(ln(z/z0m) ln(z/z0h)) over snow and over bare ice, which the
+        ! turbulence would otherwise form (two logarithms of constants) at
+        ! every call. Call chion_const_derive after changing those parameters.
+        real(wp) :: semix_neutral_exchange_snow     ! [1]
+        real(wp) :: semix_neutral_exchange_ice      ! [1]
+
         ! Albedo
         real(wp) :: alpha_dry          ! [1] dry snow albedo (upper bound)
         real(wp) :: alpha_wet          ! [1] wet snow albedo (lower bound)
@@ -620,6 +628,7 @@ module chion_defs
     public :: chion_param_class
 
     public :: chion_const_init
+    public :: chion_const_derive
     public :: chion_const_print
     public :: chion_const_validate
 
@@ -758,9 +767,52 @@ contains
 
         c%low_density_densification = CHION_DENSIFY_BESSI
 
+        call chion_const_derive(c)
+
         return
 
     end subroutine chion_const_init
+
+    subroutine chion_const_derive(c)
+        ! The derived constants of chion_const_class, from the parameters they
+        ! derive from. Only constants: the formulas are those of the physics
+        ! modules that use them, evaluated there exactly so.
+        !
+        ! semix_neutral_exchange_*: Chion.jl's _semix_aerodynamic_resistance
+        ! (snow_turbulence), C_hn = k^2/(ln(z/z0m) ln(z/z0h)), z0h =
+        ! z0m/zm_to_zh, the product floored at EPS_TINY as there.
+
+        implicit none
+
+        type(chion_const_class), intent(INOUT) :: c
+
+        c%semix_neutral_exchange_snow = semix_neutral_exchange(c,c%semix_z0m_snow)
+        c%semix_neutral_exchange_ice  = semix_neutral_exchange(c,c%semix_z0m_ice)
+
+        return
+
+    end subroutine chion_const_derive
+
+    pure function semix_neutral_exchange(c,z0m) result(neutral_ch)
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+        real(wp),                intent(IN) :: z0m          ! [m]
+        real(wp) :: neutral_ch                              ! [1]
+
+        ! Local variables
+        real(wp) :: z0h, log_product
+
+        z0h         = z0m/c%semix_zm_to_zh
+        log_product = log(c%semix_surface_height/z0m)*log(c%semix_surface_height/z0h)
+        if (.not. (real(log_product,wp_acc) .gt. TOL_TINY)) log_product = real(TOL_TINY,wp)
+
+        neutral_ch = (c%semix_karman*c%semix_karman)/log_product
+
+        return
+
+    end function semix_neutral_exchange
 
     subroutine chion_const_print(c)
         ! Write the full constants set to stdout, for provenance in run logs.

@@ -390,28 +390,28 @@ contains
         call chion_const_init(c)
 
         call check_close("r_a neutral", &
-                         turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,c%semix_z0m_snow), &
+                         turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
                          132.54745276_wp, 1.0e-5_wp, nfail)
         call check_close("r_a stable (b = 40)", &
-                         turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,c%semix_z0m_snow), &
+                         turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
                          513.45484547_wp, 1.0e-5_wp, nfail)
         call check_close("r_a unstable", &
-                         turb_semix_resistance(c,273.0_wp,268.0_wp,5.0_wp,c%semix_z0m_snow), &
+                         turb_semix_resistance(c,273.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
                          89.959523688_wp, 1.0e-5_wp, nfail)
         call check_close("r_a calm: wind floored at 0.1", &
-                         turb_semix_resistance(c,268.0_wp,268.0_wp,0.0_wp,c%semix_z0m_snow), &
+                         turb_semix_resistance(c,268.0_wp,268.0_wp,0.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
                          6627.3726381_wp, 1.0e-5_wp, nfail)
         call check_close("r_a over bare ice (z0m_ice)", &
-                         turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,c%semix_z0m_ice), &
+                         turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.TRUE.)), &
                          79.528471657_wp, 1.0e-5_wp, nfail)
         call check("stable > neutral > unstable (Julia's stability test)", &
-                   turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,c%semix_z0m_snow) .gt. &
-                   turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,c%semix_z0m_snow) .and. &
-                   turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,c%semix_z0m_snow) .gt. &
-                   turb_semix_resistance(c,273.0_wp,268.0_wp,5.0_wp,c%semix_z0m_snow), nfail)
+                   turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)) .gt. &
+                   turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)) .and. &
+                   turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)) .gt. &
+                   turb_semix_resistance(c,273.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), nfail)
         c%semix_stable_coefficient = 2.0_wp
         call check_close("r_a stable, b = 2: weaker suppression", &
-                         turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,c%semix_z0m_snow), &
+                         turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
                          151.59282240_wp, 1.0e-5_wp, nfail)
         c%semix_stable_coefficient = 40.0_wp
 
@@ -431,17 +431,20 @@ contains
         if (TURB_SEMIX_ICE_SUBLIMATION) L = c%Lv + c%Lm
         call check_close("L on bare ice at T0 (D35)", &
                          turb_semix_latent_heat(c,c%T0,.TRUE.), L, 1.0e-6_wp, nfail)
-        call check("roughness: snow and ice", &
-                   turb_semix_roughness(c,.FALSE.) .eq. c%semix_z0m_snow .and. &
-                   turb_semix_roughness(c,.TRUE.) .eq. c%semix_z0m_ice, nfail)
+        call check_close("neutral exchange over snow = k^2/(ln(z/z0m) ln(z/z0h))", &
+                         turb_semix_neutral_exchange(c,.FALSE.), &
+                         0.16_wp/(log(10.0_wp/0.001_wp)*log(10.0_wp/0.0001_wp)), 1.0e-6_wp, nfail)
+        call check_close("neutral exchange over ice (z0m_ice)", &
+                         turb_semix_neutral_exchange(c,.TRUE.), &
+                         0.16_wp/(log(10.0_wp/0.01_wp)*log(10.0_wp/0.001_wp)), 1.0e-6_wp, nfail)
 
         ! Fluxes at Ts = 263, Ta = 268, rh = 0.8, p = 80 kPa (Julia's test).
         tx = turb_semix_flux_linearized(c,263.0_wp,268.0_wp,0.8_wp,80000.0_wp,5.0_wp, &
-                                        c%semix_z0m_snow,c%Lv + c%Lm)
+                                        turb_semix_neutral_exchange(c,.FALSE.),c%Lv + c%Lm)
         rho = turb_semix_air_density(c,268.0_wp,80000.0_wp)
         call check_close("sensible coefficient = 2.5 rho cp/r_a", tx%sensible_linear, &
                          2.5_wp*rho*c%cp_air &
-                         /turb_semix_resistance(c,263.0_wp,268.0_wp,5.0_wp,c%semix_z0m_snow), &
+                         /turb_semix_resistance(c,263.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
                          1.0e-5_wp, nfail)
         call check_close("Q_sh = coefficient*(Ta - Ts)", &
                          tx%sensible_constant - tx%sensible_linear*263.0_wp, &
@@ -451,7 +454,7 @@ contains
         call check_close("Q_lh = L rho (q_a - q_s(Ts))/r_a, q over ice", &
                          tx%latent_constant - tx%latent_linear*263.0_wp, &
                          (c%Lv + c%Lm)*rho*(q_a - q_s) &
-                         /turb_semix_resistance(c,263.0_wp,268.0_wp,5.0_wp,c%semix_z0m_snow), &
+                         /turb_semix_resistance(c,263.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
                          1.0e-4_wp, nfail)
         call check("latent linear > 0 (a warmer surface loses more vapour)", &
                    tx%latent_linear .gt. 0.0_wp, nfail)

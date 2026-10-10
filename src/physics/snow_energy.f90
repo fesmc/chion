@@ -70,7 +70,7 @@ module snow_energy
     ! Chion.jl's bulk turbulence (turbulent_flux_scheme = "semix"), already
     ! linearized: its (constant, linear) pairs go straight into step 2.
     use snow_turbulence, only : turb_semix_lin_class, turb_semix_flux_linearized, &
-                                turb_semix_roughness, turb_semix_latent_heat
+                                turb_semix_neutral_exchange, turb_semix_latent_heat
 
     ! Vapor-pressure / turbulent-latent helpers shared with the unlinearized
     ! twin used for bare ice and post-solve vapor mass (WP5, other half).
@@ -471,7 +471,7 @@ contains
             tx = turb_semix_flux_linearized(c,Ts_n,forc%air_temperature, &
                                             forc%relative_humidity,forc%air_pressure, &
                                             forc%wind_speed, &
-                                            turb_semix_roughness(c,surface_is_ice), &
+                                            turb_semix_neutral_exchange(c,surface_is_ice), &
                                             turb_semix_latent_heat(c,Ts_n,surface_is_ice))
         end if
 
