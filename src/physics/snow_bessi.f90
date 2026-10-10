@@ -102,6 +102,7 @@ module snow_bessi
     use snow_percolation,   only : apply_percolation
     use snow_refreezing,    only : apply_refreezing
     use snow_diurnal,       only : diurnal_geometry_class, diurnal_geometry, &
+                                   solar_declination_class, &
                                    diurnal_substep_count, diurnal_substep_bounds, &
                                    diurnal_shortwave_interval_average, &
                                    diurnal_temperature_amplitude, &
@@ -1242,7 +1243,7 @@ contains
 
     end subroutine bessi_bare_ice_substrate_step
 
-    subroutine bessi_column_step(bsi,icol,forc_in,c)
+    subroutine bessi_column_step(bsi,icol,forc_in,c,decl)
         ! Chion.jl column_step! (src/step.jl:113-157): the diurnal-shortwave
         ! substep wrapper around the core kernel.
         !
@@ -1270,7 +1271,9 @@ contains
         ! The solar geometry of the column-day (declination, sunset hour
         ! angle, daylight integral) is evaluated once, here, and shared by the
         ! cloud-proxy TOA, the substep criterion and every substep's shortwave
-        ! average.
+        ! average. A host stepping many columns passes the day's declination
+        ! terms (decl = solar_declination(solar_longitude_deg), the same for
+        ! all of them; chion_model_step); without them they are formed here.
         !
         ! A day the criterion does not split (n_substeps = 1) is stepped with
         ! its forcing as given. Chion.jl runs it as one [-pi, pi] interval,
@@ -1285,6 +1288,7 @@ contains
         integer,                        intent(IN)    :: icol
         type(chion_step_forcing_class), intent(IN)    :: forc_in
         type(chion_const_class),        intent(IN)    :: c
+        type(solar_declination_class),  intent(IN), optional :: decl  ! of forc_in%solar_longitude_deg
 
         ! Local variables
         integer  :: n_substeps, k
@@ -1295,7 +1299,11 @@ contains
         type(chion_step_forcing_class) :: forc, subforc
         type(diurnal_geometry_class)   :: geom
 
-        geom = diurnal_geometry(forc_in%latitude_deg,forc_in%solar_longitude_deg)
+        if (present(decl)) then
+            geom = diurnal_geometry(forc_in%latitude_deg,decl)
+        else
+            geom = diurnal_geometry(forc_in%latitude_deg,forc_in%solar_longitude_deg)
+        end if
 
         forc = with_parameterized_longwave(c,forc_in,geom)
 

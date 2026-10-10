@@ -79,6 +79,7 @@ module chion_model
                            pdd_column_step
     use snow_itm,   only : itm_class, itm_alloc, itm_dealloc, &
                            itm_init_state, itm_step
+    use snow_diurnal, only : solar_declination_class, solar_declination
 
     implicit none
 
@@ -384,6 +385,7 @@ contains
         ! Local variables
         integer :: i, icol
         type(chion_step_forcing_class) :: fc
+        type(solar_declination_class)  :: decl
 
         if (forc%ncol .ne. grd%ncol) then
             write(io_unit_err,*) "chion_model_step:: Error: forcing and grid column counts differ."
@@ -401,11 +403,14 @@ contains
 
             case("bessi")
 
+                ! The day's solar declination terms, once for all columns.
+                decl = solar_declination(forc%solar_longitude_deg)
+
                 !$omp parallel do default(shared) private(i,icol,fc) schedule(dynamic,BESSI_OMP_CHUNK)
                 do i = 1, grd%n_active
                     icol = grd%active_idx(i)
                     call chion_pack_step_forcing(forc,icol,dt_days,fc)
-                    call bessi_column_step(bsi,icol,fc,c)
+                    call bessi_column_step(bsi,icol,fc,c,decl)
                 end do
                 !$omp end parallel do
 

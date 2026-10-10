@@ -62,6 +62,19 @@ module snow_diurnal
     ! call -- three per day plus one per substep -- repeating the trigonometry
     ! of diurnal_daylight_integral. The latitude/solar-longitude forms are
     ! wrappers over the same code, so both give identical results.
+    ! The latitude-independent part of it: the solar declination of the day
+    ! and its sine, cosine and tangent, the same for every column. A host step
+    ! evaluates it once (solar_declination) and builds each column's geometry
+    ! from it (diurnal_geometry(latitude_deg,decl)), instead of every column
+    ! repeating the asin and three trigonometric functions of the day.
+    type solar_declination_class
+        logical      :: defined = .FALSE.        ! solar longitude finite
+        real(wp)     :: declination_deg = 0.0_wp ! [deg]
+        real(wp_acc) :: sin_dec = 0.0_wp_acc     ! [1]
+        real(wp_acc) :: cos_dec = 0.0_wp_acc     ! [1]
+        real(wp_acc) :: tan_dec = 0.0_wp_acc     ! [1]
+    end type solar_declination_class
+
     type diurnal_geometry_class
         logical      :: defined = .FALSE.        ! latitude and solar longitude finite
         real(wp)     :: declination_deg = 0.0_wp ! [deg]
@@ -70,6 +83,11 @@ module snow_diurnal
         real(wp_acc) :: A = 0.0_wp_acc           ! [1] sin(phi)*sin(delta)
         real(wp_acc) :: B = 0.0_wp_acc           ! [1] cos(phi)*cos(delta)
     end type diurnal_geometry_class
+
+    interface diurnal_geometry
+        module procedure diurnal_geometry_lon
+        module procedure diurnal_geometry_decl
+    end interface diurnal_geometry
 
     interface daily_toa_shortwave
         module procedure daily_toa_shortwave_lat
@@ -91,6 +109,8 @@ module snow_diurnal
         module procedure diurnal_substep_count_geom
     end interface diurnal_substep_count
 
+    public :: solar_declination_class
+    public :: solar_declination
     public :: diurnal_geometry_class
     public :: diurnal_geometry
     public :: solar_declination_deg
@@ -148,11 +168,25 @@ contains
         real(wp), intent(IN) :: declination_deg   ! [deg]   delta
         real(wp) :: h0                            ! [rad]
 
+        h0 = sunset_hour_angle_tan(latitude_deg,tan(real(declination_deg,wp_acc)*DEG2RAD))
+
+        return
+
+    end function sunset_hour_angle
+
+    pure function sunset_hour_angle_tan(latitude_deg,tan_dec) result(h0)
+        ! sunset_hour_angle from the tangent of the declination.
+
+        implicit none
+
+        real(wp),     intent(IN) :: latitude_deg  ! [deg N] phi
+        real(wp_acc), intent(IN) :: tan_dec       ! [1] tan(delta)
+        real(wp) :: h0                            ! [rad]
+
         ! Local variables
         real(wp_acc) :: cos_h0
 
-        cos_h0 = -tan(real(latitude_deg,wp_acc)*DEG2RAD) &
-                 *tan(real(declination_deg,wp_acc)*DEG2RAD)
+        cos_h0 = -tan(real(latitude_deg,wp_acc)*DEG2RAD)*tan_dec
 
         if (cos_h0 .ge. 1.0_wp_acc) then
             h0 = 0.0_wp
@@ -164,7 +198,7 @@ contains
 
         return
 
-    end function sunset_hour_angle
+    end function sunset_hour_angle_tan
 
     pure subroutine diurnal_daylight_integral(latitude_deg,solar_longitude_deg, &
                                               declination_deg,h0,I_day,A,B)
@@ -187,25 +221,89 @@ contains
         real(wp_acc), intent(OUT) :: B                     ! [1] cos(phi)*cos(delta)
 
         ! Local variables
-        real(wp_acc) :: lat_rad, dec_rad, h0_acc
+        type(solar_declination_class) :: decl
 
-        declination_deg = solar_declination_deg(solar_longitude_deg)
-        h0              = sunset_hour_angle(latitude_deg,declination_deg)
+        decl = declination_terms(solar_declination_deg(solar_longitude_deg))
+
+        declination_deg = decl%declination_deg
+
+        call daylight_integral_decl(latitude_deg,decl,h0,I_day,A,B)
+
+        return
+
+    end subroutine diurnal_daylight_integral
+
+    pure function declination_terms(declination_deg) result(decl)
+        ! The declination and its sine, cosine and tangent (in radians, from
+        ! the wp declination as diurnal_daylight_integral always took it).
+
+        implicit none
+
+        real(wp), intent(IN) :: declination_deg   ! [deg]
+        type(solar_declination_class) :: decl
+
+        ! Local variables
+        real(wp_acc) :: dec_rad
+
+        decl%defined         = .TRUE.
+        decl%declination_deg = declination_deg
+
+        dec_rad      = real(declination_deg,wp_acc)*DEG2RAD
+        decl%sin_dec = sin(dec_rad)
+        decl%cos_dec = cos(dec_rad)
+        decl%tan_dec = tan(dec_rad)
+
+        return
+
+    end function declination_terms
+
+    pure subroutine daylight_integral_decl(latitude_deg,decl,h0,I_day,A,B)
+        ! diurnal_daylight_integral from the day's declination terms.
+
+        implicit none
+
+        real(wp),                      intent(IN)  :: latitude_deg   ! [deg N]
+        type(solar_declination_class), intent(IN)  :: decl
+        real(wp),                      intent(OUT) :: h0             ! [rad] sunset hour angle
+        real(wp_acc),                  intent(OUT) :: I_day          ! [rad] daylight integral
+        real(wp_acc),                  intent(OUT) :: A              ! [1] sin(phi)*sin(delta)
+        real(wp_acc),                  intent(OUT) :: B              ! [1] cos(phi)*cos(delta)
+
+        ! Local variables
+        real(wp_acc) :: lat_rad, h0_acc
+
+        h0 = sunset_hour_angle_tan(latitude_deg,decl%tan_dec)
 
         lat_rad = real(latitude_deg,wp_acc)*DEG2RAD
-        dec_rad = real(declination_deg,wp_acc)*DEG2RAD
 
-        A = sin(lat_rad)*sin(dec_rad)
-        B = cos(lat_rad)*cos(dec_rad)
+        A = sin(lat_rad)*decl%sin_dec
+        B = cos(lat_rad)*decl%cos_dec
 
         h0_acc = real(h0,wp_acc)
         I_day  = 2.0_wp_acc*(h0_acc*A + B*sin(h0_acc))
 
         return
 
-    end subroutine diurnal_daylight_integral
+    end subroutine daylight_integral_decl
 
-    pure function diurnal_geometry(latitude_deg,solar_longitude_deg) result(geom)
+    pure function solar_declination(solar_longitude_deg) result(decl)
+        ! The day's declination terms (solar_declination_class). Undefined
+        ! (all zero) when the solar longitude is not finite.
+
+        implicit none
+
+        real(wp), intent(IN) :: solar_longitude_deg   ! [deg]
+        type(solar_declination_class) :: decl
+
+        if (.not. ieee_is_finite(solar_longitude_deg)) return
+
+        decl = declination_terms(solar_declination_deg(solar_longitude_deg))
+
+        return
+
+    end function solar_declination
+
+    pure function diurnal_geometry_lon(latitude_deg,solar_longitude_deg) result(geom)
         ! The column-day's solar geometry (diurnal_geometry_class). Undefined
         ! (all zero) when the latitude or the solar longitude is not finite,
         ! which every *_geom consumer treats as "no daylight geometry", as the
@@ -217,18 +315,33 @@ contains
         real(wp), intent(IN) :: solar_longitude_deg   ! [deg]
         type(diurnal_geometry_class) :: geom
 
-        if (.not. ieee_is_finite(latitude_deg))        return
-        if (.not. ieee_is_finite(solar_longitude_deg)) return
-
-        geom%defined = .TRUE.
-
-        call diurnal_daylight_integral(latitude_deg,solar_longitude_deg, &
-                                       geom%declination_deg,geom%h0, &
-                                       geom%I_day,geom%A,geom%B)
+        geom = diurnal_geometry_decl(latitude_deg,solar_declination(solar_longitude_deg))
 
         return
 
-    end function diurnal_geometry
+    end function diurnal_geometry_lon
+
+    pure function diurnal_geometry_decl(latitude_deg,decl) result(geom)
+        ! diurnal_geometry from the day's declination terms (solar_declination),
+        ! identical to the latitude/solar-longitude form.
+
+        implicit none
+
+        real(wp),                      intent(IN) :: latitude_deg   ! [deg N]
+        type(solar_declination_class), intent(IN) :: decl
+        type(diurnal_geometry_class) :: geom
+
+        if (.not. ieee_is_finite(latitude_deg)) return
+        if (.not. decl%defined)                 return
+
+        geom%defined         = .TRUE.
+        geom%declination_deg = decl%declination_deg
+
+        call daylight_integral_decl(latitude_deg,decl,geom%h0,geom%I_day,geom%A,geom%B)
+
+        return
+
+    end function diurnal_geometry_decl
 
     pure function daily_toa_shortwave_lat(latitude_deg,solar_longitude_deg,day_of_year) result(toa)
         ! daily_toa_shortwave from latitude and solar longitude.

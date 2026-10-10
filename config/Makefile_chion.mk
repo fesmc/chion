@@ -138,7 +138,7 @@ $(objdir)/snow_itm.o: $(physdir)/snow_itm.f90 \
 
 $(objdir)/chion_model.o: $(srcdir)/chion_model.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/snow_bessi.o \
-						  	$(objdir)/snow_pdd.o $(objdir)/snow_itm.o
+						  	$(objdir)/snow_pdd.o $(objdir)/snow_itm.o $(objdir)/snow_diurnal.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 $(objdir)/chion_api.o: $(srcdir)/chion_api.f90 \
