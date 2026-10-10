@@ -34,10 +34,17 @@
     n_years             = 50               ! annual cycles to repeat
     dt_out              = 360.0            ! [d] output once per year (drift)
 
-    swd_source          = "file"           ! "file" (ERA5) | "transmissivity"
-    trans_a             = 0.46             ! [1]  tau = trans_a + trans_b*z_srf
-    trans_b             = 6.0e-5           ! [m-1]
-    H_ice_default       = 1000.0           ! [m]  ice thickness on every column (ITM)
+    ! swd_source: "file" uses the regridded ERA5 shortwave (validated default).
+    ! "transmissivity"          -> tau = trans_a + trans_b*z_srf           (ITM clear-sky)
+    ! "transmissivity_seasonal" -> tau = trans_a + trans_b*z_srf + trans_c*tcc,
+    !     with the coefficients below set to the melt-season (JJA) fit from
+    !     diagnostics/transmissivity.jl. tau is clamped to [0,1] and * S_toa.
+    ! trans_a/b/c are read only by the source that uses them.
+    swd_source          = "file"
+    trans_a             = 0.768            ! [1]   JJA fit intercept
+    trans_b             = 6.99e-5          ! [m-1] JJA fit elevation term
+    trans_c             = -0.376           ! [1]   JJA fit cloud term
+    H_ice_default       = 1000.0           ! [m]  ice thickness on every column (ITM; BESSI ice substrate)
 /
 
 ! ============================================================
@@ -52,6 +59,24 @@
 /
 
 ! ============================================================
+! &chion_const — library constants (sparse: overrides only)
+! ============================================================
+!
+! Greenland calibration of the thin-snow blend pair (WP19,
+! docs/steady_state_snowpack.md). Chion.jl's alpha_ice = 0.40 was calibrated
+! without chion's thin-snow albedo blend (D40). This driver spreads monthly MAR
+! snowfall over every day (trace snowfall on 98 % of ablation-zone melt days),
+! so the blend exposes the bare ice and 0.40 over-melts. Grid alpha_ice
+! 0.40-0.55 x swe_crit_albedo 5-40 kg m-2, GRL-16KM, 50 yr, vs MAR v3.11
+! (SMB 348 Gt/yr): 0.50 / 10 gives SMB 340, R^2 0.86 (0.40 / 10: 279, 0.77);
+! swe_crit_albedo moves SMB by less than 15 Gt/yr. Same at GRL-8KM.
+
+&chion_const
+    alpha_ice           = 0.50              ! [1] Bare ice albedo (library default 0.40)
+    swe_crit_albedo     = 10.0              ! [kg m-2] Column SWE of full snow cover
+/
+
+! ============================================================
 ! &bessi — layered snowpack model
 ! ============================================================
 
@@ -63,20 +88,11 @@
     density_init        = 300.0             ! [kg m-3] Initial layer density
     temperature_init    = 273.0             ! [K] Initial layer temperature
 
-    ! Diurnal shortwave substepping resolves the solar-noon flux peak; melt is
-    ! nonlinear in the instantaneous flux, so daily-mean forcing under-melts.
-    ! The min_air_temperature gate confines the boost to near-melting cells --
-    ! at the -8C default it fires across the whole percolation zone and
-    ! over-ablates it; at -1C it lands close to MAR (domain R^2 0.74 -> 0.84,
-    ! SMB bias +68 -> +18 mm/yr). The temperature cycle is left OFF: +/-5 K is
-    ! too aggressive and flips the sheet to strong over-ablation. See
-    ! docs/steady_state_snowpack.md.
-    diurnal_shortwave_substeps          = .TRUE.    ! Resolve the diurnal shortwave cycle
-    diurnal_shortwave_threshold         = 0.0       ! [W m-2] Peak-minus-mean to activate
-    diurnal_shortwave_max_substeps      = 3         ! [1] Substeps per day when active
-    diurnal_shortwave_min_air_temperature = 272.15  ! [K] Below this, do not substep
-    diurnal_temperature_cycle           = .FALSE.   ! Add a diurnal air-temperature cycle
-    diurnal_temperature_amplitude       = 5.0       ! [K] Half-amplitude of that cycle
+    ! Diurnal substeps, ice substrate, fine layers and the surface scheme are
+    ! Chion.jl's calibrated defaults (input/chion_defaults.nml). The former
+    ! tuning here (3 substeps above -1 C, no temperature cycle; R^2 0.84 under
+    ! the pre-C11 physics, docs/steady_state_snowpack.md) does worse on top of
+    ! them at GRL-16KM: SMB 485 vs 448 Gt/yr (MAR 348), R^2 0.78 vs 0.83.
 /
 
 ! ============================================================

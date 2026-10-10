@@ -26,7 +26,8 @@ program test_itm
     ! notes at the reference block and at check_rel.
 
     use chion_defs, only : wp, wp_acc, chion_step_forcing_class, &
-                          chion_const_class, chion_const_init
+                          chion_const_class, chion_const_init, &
+                          ITM_FIRN_DAYS_YEAR, CHION_LEGACY_MODE
     use snow_itm
 
     implicit none
@@ -173,8 +174,9 @@ program test_itm
                                                r_H_snow(i),r_alb_s,r_smbi,r_smb,     &
                                                r_melt,r_runoff,r_refrz,r_melt_net)
             ! smbpal's calc_temp_surf takes the annual net melt [mm w.e. yr-1]
-            ! on a 360-day year; scale the daily step rate the same way.
-            r_tsrf = ref_calc_temp_surf(cn,t2m,H_ice(i),r_melt_net*360.0_wp,itm%par%firn_fac)
+            ! on a 360-day year; scale the daily step rate the same way
+            ! (ITM_FIRN_DAYS_YEAR, checked below to be 360; 1 under legacy_chion).
+            r_tsrf = ref_calc_temp_surf(cn,t2m,H_ice(i),r_melt_net*ITM_FIRN_DAYS_YEAR,itm%par%firn_fac)
 
             call track(1,itm%now%H_snow(i),  r_H_snow(i))
             call track(2,itm%now%alb_s(i),   r_alb_s)
@@ -260,6 +262,13 @@ program test_itm
                                 4.0_wp_acc*real(epsilon(1.0_wp),wp_acc)*fscale(2)), nfail)
     call check("tsrf is bit-identical (no ITM arithmetic enters it)", &
                dmax(9) .eq. 0.0_wp_acc, nfail)
+    if (CHION_LEGACY_MODE) then
+        call check("legacy_chion: tsrf uses the daily melt_net, as Chion.jl (D27)", &
+                   ITM_FIRN_DAYS_YEAR .eq. 1.0_wp, nfail)
+    else
+        call check("tsrf scales melt_net to smbpal's 360-day year (D27)", &
+                   ITM_FIRN_DAYS_YEAR .eq. 360.0_wp, nfail)
+    end if
 
     ! === Physical invariants ============================================
 

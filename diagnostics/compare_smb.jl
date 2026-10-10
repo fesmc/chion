@@ -26,8 +26,10 @@ accum = dropdims(mean(m["sf"][:, :, :] .+ m["rf"][:, :, :], dims=3), dims=3) .* 
 close(m)
 
 # --- chion surface SMB: accum - d(runoff) - d(subl), final year ----------
+# Cumulative runoff: `runoff` for BESSI/PDD, `runoff_cum` for ITM (whose
+# `runoff` is the step's rate, Chion.jl's ITM names).
 d  = NCDataset(chion_file)
-ru = d["runoff"][:, :, :]
+ru = d[haskey(d, "runoff_cum") ? "runoff_cum" : "runoff"][:, :, :]
 su = haskey(d, "sublimation") ? d["sublimation"][:, :, :] : zero(ru)   # PDD/ITM: no subl term
 close(d)
 chion = accum .- (ru[:, :, end] .- ru[:, :, end-1]) .- (su[:, :, end] .- su[:, :, end-1])

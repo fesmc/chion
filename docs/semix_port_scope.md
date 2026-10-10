@@ -13,6 +13,17 @@ Ganopolski) is characterized in the memory note and in
 [docs/steady_state_snowpack.md](steady_state_snowpack.md) (model comparison
 section). This document is the *how*.
 
+> **Naming since chion C6/C7 (Chion.jl `d0146e1`/`03bb445`).** Chion.jl split its
+> surface scheme into `seb_scheme` (longwave only) and `turbulent_flux_scheme`, and
+> its `:semix` turbulence is its own bulk scheme, not CLIMBER-X's. chion follows:
+> the CLIMBER-X configuration this document calls `seb_scheme=semix` is now
+> `seb_scheme = "semix"` (CLIMBER-X's emissivity longwave, unchanged) **plus**
+> `turbulent_flux_scheme = "climberx"` (the aerodynamic exchange of rungs 2–3,
+> unchanged, bit-identical); `semix_qsat` is now `climberx_qsat` (`"climberx"` |
+> `"bessi"`). `turbulent_flux_scheme = "semix"` is Chion.jl's bulk turbulence.
+> The SEMIX albedo keeps its name, `albedo_scheme = "semix"`, as in Chion.jl. The
+> history below keeps the names of its time.
+
 ## Design: orthogonal flags, not a model list
 
 Layering and surface scheme are independent axes. `model = bessi` becomes the
@@ -22,7 +33,8 @@ bulk melt-parameterization family (no energy balance), unchanged.
 | axis | flag | values | status |
 |---|---|---|---|
 | column structure | `Ntot` *(exists)* | `1` (single layer) … `N` (firn column) | ✅ works today |
-| surface energy balance | `seb_scheme` *(new)* | `bessi` \| `semix` | ✅ rungs 2–3 done |
+| longwave (surface energy balance) | `seb_scheme` *(new)* | `bessi` \| `semix` | ✅ rung 3 done |
+| turbulent exchange | `turbulent_flux_scheme` *(C6)* | `bessi` \| `climberx` \| `semix` (Chion.jl) | ✅ rung 2 done (`climberx`) |
 | albedo | `albedo_scheme` *(extend enum)* | `constant` \| `dynamic` \| `prescribed` \| `semix` | ✅ rung 1 done |
 | net shortwave | `has_q_sw_net` *(exists)* + internal spectral | prescribed **or** chion-owns | ⚠️ broadband collapse, not spectral |
 | background ice albedo | `alb_ice_host` *(new, optional)* | chion's own **or** passed | ✅ rung 1 done |
@@ -76,6 +88,19 @@ sub-daily. (Rejected: β, porting SEMIX's massless-skin + ground-flux boundary
 wholesale — deeper surgery, changes the conduction top BC, partly duplicates the
 existing top layer.)
 
+**Update (Stage C2, Chion.jl `03bb445`).** The shared solver now has a Robin
+surface boundary: `t_srf` is a massless interface temperature
+`Ts = (q_const + Gs·T1)/(q_lin + Gs)`, closed against the top cell's half-thickness
+conductance `Gs = 2K₁/dz₁`, with no surface heat capacity; melt is the surface
+energy at T0 not conducted into the snow, `Q(T0) − Gs(T0 − T1)`. That is
+structurally SEMIX's `ebal` (massless skin, ground flux
+`λ/(0.5·h_snow)·(t_skin − tsoil)`, melt as the T0 residual), with chion's top
+cell in place of SEMIX's bulk snow layer, so the `semix` scheme moved *closer* to
+CLIMBER-X: its exchange coefficients and the LW/latent linearization are now
+evaluated at the interface temperature, as SEMIX evaluates them at `t_skin`.
+Still not ported: SEMIX's `t_skin_old`-based second correction and the diurnal
+statistical melt (rung 4). The conduction below the top cell is chion's.
+
 ## Extension mechanics (reference for every rung)
 
 **New optional forcing field** — ~7–8 templated lines across two files
@@ -125,8 +150,8 @@ Genuinely prognostic, and implemented:
 - `w_snow_max(:)` — seasonal max column SWE (drives dust melt amplification)
 
 Not implemented (see [What is left](#what-is-left)):
-- `dt_snowfree(:)` / `f_snow` / `alb_bg` — SEMIX's continuous snow-cover-fraction
-  blend between snow and background albedo
+- `dt_snowfree(:)` (the snow-cover-fraction blend `f_snow`/`alb_bg` itself is
+  implemented since C12, D40)
 - albedo state broadened scalar → 4 bands: the bands are computed but collapsed
   to broadband immediately rather than carried as state
 
@@ -294,12 +319,12 @@ together — but the asymmetry does:
 coupling α, not an omission.** SEMIX solves its massless skin node *before* the
 subsurface step, so once `smb_temp` has updated `t_prof` the skin temperature is
 stale and must be re-diagnosed against the new ground flux with `flx_melt`
-removed. chion has no separate skin node: `t_srf` is `temperature(1)`, which
-comes out of the *same* implicit solve as the conduction, simultaneously — there
-is nothing to go stale. The melting-point re-solve
-(`snow_energy.f90:400-454`) already plays the role of `update_tskin`'s
-`- flx_melt` term, dropping the surface-flux feedback from row 1 and pinning it
-at T0. Confirmed, not ported.
+removed. chion's `t_srf` (since C2 the Robin interface temperature, eliminated
+algebraically) comes out of the *same* implicit solve as the conduction,
+simultaneously — there is nothing to go stale. The melting re-solve
+(`snow_energy.f90`, step 5) already plays the role of `update_tskin`'s
+`- flx_melt` term, holding the interface at T0 behind the half-cell
+conductance. Confirmed, not ported.
 
 ### Cumulative rungs 2+3
 
@@ -448,14 +473,15 @@ assumed spectral weights (`frac_vu`, cloud dir/dif split). That is a fair
 approximation offline at daily steps, and it is *not* sufficient for the
 CLIMBER-X swap, where the host already carries `swd_sur_{vis,nir}_{dir,dif}`.
 
-**3. SEMIX's snow-cover-fraction blend (`f_snow`).** SEMIX blends snow albedo
-into a background (ice/soil) albedo continuously,
-`f_snow = tanh(h_snow/(c_fsnow·z0m))·f_snow_orog`
-(`smb_surface_par.f90:110-129`), and tracks `dt_snowfree` and `alb_bg`. chion
-switches discretely between the snow column and bare ice at `TOL_EMPTY_LAYER`.
-Structural difference, not a bug — chion's layer model makes the hard switch
-natural — but it will show up at the margin, which is exactly where the SEMIX
-configurations diverge most from MAR. Worth revisiting if margin skill matters.
+**3. SEMIX's snow-cover-fraction blend (`f_snow`).** Done (C12,
+`porting_notes.md` D40): under `albedo_scheme = "semix"` the energy balance sees
+`f_snow·alpha_snow + (1 − f_snow)·alpha_bg` with CLIMBER-X's
+`f_snow = tanh(h_snow/(c_fsnow·z0m_ice))·f_snow_orog`
+(`smb_surface_par.f90:106-116`; `c_fsnow`, `c_fsnow_orog` in `&chion_const`,
+the orography factor when the host gives `z_sur_std`), `h_snow` chion's snow
+depth. The background is `alpha_ice` (or the host's `alb_ice_host`) under ice and
+`alpha_land` on land (D41), not CLIMBER-X's `f_ice`-weighted ice/soil mix.
+`dt_snowfree` is not carried.
 
 **4. `Ch_neutral` caching (performance).** `semix_resistance` recomputes two
 `log()` per call, and the neutral exchange coefficient depends only on snow

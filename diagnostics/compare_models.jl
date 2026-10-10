@@ -76,7 +76,7 @@ for (name, label) in configs
         continue
     end
     d  = NCDataset(nc)
-    ru = d["runoff"][:, :, :]
+    ru = d[haskey(d, "runoff_cum") ? "runoff_cum" : "runoff"][:, :, :]   # ITM: runoff is a rate
     # PDD/ITM have no energy-balance sublimation term; treat as zero (their
     # surface SMB is precip - runoff, matching how they define it).
     su = haskey(d, "sublimation") ? d["sublimation"][:, :, :] : zero(ru)

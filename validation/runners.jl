@@ -13,13 +13,22 @@ rather than left to a default, because most of the defaults disagree:
     stray variable in a future forcing file cannot make the two runs differ.
   * `wind_default` must match chion's ctrl:wind_default.
 
-DIURNAL SUBSTEPPING IS OFF, deliberately. Enabling it changes the albedo
-scheme rather than only the shortwave resolution -- the aging law carries no dt
-(trap 5), so it fires once per substep (upstream defect 19), and snowfall
-brightening is non-linear under substepping (defect 21). It is also the only
-consumer of day_of_year / solar_longitude_deg, which the two drivers derive
-differently (chion_grid.f90 from modulo(time,365)+1, Chion.jl from a calendar
-axis). Comparing it would be comparing two known-divergent schemes.
+DAY OF YEAR AND SOLAR LONGITUDE agree by construction: Chion.jl derives them
+from the calendar axis (YYYY/MM/DD/HH), chion_grid.x as modulo(time,365)+1 and
+Chion.jl's calendar-day formula (calendar_solar_longitude_deg), which coincide
+on the harness' one-year axis starting 1 January 2000. They feed the
+cloud-proxy longwave's TOA and the diurnal substeps.
+
+DIURNAL SUBSTEPPING IS OFF in every configuration but its own, which runs
+Chion.jl's calibrated 03bb445 set on both sides (DIURNAL_CALIBRATED), and the
+defaults configuration.
+
+PINS. Since C11 both models default to Chion.jl's calibrated set (03bb445).
+Every configuration but the defaults one starts instead from BESSI's original
+surface physics, pinned on both sides (`BESSI_SCHEME_PINS` for Chion.jl,
+`CHION_CONST_PINS` and `CHION_BESSI_PINS` for chion), and switches one option
+on, so each option is gated on its own. The defaults configuration
+(`defaults = true`) pins nothing: each model runs its own defaults.
 """
 
 using NCDatasets
@@ -41,16 +50,35 @@ eps_of(precision::Symbol) = Float64(precision === :dp ? eps(Float64) : eps(Float
 Build variants. `legacy` reverts chion's deliberate physics corrections to
 Chion.jl's values so port fidelity can still be measured -- see
 src/chion_defs.F90 and README.md.
+
+Every variant is an `fpsafe=1` build (value-safe -O2, no fast-math): the gates
+resolve fractions of a Float32 ulp, which a machine's -Ofast does not preserve.
 """
 function bindir(precision::Symbol; legacy::Bool=false)
     d = precision === :dp ? "libchion/bin-dp" : "libchion/bin"
-    return legacy ? d * "-legacy" : d
+    legacy && (d *= "-legacy")
+    return d * "-fpsafe"
 end
 
+"""The `make` call that builds `target` into `bindir(precision; legacy)`."""
+make_cmd(target::AbstractString, precision::Symbol; legacy::Bool=false) =
+    "make $target fpsafe=1" * (precision === :dp ? " precision=dp" : "") *
+    (legacy ? " legacy_chion=1" : "")
+
 """
-    run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra)
+    run_chion(; precision, forcing, outfile, workdir, model, dt_out, nml_extra,
+              legacy, pdd_method, name_hice, name_pdds, consts, bessi, diurnal,
+              defaults)
 
 Write a namelist and run `chion_grid.x` in `workdir`. Returns the output path.
+`consts` sets `&chion_const` and `bessi` `&bessi` entries over the pins
+(`CHION_CONST_PINS`, `CHION_BESSI_PINS`), `diurnal` the diurnal parameters
+(`diurnal_nml`, default off); a second group of the same name in `nml_extra`
+would not be read. With `defaults = true` nothing is pinned: the two groups
+carry only `consts` and `bessi`, everything else comes from
+`input/chion_defaults.nml`.
+The namelist and log are named after `outfile`, so runs sharing a `workdir`
+keep their own.
 
 `chion_grid.x` writes to its current working directory and requires
 `input/chion_defaults.nml` to be reachable from there, so the run directory gets
@@ -60,16 +88,35 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
                    outfile::AbstractString, workdir::AbstractString,
                    model::AbstractString="bessi", dt_out::Float64=1.0,
                    dt::Float64=-1.0, nml_extra::AbstractString="",
-                   legacy::Bool=false)
+                   legacy::Bool=false, pdd_method::AbstractString="simple",
+                   name_hice::AbstractString="None", name_pdds::AbstractString="None",
+                   rh_default::Float64=0.0, consts::NamedTuple=(;),
+                   bessi::NamedTuple=(;), diurnal::NamedTuple=DIURNAL_OFF,
+                   defaults::Bool=false)
     mkpath(workdir)
     link = joinpath(workdir, "input")
     islink(link) || ispath(link) || symlink(joinpath(CHION_ROOT, "input"), link)
 
-    tag = string(precision, legacy ? "_legacy" : "")
-    nml = joinpath(workdir, "chion_$(model)_$(tag).nml")
+    tag = splitext(basename(outfile))[1]
+    bessi_group = defaults ? nml_lines(bessi) : """
+    Ntot                = 15
+    mass_max            = 500.0
+    mass_split          = 300.0
+    mass_min            = 100.0
+    density_init        = 300.0
+    temperature_init    = 273.0
+$(diurnal_nml(diurnal))
+$(nml_lines(merge(CHION_BESSI_PINS, bessi)))"""
+    const_entries = defaults ? consts : merge(CHION_CONST_PINS, consts)
+    const_group = isempty(const_entries) ? "" :
+                  "&chion_const\n$(nml_lines(const_entries))\n/\n"
+    nml = joinpath(workdir, "$(tag).nml")
     open(nml, "w") do io
         print(io, """
 &ctrl
+    forcing_source      = "file"
+    dust_dep_default    = 0.0
+    rh_default          = $(rh_default)
     file_forcing        = "$(abspath(forcing))"
     file_out            = "$(outfile)"
     name_x              = "x"
@@ -83,6 +130,8 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
     mask_threshold      = 0.0
     name_lat            = "LAT"
     name_zs             = "SH"
+    name_hice           = "$(name_hice)"
+    name_pdds           = "$(name_pdds)"
     t2m_in_celsius      = .FALSE.
     precip_in_mmwe_day  = .FALSE.
     wind_default        = 5.0
@@ -98,36 +147,24 @@ function run_chion(; precision::Symbol, forcing::AbstractString,
 /
 
 &bessi
-    Ntot                = 15
-    mass_max            = 500.0
-    mass_split          = 300.0
-    mass_min            = 100.0
-    density_init        = 300.0
-    temperature_init    = 273.0
-    diurnal_shortwave_substeps            = .FALSE.
-    diurnal_shortwave_threshold           = 0.0
-    diurnal_shortwave_max_substeps        = 3
-    diurnal_shortwave_min_air_temperature = 265.15
-    diurnal_temperature_cycle             = .FALSE.
-    diurnal_temperature_amplitude         = 5.0
+$(bessi_group)
 /
-
+$(const_group)
 &pdd
-    pdd_method          = "pism"
+    pdd_method          = "$(pdd_method)"
     ddf_snow            = 3.0
     ddf_ice             = 8.0
     refreezing_fraction = 0.6
     temperature_sigma   = 5.0
+    H_snow_max          = 5000.0
 /
 $(nml_extra)
 """)
     end
 
     exe = joinpath(CHION_ROOT, bindir(precision; legacy=legacy), "chion_grid.x")
-    isfile(exe) || error("$exe not built. Run: make grid" *
-                         (precision === :dp ? " precision=dp" : "") *
-                         (legacy ? " legacy_chion=1" : ""))
-    logfile = joinpath(workdir, "chion_$(model)_$(tag).log")
+    isfile(exe) || error("$exe not built. Run: " * make_cmd("grid", precision; legacy=legacy))
+    logfile = joinpath(workdir, "$(tag).log")
     open(logfile, "w") do log
         run(pipeline(Cmd(`$exe $(basename(nml))`; dir=workdir); stdout=log, stderr=log))
     end
@@ -135,15 +172,74 @@ $(nml_extra)
 end
 
 """
-    run_julia_bessi(; forcing, outfile, workdir, ntot)
+Diurnal substepping parameters, one NamedTuple for both models: `diurnal_nml`
+writes chion's `&bessi` lines, `diurnal_kwargs` Chion.jl's `BESSIModel`
+keywords. `DIURNAL_OFF` is every configuration but the diurnal one;
+`DIURNAL_CALIBRATED` is Chion.jl's 03bb445 default (8 substeps, a 1 K
+temperature cycle capped at 1 K, no threshold, no substepping below -8 C).
+"""
+const DIURNAL_OFF = (substeps=false, threshold=0.0, max_substeps=3,
+                     min_air_temperature_c=-8.0, cycle=false, amplitude=5.0,
+                     amplitude_max=5.0)
+const DIURNAL_CALIBRATED = (substeps=true, threshold=0.0, max_substeps=8,
+                            min_air_temperature_c=-8.0, cycle=true, amplitude=1.0,
+                            amplitude_max=1.0)
+
+fortran_logical(b::Bool) = b ? ".TRUE." : ".FALSE."
+
+"""A namelist value: strings quoted, logicals Fortran, tuples comma-separated."""
+nml_value(v::AbstractString) = "\"$(v)\""
+nml_value(v::Bool) = fortran_logical(v)
+nml_value(v::Real) = string(v)
+nml_value(v::Tuple) = join(map(nml_value, v), ", ")
+
+"""The entries `nt` as namelist lines, one per key."""
+nml_lines(nt::NamedTuple) = join(("    $(k) = $(nml_value(v))" for (k, v) in pairs(nt)), "\n")
+
+diurnal_nml(d::NamedTuple) = """
+    diurnal_shortwave_substeps            = $(fortran_logical(d.substeps))
+    diurnal_shortwave_threshold           = $(d.threshold)
+    diurnal_shortwave_max_substeps        = $(d.max_substeps)
+    diurnal_shortwave_min_air_temperature = $(d.min_air_temperature_c + 273.15)
+    diurnal_temperature_cycle             = $(fortran_logical(d.cycle))
+    diurnal_temperature_amplitude         = $(d.amplitude)
+    diurnal_temperature_amplitude_max     = $(d.amplitude_max)"""
+
+diurnal_kwargs(d::NamedTuple) = (
+    diurnal_shortwave_substeps=d.substeps,
+    diurnal_shortwave_threshold=d.threshold,
+    diurnal_shortwave_max_substeps=d.max_substeps,
+    diurnal_shortwave_min_air_temperature_c=d.min_air_temperature_c,
+    diurnal_temperature_cycle=d.cycle,
+    diurnal_temperature_amplitude_c=d.amplitude,
+    diurnal_temperature_amplitude_max_c=d.amplitude_max,
+)
+
+"""
+    run_julia_bessi(; forcing, outfile, workdir, ntot, albedo, vars, humidity,
+                    ice_substrate_layers, near_surface)
 
 Run Chion.jl's BESSI on the same file. `netcdf_variables` is the explicit 18-var
 list: requesting `latent_heat_flux` would flip the run into monthly-aggregation
 mode (`_uses_monthly_output`), which writes one record per month instead of one
-per step and would not be comparable.
+per step and would not be comparable. With `albedo = :aging` the timescales are
+passed explicitly (`AGING_PARAMS`): 12407a3 defaults the melting one to 5 d,
+dev_nils and chion to 2 d. `humidity = true` reads the forcing's RHZ and PS
+(see forcing.jl), matching chion's `rh_default` and sea-level pressure.
+`ice_substrate_layers` overrides the pin of `BESSI_SCHEME_PINS` (0), and
+`near_surface` the fine-layer thicknesses [m] (pinned to Inf, no limit).
+`diurnal` sets the diurnal substepping (`DIURNAL_OFF` by default, see
+`diurnal_kwargs`), and `overrides` replaces any other `BESSIModel` keyword
+last, e.g. `(longwave_scheme=:cloud_proxy,)`. With `defaults = true` the model
+is `BESSIModel(grid; overrides...)`: Chion.jl's own defaults, nothing pinned.
 """
 function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
-                         workdir::AbstractString, ntot::Int=15, years::Int=1)
+                         workdir::AbstractString, ntot::Int=15, years::Int=1,
+                         albedo::Symbol=:dynamic, vars::Vector{String}=BESSI_VARS,
+                         humidity::Bool=false, ice_substrate_layers::Int=0,
+                         near_surface::Union{Nothing,NTuple{4,Float64}}=nothing,
+                         diurnal::NamedTuple=DIURNAL_OFF, overrides::NamedTuple=(;),
+                         defaults::Bool=false)
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -155,7 +251,8 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
         rainfall_name="RF", shortwave_name="SWD",
         wind_speed_name=nothing,
         q_lw_down_name=nothing, q_sh_name=nothing, q_lh_name=nothing,
-        relative_humidity_name=nothing, air_pressure_name=nothing,
+        relative_humidity_name=humidity ? "RHZ" : nothing,
+        air_pressure_name=humidity ? "PS" : nothing,
         prescribed_albedo_name=nothing,
         surface_height_name="SH", latitude_name="LAT",
         mask_name="mask", mask_threshold=0.0,
@@ -164,24 +261,105 @@ function run_julia_bessi(; forcing::AbstractString, outfile::AbstractString,
         wind_default=5.0,
     )
 
-    model = BESSIModel(loaded.grid; Ntot=ntot, albedo=:dynamic,
-                       densification=:bessi, fresh_snow_density=:constant,
-                       mass_max=500.0, mass_split=300.0, mass_min=100.0,
-                       density_init=300.0, temperature_init=273.0,
-                       diurnal_shortwave_substeps=false,
-                       diurnal_temperature_cycle=false)
+    # Albedo constants pinned on both sides (CHION_CONST_PINS): Chion.jl's
+    # have moved (alpha_ice 0.3 -> 0.4 -> 0.3 -> 0.4 on main 9ec6cc7,
+    # alpha_wet 0.70 -> 0.60 on dev_nils -> 0.70 on main); 0.3 keeps the
+    # single-option configurations on BESSI's original value.
+    aging = albedo === :aging ? AGING_PARAMS : (;)
+    pins = ice_substrate_layers == 0 ? BESSI_SCHEME_PINS :
+           merge(BESSI_SCHEME_PINS, (; ice_substrate_layers))
+    near_surface === nothing ||
+        (pins = merge(pins, (; near_surface_layer_max_thicknesses_m=near_surface)))
+    settings = merge(pins, diurnal_kwargs(diurnal), overrides)
+    model = defaults ? BESSIModel(loaded.grid; overrides...) :
+        BESSIModel(loaded.grid; Ntot=ntot, albedo=albedo,
+                   alpha_ice=0.3, alpha_wet=0.70, aging..., settings...,
+                   densification=:bessi, fresh_snow_density=:constant,
+                   mass_max=500.0, mass_split=300.0, mass_min=100.0,
+                   density_init=300.0, temperature_init=273.0)
 
     sim = Simulation(model; forcing=loaded.forcing, years=years,
                      backend=:threads, write_netcdf=true,
-                     netcdf_variables=BESSI_VARS, netcdf_path=out,
+                     netcdf_variables=vars, netcdf_path=out,
                      name="wp16_bessi")
     run!(sim)
     return out
 end
 
-"""Run Chion.jl's PDD. The explicit var list keeps it in per-step output mode."""
+"""
+BESSI options the reference may or may not have, pinned to chion's physics
+when it does, so the same runner drives either reference environment
+(`CHION_VALIDATION_PROJECT`) unedited. Detected from the reference's own types
+rather than from a commit hash.
+
+dev_nils (27113b6) added, with defaults that differ from chion's: turbulent
+sensible/latent heat `turbulent_flux_scheme = :semix` (Julia's bulk turbulence,
+ported by chion C7) and `seb_scheme` (longwave only), both pinned to `:bessi`;
+`refreezing_correction` (default 1, neutral; pinned so a default change
+upstream cannot slip in).
+
+main (9ec6cc7 = 03bb445) added, all on by default (in chion too since C11):
+`longwave_scheme` pinned to `:graybody` (no cloud proxy),
+`ice_substrate_layers = 0` (no thermal ice substrate) and
+`near_surface_layer_max_thicknesses_m = Inf` (no fine near-surface layers).
+Diurnal substepping and the temperature cycle, also on by default at
+9ec6cc7, are switched off in `run_julia_bessi` for every reference. The Robin
+surface boundary of 03bb445 has no switch (plan C2). chion's side of the same
+pins: `CHION_CONST_PINS`, `CHION_BESSI_PINS`.
+"""
+const BESSI_SCHEME_PINS = let pc = fieldnames(Chion.SnowpackPhysicalConstants),
+                              bp = fieldnames(Chion.BESSIParameters)
+    merge(:turbulent_flux_scheme in pc ?
+              (seb_scheme=:bessi, turbulent_flux_scheme=:bessi) : (;),
+          :refreezing_correction in bp ? (refreezing_correction=1.0,) : (;),
+          :longwave_scheme in pc ? (longwave_scheme=:graybody,) : (;),
+          :ice_substrate_layers in bp ? (ice_substrate_layers=0,) : (;),
+          :near_surface_layer_max_thicknesses_m in bp ?
+              (near_surface_layer_max_thicknesses_m=(Inf, Inf, Inf, Inf),) : (;))
+end
+
+"""
+The reference model actually loaded: its source directory and git commit,
+printed at the top of every run so a log records what it was gated against.
+"""
+function reference_id()
+    dir = pkgdir(Chion)
+    head = try
+        readchomp(`git -C $dir rev-parse --short HEAD`)
+    catch
+        "unknown commit"
+    end
+    return "$dir @ $head"
+end
+
+"""
+chion's side of `BESSI_SCHEME_PINS` and of `run_julia_bessi`'s albedo pins:
+BESSI's original longwave and turbulence, graybody downwelling longwave and
+`alpha_ice = 0.3` (`&chion_const`), no ice substrate and no fine near-surface
+layers (`&bessi`). Written by `run_chion` unless `defaults = true`; a
+configuration's `consts` / `bessi` entries replace them.
+"""
+const CHION_CONST_PINS = (seb_scheme="bessi", turbulent_flux_scheme="bessi",
+                          longwave_scheme="graybody", alpha_ice=0.3, alpha_wet=0.70)
+const CHION_BESSI_PINS = (ice_substrate_layers=0,
+                          near_surface_layer_max_thicknesses=(0.0, 0.0, 0.0, 0.0))
+
+"""
+Aging-albedo timescales, set explicitly on both sides: chion's `&chion_const`
+(via `AGING_CONSTS`) and Chion.jl's `BESSIModel` keywords. chion's defaults.
+"""
+const AGING_PARAMS = (aging_cold_timescale_days=20.0, aging_melting_timescale_days=2.0)
+
+"""chion's `&chion_const` entries selecting the aging scheme with `AGING_PARAMS`."""
+const AGING_CONSTS = (albedo_scheme="aging", AGING_PARAMS...)
+
+"""
+Run Chion.jl's PDD. The explicit var list keeps it in per-step output mode.
+Every parameter is passed explicitly, matching `run_chion`'s `&pdd` group.
+"""
 function run_julia_pdd(; forcing::AbstractString, outfile::AbstractString,
-                       workdir::AbstractString, years::Int=1)
+                       workdir::AbstractString, years::Int=1,
+                       pdd_method::Symbol=:simple)
     mkpath(workdir)
     out = joinpath(workdir, outfile)
     isfile(out) && rm(out)
@@ -203,12 +381,83 @@ function run_julia_pdd(; forcing::AbstractString, outfile::AbstractString,
     )
 
     model = PDDModel(loaded.grid; ddf_snow=3.0, ddf_ice=8.0,
-                     refreezing_fraction=0.6, temperature_sigma=5.0)
+                     refreezing_fraction=0.6, temperature_sigma=5.0,
+                     H_snow_max=5000.0, pdd_method=pdd_method)
 
     sim = Simulation(model; forcing=loaded.forcing, years=years,
                      backend=:threads, write_netcdf=true,
                      netcdf_variables=PDD_VARS, netcdf_path=out,
                      name="wp16_pdd")
+    run!(sim)
+    return out
+end
+
+"""
+ITM parameters, set explicitly on both sides: chion's `&itm` (via
+`itm_nml`) and Chion.jl's `ITMModel` keywords. The values are chion's
+defaults (input/chion_defaults.nml), which Chion.jl's match today.
+"""
+const ITM_PARAMS = (trans_a=0.46, trans_b=6e-5, trans_c=0.01,
+                    itm_c=-45.0, itm_t=10.0, itm_b=-2.0, itm_lat0=65.0,
+                    H_snow_max=5000.0, Pmaxfrac=0.6,
+                    H_snow_crit_desert=10.0, H_snow_crit_forest=100.0,
+                    melt_crit=0.5, alb_ocean=0.1, alb_land=0.2, alb_forest=0.1,
+                    alb_ice=0.4, alb_snow_dry=0.8, alb_snow_wet=0.65,
+                    firn_fac=0.0266)
+
+"""The `&itm` namelist group carrying `ITM_PARAMS`."""
+itm_nml(p=ITM_PARAMS) =
+    "&itm\n" * join(("    $(k) = $(v)" for (k, v) in pairs(p)), "\n") * "\n/\n"
+
+"""
+    run_julia_itm(; forcing, outfile, workdir)
+
+Run Chion.jl's ITM. `load_forcing_file` does not read ITM's ice thickness and
+annual PDDs (it leaves them NaN), so they are read here from HI / PDDA and
+merged into the forcing's fields, per column in the loader's column order
+(`grid.is`, `grid.js`).
+"""
+function run_julia_itm(; forcing::AbstractString, outfile::AbstractString,
+                       workdir::AbstractString, years::Int=1)
+    mkpath(workdir)
+    out = joinpath(workdir, outfile)
+    isfile(out) && rm(out)
+
+    loaded = load_forcing_file(
+        abspath(forcing);
+        x_name="x", y_name="y", time_name="time",
+        air_temperature_name="TT", snowfall_name="SF",
+        rainfall_name="RF", shortwave_name="SWD",
+        wind_speed_name=nothing,
+        q_lw_down_name=nothing, q_sh_name=nothing, q_lh_name=nothing,
+        relative_humidity_name=nothing, air_pressure_name=nothing,
+        prescribed_albedo_name=nothing,
+        surface_height_name="SH", latitude_name="LAT",
+        mask_name="mask", mask_threshold=0.0,
+        air_temperature_in_celsius=false,
+        precipitation_in_mmwe_day=false,
+        wind_default=5.0,
+    )
+
+    g = loaded.grid
+    f = loaded.forcing
+    nt = size(f.air_temperature, 2)
+    columns(a) = repeat([Float64(a[g.is[k], g.js[k]]) for k in eachindex(g.is)], 1, nt)
+    hi, pdd = NCDataset(abspath(forcing)) do ds
+        (columns(Array(ds["HI"])), columns(Array(ds["PDDA"])))   # (x, y)
+    end
+    itm_forcing = Chion.SnowpackForcing(f.calendar,
+                                        merge(f.fields, (ice_thickness=hi, annual_pdd=pdd)))
+
+    model = ITMModel(g; ITM_PARAMS...)
+
+    # "all", not the names in ITM_VARS: the selector parser lowercases every name
+    # (io.jl), so `H_snow` cannot be selected individually (upstream defect).
+    # "all" is ITM's per-step output set, not the monthly mode.
+    sim = Simulation(model; forcing=itm_forcing, years=years,
+                     backend=:threads, write_netcdf=true,
+                     netcdf_variables="all", netcdf_path=out,
+                     name="wp16_itm")
     run!(sim)
     return out
 end

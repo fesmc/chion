@@ -38,8 +38,19 @@ const BESSI_VARS = ["thickness", "wet_mass", "bulk_density", "liquid_water",
                     "sublimation", "latent_heat_flux_sum", "Tsrf", "albedo",
                     "N", "mass", "mass_w", "density", "temperature"]
 
+"""BESSI with `albedo = :aging` (Chion.jl 6d06af6) also writes the snow age."""
+const BESSI_AGING_VARS = vcat(BESSI_VARS, ["snow_age_days"])
+
 """The 4 variables both write for PDD."""
 const PDD_VARS = ["snowpack_swe", "smb_ice", "runoff", "pdd_sum"]
+
+"""
+The 14 ITM fields, Chion.jl's ITM_OUTPUT_VARS: chion writes the same names
+(input/chion-variables-itm.md), rates of the step and cumulative `*_cum`.
+"""
+const ITM_VARS = ["H_snow", "alb_s", "smb", "smbi", "melt", "runoff", "refreezing",
+                  "Tsrf", "melt_net", "smb_cum", "smb_ice", "melt_cum", "runoff_cum",
+                  "refreezing_cum"]
 
 const TIME_NAMES = ("t", "time")
 const X_NAMES = ("x", "xc")
@@ -93,13 +104,19 @@ end
 """
     compare_files(chion_path, julia_path, vars; eps_wp)
 
-Compare every variable in `vars`. `eps_wp` is the machine epsilon of the chion
-build being tested, so `ulps` expresses each difference in units of that build's
-own resolution rather than an absolute number that means different things in the
-sp and dp builds.
+Compare every variable in `vars`, either names both files share or
+`chion_name => julia_name` pairs; results carry the chion name. `eps_wp` is the
+machine epsilon of the chion build being tested, so `ulps` expresses each
+difference in units of that build's own resolution rather than an absolute
+number that means different things in the sp and dp builds.
 """
+compare_files(chion_path::AbstractString, julia_path::AbstractString,
+              vars::Vector{String}; kwargs...) =
+    compare_files(chion_path, julia_path, [v => v for v in vars]; kwargs...)
+
 function compare_files(chion_path::AbstractString, julia_path::AbstractString,
-                       vars::Vector{String}; eps_wp::Float64, drop_first::Bool=true)
+                       vars::Vector{Pair{String,String}}; eps_wp::Float64,
+                       drop_first::Bool=true)
     diffs = FieldDiff[]
     NCDataset(chion_path) do dc
         NCDataset(julia_path) do dj
@@ -125,9 +142,9 @@ function compare_files(chion_path::AbstractString, julia_path::AbstractString,
                     "for a per-step comparison.")
             end
 
-            for name in vars
+            for (name, jname) in vars
                 ac, layc = read_canonical(dc, name)
-                aj, layj = read_canonical(dj, name)
+                aj, layj = read_canonical(dj, jname)
                 layc == layj || error("'$name' is layer-resolved in one file only")
 
                 if drop_first
@@ -256,11 +273,10 @@ End-to-end mass closure for chion's PDD, read straight off the output file.
 
     snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)
 
-This REPLACES the Chion.jl comparison as PDD's gate. chion's PDD deliberately
-implements a different budget from Chion.jl's (docs/porting_notes.md D23,
-Chion.jl issue #19), so agreement with Chion.jl is no longer the property worth
-asserting -- and Chion.jl's own PDD cannot satisfy this identity, because it
-credits `smb_ice` with `d(snowpack_swe)` as well and therefore counts the
+Gated alongside the Chion.jl comparison. It does not depend on the reference,
+so it also holds the sp build to account. The identity is the point of chion's
+budget (docs/porting_notes.md D23, which Chion.jl adopted in ce6a68d): the old
+upstream PDD credited `smb_ice` with `d(snowpack_swe)` as well, counting the
 reservoir twice.
 
 Ice melt cancels between `smb_ice` (negative) and `runoff` (positive), which is

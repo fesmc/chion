@@ -13,6 +13,12 @@ program test_wp7
     !   (iv)  diurnal interval averages over a full [-pi,pi] tiling recover the
     !         daily mean to 1e-6 relative; polar day and polar night both give
     !         sensible values; substep_count returns only 1 or max_substeps
+    !   (v)   the elevation-dependent diurnal T amplitude clamps at 0 and A_max,
+    !         and a missing (NaN) surface height adds no excess (Chion.jl d0146e1)
+    !   (vi)  the daily-mean top-of-atmosphere shortwave of the cloud-proxy
+    !         longwave against closed-form insolation (equator at equinox, pole
+    !         at solstice, polar night), and the calendar solar longitude at
+    !         the equinoxes and solstices (Chion.jl 03bb445)
     !
     ! apply_accumulation itself is exercised by WP4's and WP8's tests, since it
     ! is mostly a driver for the layer-structure routines; what is tested here
@@ -20,9 +26,9 @@ program test_wp7
     ! feeds.
 
     use chion_defs, only : wp, wp_acc, TOL_TINY, chion_const_class, &
-                           chion_const_init, &
+                           chion_const_init, ALBEDO_AGING_BINARY_REFRESH, &
                            CHION_ALBEDO_CONSTANT, CHION_ALBEDO_DYNAMIC, &
-                           CHION_ALBEDO_PRESCRIBED, &
+                           CHION_ALBEDO_PRESCRIBED, CHION_ALBEDO_AGING, &
                            CHION_FRESH_SNOW_DENSITY_CONSTANT, &
                            CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, &
                            CHION_DENSIFY_BESSI, CHION_DENSIFY_HTESSEL
@@ -50,8 +56,11 @@ program test_wp7
 
     call test_fresh_snow_density(c,nfail)
     call test_albedo(c,nfail)
+    call test_albedo_aging(c,nfail)
+    call test_albedo_aging_rejuvenate(c,nfail)
     call test_densification(c,nfail)
     call test_diurnal(nfail)
+    call test_toa_calendar(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -157,11 +166,15 @@ contains
         ! Local variables
         type(chion_const_class) :: cc
         real(wp) :: mass(Ntot), mass_w(Ntot), density(Ntot), temperature(Ntot)
-        real(wp) :: alb, alb_prev, alb_a, alb_b, span
-        integer  :: k
+        real(wp) :: alb, alb_prev, alb_a, alb_b, alb_exp, span, wet_r
+        real(wp) :: age   ! snow age; untouched outside the aging scheme
+        integer  :: k, i
         logical  :: ok
+        real(wp), parameter :: WET_RS(6) = [0.0_wp, 0.1_wp, 0.5_wp, 0.99_wp, 1.0_wp, 2.0_wp]
 
         write(*,"(a)") "--- albedo: bounds, monotonicity, saturation, memorylessness ---"
+
+        age = 0.0_wp
 
         cc = c
         span = cc%alpha_dry - cc%alpha_wet
@@ -179,12 +192,12 @@ contains
         ! === bare surface -> alpha_ice ====================================
         cc%albedo_scheme = CHION_ALBEDO_DYNAMIC
         alb = 0.5_wp
-        call albedo_update(mass,mass_w,density,temperature,0,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,0,cc,1.0_wp,alb)
         call check_val("dynamic, n=0 -> alpha_ice", alb, cc%alpha_ice, nfail)
 
         mass(1) = 0.0_wp
         alb = 0.5_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check_val("dynamic, empty surface layer -> alpha_ice", alb, cc%alpha_ice, nfail)
         mass(1) = 200.0_wp
 
@@ -197,19 +210,18 @@ contains
             mass_w(1)      = real(k-1,wp)*20.0_wp                 ! 0 .. 120 kg m-2
 
             alb = -5.0_wp
-            call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
             if (alb .lt. cc%alpha_wet .or. alb .gt. cc%alpha_dry) ok = .FALSE.
 
             alb = 5.0_wp
-            call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
             if (alb .lt. cc%alpha_wet .or. alb .gt. cc%alpha_dry) ok = .FALSE.
         end do
         call check("dynamic, always within [alpha_wet, alpha_dry] under extremes", ok, nfail)
 
         ! === aging is monotone non-brightening ============================
-        ! Repeated calls with no snowfall and no liquid water must never raise
-        ! the albedo. NOTE: the law has no dt -- it decays once per CALL, which
-        ! is precisely what this loop demonstrates (docs/PLAN.md trap 5).
+        ! Repeated daily steps with no snowfall and no liquid water must never
+        ! raise the albedo.
         mass_w(1)      = 0.0_wp
         temperature(1) = 265.0_wp
         alb            = cc%alpha_dry
@@ -217,27 +229,30 @@ contains
         ok = .TRUE.
         do k = 1, 30
             alb_prev = alb
-            call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
             if (alb .gt. alb_prev) ok = .FALSE.
         end do
         call check("dynamic, aging never brightens over 30 calls", ok, nfail)
         call check_val("dynamic, aging floors at alpha_wet", alb, cc%alpha_wet, nfail)
 
-        ! Aging is per call, not per unit time: two calls decay strictly more
-        ! than one (until the floor is reached).
+        ! Aging scales with dt (Chion.jl 6d077c5): two half-day steps decay
+        ! as much as one daily step, to round-off, away from the floor.
         alb_a = cc%alpha_dry
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_a)
-        alb_b = alb_a
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_b)
-        call check("dynamic, aging acts per CALL (2 calls decay more than 1)", &
-                   alb_b .lt. alb_a, nfail)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
+        alb_b = cc%alpha_dry
+        call albedo_update(mass,mass_w,density,temperature,1,cc,0.5_wp,alb_b)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,0.5_wp,alb_b)
+        call check("dynamic, aging decays below alpha_dry in one day", &
+                   alb_a .lt. cc%alpha_dry .and. alb_a .gt. cc%alpha_wet, nfail)
+        call check("dynamic, two half-day steps == one daily step", &
+                   abs(alb_b - alb_a) .le. 4.0_wp*epsilon(1.0_wp), nfail)
 
         ! Very cold surface: the aging bracket turns negative, and the min()
         ! must then hold the albedo at its previous value rather than brighten.
         temperature(1) = cc%T0 - 100.0_wp
         alb            = 0.75_wp
         alb_prev       = alb
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check("dynamic, very cold surface cannot brighten via aging", &
                    alb .le. alb_prev, nfail)
         temperature(1) = 265.0_wp
@@ -245,11 +260,11 @@ contains
         ! === wetness pulls towards alpha_wet ==============================
         mass_w(1) = 0.0_wp
         alb_a     = 0.80_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_a)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
 
         mass_w(1) = 30.0_wp
         alb_b     = 0.80_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_b)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
 
         call check("dynamic, liquid water darkens the surface", alb_b .lt. alb_a, nfail)
         call check("dynamic, wet result still >= alpha_wet", alb_b .ge. cc%alpha_wet, nfail)
@@ -265,10 +280,58 @@ contains
         density(1) = 350.0_wp
         mass_w(1)  = 0.0_wp
 
+        ! === wetness relaxation composes across substeps ===================
+        ! Port of Chion.jl test/test_albedo_timestep.jl (03bb445): at fixed
+        ! wetness r, (1-r)**dt makes one daily step, 24 hourly steps, three
+        ! uneven steps and two steps of one day vs one of two days agree.
+        ! T0 - 30 K disables the temperature aging (its bracket is negative).
+        temperature(1) = cc%T0 - 30.0_wp
+        density(1)     = 300.0_wp
+        mass(1)        = 100.0_wp
+        ok = .TRUE.
+        do k = 1, 6
+            wet_r = WET_RS(k)
+            mass_w(1) = wet_r*cc%max_lwc_albedo &
+                        *(mass(1)/density(1) - mass(1)/cc%rho_i)*cc%rho_w
+
+            alb_a = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
+            alb_exp = cc%alpha_dry - (cc%alpha_dry - cc%alpha_wet)*min(max(wet_r,0.0_wp),1.0_wp)
+            if (abs(alb_a - alb_exp) .gt. 64.0_wp*epsilon(1.0_wp)) ok = .FALSE.
+
+            alb_b = cc%alpha_dry
+            do i = 1, 24
+                call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp/24.0_wp,alb_b)
+            end do
+            if (abs(alb_b - alb_a) .gt. 64.0_wp*epsilon(1.0_wp)) ok = .FALSE.
+
+            alb_b = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,0.1_wp,alb_b)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,0.2_wp,alb_b)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,0.7_wp,alb_b)
+            if (abs(alb_b - alb_a) .gt. 64.0_wp*epsilon(1.0_wp)) ok = .FALSE.
+
+            alb_a = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,2.0_wp,alb_a)
+            alb_b = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
+            call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
+            if (abs(alb_b - alb_a) .gt. 64.0_wp*epsilon(1.0_wp)) ok = .FALSE.
+
+            alb_b = cc%alpha_dry
+            call albedo_update(mass,mass_w,density,temperature,1,cc,0.0_wp,alb_b)
+            if (alb_b .ne. cc%alpha_dry) ok = .FALSE.
+        end do
+        call check("dynamic, wetness relaxation is substep-invariant ((1-r)**dt)", ok, nfail)
+        temperature(1) = 265.0_wp
+        density(1)     = 350.0_wp
+        mass(1)        = 200.0_wp
+        mass_w(1)      = 0.0_wp
+
         ! === snowfall brightening =========================================
         ! Saturates at alpha_dry, however large the event.
         alb = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb,cc,1.0e6_wp)
+        call albedo_refresh_from_snowfall(alb,age,cc,1.0e6_wp,.FALSE.)
         call check_val("snowfall brightening saturates at alpha_dry", alb, cc%alpha_dry, nfail)
 
         ! A single event cannot brighten by more than alpha_dry - alpha_wet.
@@ -276,7 +339,7 @@ contains
         do k = 1, 8
             alb_prev = cc%alpha_wet + real(k-1,wp)*span/8.0_wp
             alb      = alb_prev
-            call albedo_refresh_from_snowfall(alb,cc,1.0e9_wp)
+            call albedo_refresh_from_snowfall(alb,age,cc,1.0e9_wp,.FALSE.)
             if (alb - alb_prev .gt. span + 8.0_wp*epsilon(1.0_wp)) ok = .FALSE.
             if (alb .gt. cc%alpha_dry) ok = .FALSE.
         end do
@@ -284,20 +347,20 @@ contains
 
         ! e-folding is 3 kg m-2: dm = 3 gives exactly (1-1/e) of the span.
         alb = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb,cc,ALBEDO_SNOWFALL_EFOLD_MASS)
+        call albedo_refresh_from_snowfall(alb,age,cc,ALBEDO_SNOWFALL_EFOLD_MASS,.FALSE.)
         call check_val("snowfall e-folding mass is 3 kg m-2", &
                        alb, cc%alpha_wet + span*(1.0_wp - exp(-1.0_wp)), nfail)
 
         ! Below TOL_TINY of added mass it is a no-op.
         alb = 0.73_wp
-        call albedo_refresh_from_snowfall(alb,cc,0.0_wp)
+        call albedo_refresh_from_snowfall(alb,age,cc,0.0_wp,.FALSE.)
         call check_val("zero snowfall mass -> no-op", alb, 0.73_wp, nfail)
 
         ! Monotone non-darkening in the added mass.
         alb_a = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb_a,cc,1.0_wp)
+        call albedo_refresh_from_snowfall(alb_a,age,cc,1.0_wp,.FALSE.)
         alb_b = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb_b,cc,10.0_wp)
+        call albedo_refresh_from_snowfall(alb_b,age,cc,10.0_wp,.FALSE.)
         call check("snowfall brightening increases with added mass", alb_b .gt. alb_a, nfail)
 
         ! === constant scheme is memoryless ================================
@@ -305,30 +368,30 @@ contains
 
         temperature(1) = 260.0_wp
         alb_a = 0.05_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_a)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
         alb_b = 0.95_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_b)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
         call check_val("constant, result independent of previous albedo", alb_a, alb_b, nfail)
         call check_val("constant, cold surface -> alpha_dry", alb_a, cc%alpha_dry, nfail)
 
         temperature(1) = cc%T0
         alb = 0.05_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check_val("constant, surface at T0 -> alpha_wet", alb, cc%alpha_wet, nfail)
 
         temperature(1) = cc%T0 + 5.0_wp
         alb = 0.05_wp
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check_val("constant, surface above T0 -> alpha_wet", alb, cc%alpha_wet, nfail)
 
         ! Repeated calls do not drift: memoryless means idempotent.
         alb_prev = alb
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb)
         call check_val("constant, repeated calls are idempotent", alb, alb_prev, nfail)
 
         ! Constant-scheme snowfall refresh resets to alpha_dry outright.
         alb = cc%alpha_wet
-        call albedo_refresh_from_snowfall(alb,cc,0.001_wp)
+        call albedo_refresh_from_snowfall(alb,age,cc,0.001_wp,.FALSE.)
         call check_val("constant, snowfall refresh -> alpha_dry", alb, cc%alpha_dry, nfail)
 
         ! === prescribed takes the DYNAMIC path (trap 9) ===================
@@ -336,11 +399,11 @@ contains
 
         temperature(1) = 265.0_wp
         alb_a          = cc%alpha_dry
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_a)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_a)
 
         cc%albedo_scheme = CHION_ALBEDO_DYNAMIC
         alb_b            = cc%alpha_dry
-        call albedo_update(mass,mass_w,density,temperature,1,cc,alb_b)
+        call albedo_update(mass,mass_w,density,temperature,1,cc,1.0_wp,alb_b)
 
         call check_val("prescribed scheme follows the DYNAMIC path (trap 9)", &
                        alb_a, alb_b, nfail)
@@ -350,6 +413,240 @@ contains
         return
 
     end subroutine test_albedo
+
+    subroutine test_albedo_aging(c,nfail)
+        ! The snowfall-age scheme (Chion.jl 6d06af6): reset on snowfall,
+        ! exponential relaxation towards alpha_wet otherwise, with the melting
+        ! timescale at T0 and the cold one below.
+
+        implicit none
+
+        type(chion_const_class), intent(IN)    :: c
+        integer,                 intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_const_class) :: cc
+        real(wp) :: mass(Ntot), temperature(Ntot)
+        real(wp) :: alb, age, alb_a, age_a, alb_b, age_b, expected
+
+        write(*,"(a)") "--- albedo: aging scheme (snowfall reset, exponential relaxation) ---"
+
+        cc = c
+        cc%albedo_scheme = CHION_ALBEDO_AGING
+
+        mass           = 0.0_wp
+        temperature    = 0.0_wp
+        mass(1)        = 200.0_wp
+        temperature(1) = 260.0_wp
+
+        ! === bare surface -> alpha_ice, age 0 =============================
+        alb = 0.75_wp
+        age = 4.0_wp
+        call albedo_update_aging(mass,temperature,0,cc,0.0_wp,1.0_wp,alb,age)
+        call check_val("aging, n=0 -> alpha_ice", alb, cc%alpha_ice, nfail)
+        call check_val("aging, n=0 -> snow age 0", age, 0.0_wp, nfail)
+
+        ! === snowfall: Chion.jl's binary reset under legacy_chion only ====
+        ! Otherwise the refresh happens in accumulation (D30) and the update
+        ! ages the snow regardless of the snowfall rate.
+        alb = 0.72_wp
+        age = 5.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,1.0e-9_wp,1.0_wp,alb,age)
+        if (ALBEDO_AGING_BINARY_REFRESH) then
+            call check_val("aging (legacy), any snowfall -> alpha_dry", alb, cc%alpha_dry, nfail)
+            call check_val("aging (legacy), any snowfall -> snow age 0", age, 0.0_wp, nfail)
+        else
+            call check_val("aging, snowfall rate does not reset in the update", alb, &
+                           cc%alpha_wet + (0.72_wp - cc%alpha_wet) &
+                                         *exp(-1.0_wp/cc%aging_cold_timescale_days), nfail)
+            call check_val("aging, snowfall rate does not reset the age", age, 6.0_wp, nfail)
+        end if
+
+        ! === relaxation, cold surface: tau = aging_cold_timescale_days ====
+        alb = cc%alpha_dry
+        age = 0.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,1.0_wp,alb,age)
+        expected = cc%alpha_wet + (cc%alpha_dry - cc%alpha_wet) &
+                                 *exp(-1.0_wp/cc%aging_cold_timescale_days)
+        call check_val("aging, cold relaxation alpha_wet + (a-alpha_wet)*exp(-dt/tau_cold)", &
+                       alb, expected, nfail)
+        call check_val("aging, snow age advances by dt", age, 1.0_wp, nfail)
+
+        ! === relaxation, melting surface: tau = aging_melting_timescale_days
+        temperature(1) = cc%T0
+        alb = cc%alpha_dry
+        age = 3.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,0.5_wp,alb,age)
+        expected = cc%alpha_wet + (cc%alpha_dry - cc%alpha_wet) &
+                                 *exp(-0.5_wp/cc%aging_melting_timescale_days)
+        call check_val("aging, melting relaxation uses tau_melt at Ts = T0", alb, expected, nfail)
+        call check_val("aging, snow age advances by a partial dt", age, 3.5_wp, nfail)
+
+        ! === dt composition: two half-day steps == one daily step =========
+        temperature(1) = 260.0_wp
+        alb_a = cc%alpha_dry
+        age_a = 0.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,1.0_wp,alb_a,age_a)
+        alb_b = cc%alpha_dry
+        age_b = 0.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,0.5_wp,alb_b,age_b)
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,0.5_wp,alb_b,age_b)
+        call check("aging, two half-day steps == one daily step", &
+                   abs(alb_b - alb_a) .le. 4.0_wp*epsilon(1.0_wp), nfail)
+        call check_val("aging, two half-day steps age one day", age_b, 1.0_wp, nfail)
+
+        ! === out-of-range previous albedo is clamped first ================
+        alb = cc%alpha_ice
+        age = -2.0_wp
+        call albedo_update_aging(mass,temperature,1,cc,0.0_wp,1.0_wp,alb,age)
+        call check_val("aging, previous alpha_ice is clamped up to alpha_wet", &
+                       alb, cc%alpha_wet, nfail)
+        call check_val("aging, negative snow age is clamped to 0 first", age, 1.0_wp, nfail)
+
+        ! === snowfall refresh in the accumulation slot ====================
+        ! Legacy: Chion.jl's reset. Otherwise D30's partial refresh, which a
+        ! trace of snow on fully aged snow leaves at alpha_wet, and fresh
+        ! snow on a bare surface, which starts at alpha_dry.
+        alb = cc%alpha_wet
+        age = 4.0_wp
+        call albedo_refresh_from_snowfall(alb,age,cc,0.001_wp,.FALSE.)
+        if (ALBEDO_AGING_BINARY_REFRESH) then
+            call check_val("aging (legacy), snowfall refresh -> alpha_dry", alb, cc%alpha_dry, nfail)
+        else
+            call check_val("aging, trace snowfall on alpha_wet stays alpha_wet", alb, cc%alpha_wet, nfail)
+            call check_val("aging, trace snowfall scales the age by exp(-S/S_ref)", age, &
+                           4.0_wp*exp(-0.001_wp/cc%aging_snowfall_ref), nfail)
+        end if
+
+        alb = cc%alpha_ice
+        age = 4.0_wp
+        call albedo_refresh_from_snowfall(alb,age,cc,0.001_wp,.TRUE.)
+        call check_val("aging, a trace onto a bare surface -> alpha_dry", alb, cc%alpha_dry, nfail)
+        if (.not. ALBEDO_AGING_BINARY_REFRESH) &
+            call check_val("aging, a trace onto a bare surface -> snow age 0", age, 0.0_wp, nfail)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_albedo_aging
+
+    subroutine test_albedo_aging_rejuvenate(c,nfail)
+        ! D30: partial rejuvenation f = 1 - exp(-S/S_ref) of the aging
+        ! albedo, E = -ln((a-alpha_wet)/(alpha_dry-alpha_wet)) <- (1-f)*E.
+        ! Tested on the routine itself, which legacy_chion builds do not call.
+
+        implicit none
+
+        type(chion_const_class), intent(IN)    :: c
+        integer,                 intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_const_class) :: cc
+        real(wp) :: alb, age, alb_a, age_a, alb_b, age_b, alb_prev, span, e0, e2, s1, s2
+        integer  :: k
+        logical  :: ok
+
+        write(*,"(a)") "--- albedo: aging rejuvenation by snowfall (D30) ---"
+
+        cc = c
+        cc%albedo_scheme = CHION_ALBEDO_AGING
+        span = cc%alpha_dry - cc%alpha_wet
+
+        ! S = 0 leaves albedo and age unchanged.
+        alb = 0.75_wp
+        age = 6.0_wp
+        call albedo_aging_rejuvenate(alb,age,cc,0.0_wp)
+        call check_val("rejuvenate, S = 0 leaves albedo unchanged", alb, 0.75_wp, nfail)
+        call check_val("rejuvenate, S = 0 leaves snow age unchanged", age, 6.0_wp, nfail)
+
+        ! S = S_ref scales E and the snow age by exp(-1); S = S_ref*ln 2
+        ! halves them.
+        alb = 0.75_wp
+        age = 8.0_wp
+        e0  = -log((alb - cc%alpha_wet)/span)
+        call albedo_aging_rejuvenate(alb,age,cc,cc%aging_snowfall_ref)
+        call check_val("rejuvenate, S = S_ref scales E by exp(-1)", &
+                       -log((alb - cc%alpha_wet)/span), exp(-1.0_wp)*e0, nfail)
+        call check_val("rejuvenate, S = S_ref scales the snow age by exp(-1)", &
+                       age, 8.0_wp*exp(-1.0_wp), nfail)
+
+        alb = 0.75_wp
+        age = 8.0_wp
+        call albedo_aging_rejuvenate(alb,age,cc,log(2.0_wp)*cc%aging_snowfall_ref)
+        call check_val("rejuvenate, S = S_ref*ln2 halves E", &
+                       -log((alb - cc%alpha_wet)/span), 0.5_wp*e0, nfail)
+        call check_val("rejuvenate, S = S_ref*ln2 halves the snow age", age, 4.0_wp, nfail)
+
+        ! A heavy snowfall all but restores alpha_dry.
+        alb = 0.74_wp
+        age = 3.0_wp
+        call albedo_aging_rejuvenate(alb,age,cc,5.0_wp*cc%aging_snowfall_ref)
+        call check("rejuvenate, S = 5 S_ref -> within 1% of the span of alpha_dry", &
+                   cc%alpha_dry - alb .lt. 0.01_wp*span .and. alb .le. cc%alpha_dry, nfail)
+
+        ! Successive refreshes compose exactly: E*exp(-S1/S_ref)*exp(-S2/S_ref).
+        s1  = 0.3_wp*cc%aging_snowfall_ref
+        s2  = 0.6_wp*cc%aging_snowfall_ref
+        alb = 0.72_wp
+        age = 10.0_wp
+        e0  = -log((alb - cc%alpha_wet)/span)
+        call albedo_aging_rejuvenate(alb,age,cc,s1)
+        call albedo_aging_rejuvenate(alb,age,cc,s2)
+        e2  = -log((alb - cc%alpha_wet)/span)
+        call check_val("rejuvenate, two refreshes compose as E*exp(-(S1+S2)/S_ref)", &
+                       e2, e0*exp(-0.9_wp), nfail)
+        call check_val("rejuvenate, two refreshes compose on the snow age", &
+                       age, 10.0_wp*exp(-0.9_wp), nfail)
+
+        ! Substep invariance (review Q14): a day's S in 8 equal substeps is
+        ! the same refresh as in one step.
+        alb_a = 0.72_wp
+        age_a = 10.0_wp
+        call albedo_aging_rejuvenate(alb_a,age_a,cc,cc%aging_snowfall_ref)
+        alb_b = 0.72_wp
+        age_b = 10.0_wp
+        do k = 1, 8
+            call albedo_aging_rejuvenate(alb_b,age_b,cc,cc%aging_snowfall_ref/8.0_wp)
+        end do
+        call check_val("rejuvenate, 8 substeps of S/8 == one step of S (albedo)", alb_b, alb_a, nfail)
+        call check_val("rejuvenate, 8 substeps of S/8 == one step of S (age)", age_b, age_a, nfail)
+
+        ! Monotone in S: more snow never darkens, from below alpha_dry.
+        ok = .TRUE.
+        alb_prev = 0.0_wp
+        do k = 0, 12
+            alb = 0.73_wp
+            age = 5.0_wp
+            call albedo_aging_rejuvenate(alb,age,cc,real(k,wp)*0.1_wp*cc%aging_snowfall_ref)
+            if (alb .lt. alb_prev) ok = .FALSE.
+            if (alb .lt. 0.73_wp .or. alb .gt. cc%alpha_dry) ok = .FALSE.
+            alb_prev = alb
+        end do
+        call check("rejuvenate, albedo monotone non-decreasing in S, within bounds", ok, nfail)
+
+        ! alpha_wet exactly (E infinite): no partial refresh restores it (snow
+        ! onto a bare surface starts at alpha_dry instead, see
+        ! albedo_refresh_from_snowfall), and alpha_dry = alpha_wet is well
+        ! defined (no 0/0).
+        alb = cc%alpha_wet
+        age = 2.0_wp
+        call albedo_aging_rejuvenate(alb,age,cc,0.9_wp*cc%aging_snowfall_ref)
+        call check_val("rejuvenate, at alpha_wet a partial refresh stays alpha_wet", &
+                       alb, cc%alpha_wet, nfail)
+
+        cc%alpha_wet = cc%alpha_dry
+        alb_a = 0.5_wp
+        age_a = 2.0_wp
+        call albedo_aging_rejuvenate(alb_a,age_a,cc,0.5_wp*cc%aging_snowfall_ref)
+        call check_val("rejuvenate, alpha_dry = alpha_wet -> that albedo", &
+                       alb_a, cc%alpha_dry, nfail)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_albedo_aging_rejuvenate
 
     ! ======================================================================
     ! (iii) densification
@@ -555,6 +852,8 @@ contains
 
     subroutine test_diurnal(nfail)
 
+        use, intrinsic :: ieee_arithmetic, only : ieee_value, ieee_quiet_nan, ieee_is_finite
+
         implicit none
 
         integer, intent(INOUT) :: nfail
@@ -563,7 +862,7 @@ contains
         integer,  parameter :: nsub_max = 24
         real(wp), parameter :: PI_WP = 3.14159265358979_wp
 
-        real(wp)     :: lat, lon, qbar, h_a, h_b, q, tbar, amp, t_int, dec, h0
+        real(wp)     :: lat, lon, qbar, h_a, h_b, q, tbar, amp, t_int, dec, h0, nan_wp
         real(wp_acc) :: total, weight, w_total, I_day, A, B
         integer      :: i, n, ilat, ilon, nsub
         logical      :: ok_nonneg, ok_tiling
@@ -717,6 +1016,28 @@ contains
         call check("temperature tiling preserves the daily mean", &
                    abs(total/w_total - real(tbar,wp_acc)) .le. 1.0e-4_wp_acc, nfail)
 
+        ! === elevation-dependent amplitude (Chion.jl d0146e1) ==============
+        ! A = clamp(A0 + gamma*max(z - z_ref, 0), 0, A_max), gamma in K/km.
+        call check("amplitude: neutral defaults return A0 exactly", &
+                   diurnal_temperature_amplitude(5.0_wp,0.0_wp,0.0_wp,1.0e30_wp,3000.0_wp) &
+                   .eq. 5.0_wp, nfail)
+        call check_val("amplitude: gradient above z_ref", &
+                       diurnal_temperature_amplitude(1.0_wp,2.0_wp,1000.0_wp,10.0_wp,2500.0_wp), &
+                       4.0_wp, nfail)
+        call check_val("amplitude: no excess below z_ref", &
+                       diurnal_temperature_amplitude(1.0_wp,2.0_wp,1000.0_wp,10.0_wp,500.0_wp), &
+                       1.0_wp, nfail)
+        call check_val("amplitude: clamped at A_max", &
+                       diurnal_temperature_amplitude(1.0_wp,2.0_wp,0.0_wp,3.0_wp,4000.0_wp), &
+                       3.0_wp, nfail)
+        call check_val("amplitude: negative gradient clamped at zero", &
+                       diurnal_temperature_amplitude(1.0_wp,-2.0_wp,0.0_wp,3.0_wp,4000.0_wp), &
+                       0.0_wp, nfail)
+        nan_wp = ieee_value(nan_wp,ieee_quiet_nan)
+        amp = diurnal_temperature_amplitude(1.0_wp,2.0_wp,0.0_wp,3.0_wp,nan_wp)
+        call check("amplitude: missing (NaN) surface height gives A0, not NaN", &
+                   ieee_is_finite(amp) .and. amp .eq. 1.0_wp, nfail)
+
         ! === substep_count returns only 1 or max_substeps ==================
         lat = 65.0_wp
         lon = 90.0_wp
@@ -765,6 +1086,85 @@ contains
         return
 
     end subroutine test_diurnal
+
+    subroutine test_toa_calendar(nfail)
+        ! daily_toa_shortwave (Chion.jl surface_fluxes.jl _daily_toa_shortwave)
+        ! against the textbook daily-mean insolation Q = S0 E/pi*(h0 sin(phi)
+        ! sin(delta) + cos(phi) cos(delta) sin(h0)), E = 1 + 0.033 cos(2 pi
+        ! doy/365), in its two closed-form limits; and
+        ! calendar_solar_longitude_deg (Chion.jl forcing.jl) at the cardinal
+        ! points of the year.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        real(wp), parameter :: PI_WP = 3.14159265358979323846_wp
+        real(wp), parameter :: S0 = 1361.0_wp
+        real(wp) :: ecc, expected
+
+        write(*,"(a)") "--- (vi) daily TOA shortwave and calendar solar longitude ---"
+
+        ! Equator at an equinox: h0 = pi/2, sin(phi) = 0, so Q = S0 E/pi.
+        ecc      = 1.0_wp + 0.033_wp*cos(2.0_wp*PI_WP*80.0_wp/365.0_wp)
+        expected = S0*ecc/PI_WP
+        call check_val("TOA, equator at equinox = S0*E/pi", &
+                       daily_toa_shortwave(0.0_wp,0.0_wp,80.0_wp), expected, nfail)
+
+        ! North pole at the June solstice: polar day (h0 = pi), cos(phi) = 0,
+        ! so Q = S0 E sin(obliquity).
+        ecc      = 1.0_wp + 0.033_wp*cos(2.0_wp*PI_WP*172.0_wp/365.0_wp)
+        expected = S0*ecc*sin(DIURNAL_OBLIQUITY_DEG*PI_WP/180.0_wp)
+        call check_close_rel("TOA, pole at June solstice = S0*E*sin(obliquity)", &
+                             daily_toa_shortwave(90.0_wp,90.0_wp,172.0_wp), &
+                             expected, 1.0e-5_wp, nfail)
+
+        call check_val("TOA, polar night = 0", &
+                       daily_toa_shortwave(80.0_wp,270.0_wp,355.0_wp), 0.0_wp, nfail)
+
+        ! Calendar solar longitude: March equinox ~20 Mar (day 79.5), June
+        ! solstice ~21 Jun (day 172), September equinox ~23 Sep (day 266),
+        ! December solstice ~22 Dec (day 356), each within a day (~1 deg).
+        call check("solar longitude ~0 at the March equinox", &
+                   min(calendar_solar_longitude_deg(79.5_wp), &
+                       360.0_wp - calendar_solar_longitude_deg(79.5_wp)) .lt. 1.0_wp, nfail)
+        call check("solar longitude ~90 at the June solstice", &
+                   abs(calendar_solar_longitude_deg(172.0_wp) - 90.0_wp) .lt. 1.0_wp, nfail)
+        call check("solar longitude ~180 at the September equinox", &
+                   abs(calendar_solar_longitude_deg(266.0_wp) - 180.0_wp) .lt. 1.0_wp, nfail)
+        call check("solar longitude ~270 at the December solstice", &
+                   abs(calendar_solar_longitude_deg(356.0_wp) - 270.0_wp) .lt. 1.0_wp, nfail)
+        call check("solar longitude in [0,360)", &
+                   calendar_solar_longitude_deg(1.0_wp) .ge. 0.0_wp .and. &
+                   calendar_solar_longitude_deg(1.0_wp) .lt. 360.0_wp, nfail)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_toa_calendar
+
+    subroutine check_close_rel(label,value,expected,rtol,nfail)
+
+        implicit none
+
+        character(len=*), intent(IN)    :: label
+        real(wp),         intent(IN)    :: value
+        real(wp),         intent(IN)    :: expected
+        real(wp),         intent(IN)    :: rtol
+        integer,          intent(INOUT) :: nfail
+
+        if (abs(value-expected) .le. rtol*abs(expected)) then
+            write(*,"(a,a,a,g14.6)") "  ok   : ", trim(label), " = ", value
+        else
+            write(*,"(a,a,a,g14.6,a,g14.6)") "  FAIL : ", trim(label), &
+                                             " = ", value, " expected ", expected
+            nfail = nfail + 1
+        end if
+
+        return
+
+    end subroutine check_close_rel
 
     ! ======================================================================
     ! Check helpers (same style as tests/test_column_utils.f90)

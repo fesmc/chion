@@ -78,7 +78,6 @@ program test_defs
     call check_val("rho_s_a",         c%rho_s_a,        109.0_wp,       nfail)
     call check_val("rho_s_b",         c%rho_s_b,        6.0_wp,         nfail)
     call check_val("rho_s_c",         c%rho_s_c,        26.0_wp,        nfail)
-    call check_val("Ki",              c%Ki,             2.1_wp,         nfail)
     call check_val("ci",              c%ci,             2110.0_wp,      nfail)
     call check_val("cw",              c%cw,             4181.0_wp,      nfail)
     call check_val("Lm",              c%Lm,             334000.0_wp,    nfail)
@@ -87,8 +86,11 @@ program test_defs
     call check_val("D_sh",            c%D_sh,           10.0_wp,        nfail)
     call check_val("alpha_dry",       c%alpha_dry,      0.81_wp,        nfail)
     call check_val("alpha_wet",       c%alpha_wet,      0.70_wp,        nfail)
-    call check_val("alpha_ice",       c%alpha_ice,      0.30_wp,        nfail)
+    call check_val("alpha_ice",       c%alpha_ice,      0.40_wp,        nfail)
     call check_val("max_lwc_albedo",  c%max_lwc_albedo, 0.10_wp,        nfail)
+    call check_val("aging_cold_timescale_days",    c%aging_cold_timescale_days,    20.0_wp, nfail)
+    call check_val("aging_melting_timescale_days", c%aging_melting_timescale_days,  2.0_wp, nfail)
+    call check_val("aging_snowfall_ref",           c%aging_snowfall_ref,           10.0_wp, nfail)
     call check_val("eps_air",         c%eps_air,        0.80_wp,        nfail)
     call check_val("eps_snow",        c%eps_snow,       0.98_wp,        nfail)
     call check_val("sigma_sb",        c%sigma_sb,       5.670373e-8_wp, nfail)
@@ -100,20 +102,24 @@ program test_defs
                c%fresh_snow_density_scheme .eq. CHION_FRESH_SNOW_DENSITY_CONSTANT, nfail)
     call check("default low_density_densification = bessi", &
                c%low_density_densification .eq. CHION_DENSIFY_BESSI, nfail)
+    ! Chion.jl 03bb445's calibrated surface scheme (C11).
+    call check("default seb_scheme = semix", &
+               c%seb_scheme .eq. CHION_SEB_SEMIX, nfail)
+    call check("default turbulent_flux_scheme = semix", &
+               c%turbulent_flux_scheme .eq. CHION_TURB_SEMIX, nfail)
+    call check("default longwave_scheme = cloud_proxy", &
+               c%longwave_scheme .eq. CHION_LONGWAVE_CLOUD_PROXY, nfail)
 
-    ! --- Scheme name mapping, including the Chion.jl aliases -------------
+    ! --- Scheme name mapping (canonical names only since Chion.jl 03bb445) ---
     call check("albedo 'constant'",   chion_albedo_scheme_flag("constant")   .eq. CHION_ALBEDO_CONSTANT,   nfail)
     call check("albedo 'dynamic'",    chion_albedo_scheme_flag("dynamic")    .eq. CHION_ALBEDO_DYNAMIC,    nfail)
     call check("albedo 'prescribed'", chion_albedo_scheme_flag("prescribed") .eq. CHION_ALBEDO_PRESCRIBED, nfail)
-    call check("albedo alias 'bessi'  -> constant", &
-               chion_albedo_scheme_flag("bessi")  .eq. CHION_ALBEDO_CONSTANT, nfail)
-    call check("albedo alias 'legacy' -> constant", &
-               chion_albedo_scheme_flag("legacy") .eq. CHION_ALBEDO_CONSTANT, nfail)
+    call check("albedo 'aging'",      chion_albedo_scheme_flag("aging")      .eq. CHION_ALBEDO_AGING,      nfail)
 
     call check("fresh snow 'constant'", &
                chion_fresh_snow_density_scheme_flag("constant") .eq. CHION_FRESH_SNOW_DENSITY_CONSTANT, nfail)
-    call check("fresh snow alias 'htessel' -> parameterized", &
-               chion_fresh_snow_density_scheme_flag("htessel") .eq. CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, nfail)
+    call check("fresh snow 'parameterized'", &
+               chion_fresh_snow_density_scheme_flag("parameterized") .eq. CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, nfail)
 
     call check("densify 'bessi'",   chion_densify_scheme_flag("bessi")   .eq. CHION_DENSIFY_BESSI,   nfail)
     call check("densify 'htessel'", chion_densify_scheme_flag("htessel") .eq. CHION_DENSIFY_HTESSEL, nfail)

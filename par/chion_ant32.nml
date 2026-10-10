@@ -50,7 +50,7 @@
     trans_a             = 0.768           ! [1]
     trans_b             = 6.99e-5         ! [m-1]
     trans_c             = -0.376          ! [1]
-    H_ice_default       = 1000.0          ! [m]  ice thickness on every column (ITM)
+    H_ice_default       = 1000.0          ! [m]  ice thickness on every column (ITM; BESSI ice substrate)
 /
 
 ! ============================================================
@@ -76,16 +76,11 @@
     density_init        = 300.0             ! [kg m-3] Initial layer density
     temperature_init    = 273.0             ! [K] Initial layer temperature
 
-    ! Diurnal shortwave substepping resolves the solar-noon flux peak. Antarctic
-    ! surface temperatures rarely reach the melting gate, so this is largely
-    ! inactive over the interior; it matters only on the warm coastal margins.
-    ! See docs/steady_state_snowpack.md for the Greenland calibration rationale.
-    diurnal_shortwave_substeps          = .TRUE.    ! Resolve the diurnal shortwave cycle
-    diurnal_shortwave_threshold         = 0.0       ! [W m-2] Peak-minus-mean to activate
-    diurnal_shortwave_max_substeps      = 3         ! [1] Substeps per day when active
-    diurnal_shortwave_min_air_temperature = 272.15  ! [K] Below this, do not substep
-    diurnal_temperature_cycle           = .FALSE.   ! Add a diurnal air-temperature cycle
-    diurnal_temperature_amplitude       = 5.0       ! [K] Half-amplitude of that cycle
+    ! Diurnal substeps, ice substrate, fine layers and the surface scheme are
+    ! Chion.jl's calibrated defaults (input/chion_defaults.nml). The former
+    ! tuning here (3 substeps above -1 C, no temperature cycle; R^2 0.84 under
+    ! the pre-C11 physics, docs/steady_state_snowpack.md) does worse on top of
+    ! them at GRL-16KM: SMB 485 vs 448 Gt/yr (MAR 348), R^2 0.78 vs 0.83.
 /
 
 ! ============================================================

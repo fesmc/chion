@@ -40,7 +40,7 @@
     ! insolation, with precipitation split into snow below t_snow_max.
     latitude         = 70.0                 ! [deg N] Column latitude
     surface_height   = 1500.0               ! [m] Surface elevation
-    H_ice            = 1000.0               ! [m] Ice thickness (ITM only)
+    H_ice            = 1000.0               ! [m] Ice thickness (ITM; BESSI ice substrate)
 
     t2m_mean         = 258.15               ! [K] Annual mean air temperature
     t2m_amplitude    = 16.0                 ! [K] Half-amplitude of the annual cycle
@@ -74,9 +74,9 @@
     mass_split       = 300.0                ! [kg m-2] Mass left below after a split
     mass_min         = 100.0                ! [kg m-2] Merge trigger
 
-    ! Substepping is off. Enabling it changes the albedo scheme as well as
-    ! the shortwave resolution — see the notes in input/chion_defaults.nml.
-    diurnal_shortwave_substeps = False
+    ! Everything else is Chion.jl's calibrated default set: ice substrate,
+    ! fine near-surface layers, 8 diurnal substeps with a 1 K cycle (see the
+    ! notes in input/chion_defaults.nml).
 /
 
 &pdd

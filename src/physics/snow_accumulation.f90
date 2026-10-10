@@ -9,20 +9,26 @@ module snow_accumulation
     ! merge and depth-cap routines change it.
     !
     ! DEPENDENCY ON WP4: everything in the "layer-structure enforcement" section
-    ! is delegated to snow_layers. All five calls are confined to the bottom of
-    ! apply_accumulation, so a change to those signatures touches nothing else
-    ! in this module. Two of them differ from the Julia argument lists: WP4
-    ! dropped Ntot from merge_surface_layer, and Ntot and dt_seconds from
-    ! enforce_snow_depth_cap, because neither body uses them.
+    ! is delegated to snow_layers, in two calls at the bottom of
+    ! apply_accumulation: rebalance_layer at k = 1 (Julia's split and merge
+    ! loops, which chion also runs below fine near-surface layers, D32) and
+    ! enforce_snow_depth_cap. WP4 dropped Ntot from the merge, and Ntot and
+    ! dt_seconds from enforce_snow_depth_cap, because neither body uses them;
+    ! C1 also dropped mass_split from the latter (the cap is a constant depth
+    ! since 03bb445).
     !
     ! PRESERVED QUIRKS:
     !   * Rain alone never creates a snow layer, and rain is only added to
-    !     mass_w(1) when mass(1) > 0 STRICTLY (not > TOL_TINY). A column that
-    !     is bare and receives only rain routes nothing here: the rain is
-    !     simply dropped by this routine, and the bare-ice branch of the column
-    !     step handles it. Preserved as-is; flagged upstream.
+    !     mass_w(1) when mass(1) > 0 STRICTLY (not > TOL_TINY).
+    !
+    ! DEVIATION (docs/porting_notes.md D29): rain with no layer to hold it
+    ! goes to runoff HERE, so every kilogram of rain is routed exactly once.
+    ! Chion.jl dropped it (upstream defect 11) until dev_nils 8fff530, which
+    ! instead adds the step's rain to runoff in the bare-ice branch; that
+    ! counts it twice when 0 < mass(1) <= TOL_EMPTY_LAYER, where the rain is
+    ! already in mass_w(1). Totals are otherwise identical.
     !   * The split loop's out-of-slots branch is asymmetric: with Ntot <= 2 it
-    !     calls free_slot_for_surface_split, otherwise merge_bottom_layer. The
+    !     calls free_slot_for_split, otherwise merge_bottom_layer. The
     !     Ntot <= 2 case cannot merge a bottom layer without destroying the only
     !     other layer, hence the special case.
     !   * The density mix is volume-weighted, not mass-weighted:
@@ -36,10 +42,9 @@ module snow_accumulation
                            CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, &
                            io_unit_err
     use snow_albedo, only : albedo_refresh_from_snowfall
+    use snow_column_utils, only : surface_has_snow
 
-    use snow_layers, only : split_surface_layer, merge_surface_layer, &
-                            merge_bottom_layer, free_slot_for_surface_split, &
-                            enforce_snow_depth_cap
+    use snow_layers, only : rebalance_layer, enforce_snow_depth_cap
 
     implicit none
 
@@ -110,7 +115,7 @@ contains
     end function fresh_snow_density
 
     subroutine apply_accumulation(mass,mass_w,density,temperature,n, &
-                                  mass_base,smb_ice,runoff,t_srf,albedo, &
+                                  mass_base,smb_ice,runoff,t_srf,albedo,snow_age_days, &
                                   c,Ntot,mass_max,mass_split,mass_min, &
                                   snowfall_rate,rainfall_rate,dt_seconds, &
                                   air_temperature,wind_speed)
@@ -119,17 +124,19 @@ contains
         !
         ! Flow:
         !   0. empty column: create a surface layer only if snowfall > 0,
-        !      otherwise set albedo = alpha_ice and return.
+        !      otherwise rain -> runoff, albedo = alpha_ice, and return.
         !   1. snowfall: add mass to layer 1, mix its density by volume, and
         !      brighten the albedo.
-        !   2. rainfall: add to mass_w(1) if mass(1) > 0.
+        !   2. rainfall: add to mass_w(1) if mass(1) > 0, else to runoff.
         !   3. split loop  while mass(1) > mass_max
         !   4. merge loop  while n > 1 and mass(1) < mass_min
         !   5. depth cap.
         !
         ! NOTE the albedo call here is the snowfall REFRESH, not the aging
-        ! update. Aging happens later in the step, exactly once per call
-        ! (docs/PLAN.md section 5, item 5).
+        ! update. Aging happens later in the step (albedo_update). The albedo
+        ! is the SNOW albedo (bessi's albedo_snow, D40); whether the snow
+        ! fell onto a bare surface is sampled on entry, for the aging
+        ! scheme's refresh (D30).
 
         implicit none
 
@@ -143,6 +150,7 @@ contains
         real(wp_acc),            intent(INOUT) :: runoff          ! [kg m-2] cumulative
         real(wp),                intent(INOUT) :: t_srf           ! [K] surface temperature
         real(wp),                intent(INOUT) :: albedo          ! [1]
+        real(wp),                intent(INOUT) :: snow_age_days   ! [d] aging albedo only
         type(chion_const_class), intent(IN)    :: c
         integer,                 intent(IN)    :: Ntot            ! layer capacity
         real(wp),                intent(IN)    :: mass_max        ! [kg m-2] split trigger
@@ -157,12 +165,17 @@ contains
         ! Local variables
         real(wp) :: m_prev, m_added, m_new
         real(wp) :: rho_fresh, rho_prev, rho_new
+        logical  :: onto_bare
+
+        onto_bare = .not. surface_has_snow(mass,n)
 
         ! --- Step 0: empty column -------------------------------------------
         if (n .eq. 0) then
             if (snowfall_rate .gt. 0.0_wp) then
                 n = 1
             else
+                if (rainfall_rate .gt. 0.0_wp) &
+                    runoff = runoff + real(rainfall_rate*dt_seconds,wp_acc)
                 albedo = c%alpha_ice
                 return
             end if
@@ -193,52 +206,30 @@ contains
 
             mass(1) = m_new
 
-            call albedo_refresh_from_snowfall(albedo,c,m_added)
+            call albedo_refresh_from_snowfall(albedo,snow_age_days,c,m_added,onto_bare)
 
         end if
 
         ! --- Step 2: rainfall -----------------------------------------------
-        ! Strict mass(1) > 0, and only into the surface layer.
-        if (mass(1) .gt. 0.0_wp .and. rainfall_rate .gt. 0.0_wp) then
-            mass_w(1) = mass_w(1) + rainfall_rate*dt_seconds
+        ! Strict mass(1) > 0, and only into the surface layer; otherwise there
+        ! is nothing to hold it and it runs off (D29).
+        if (rainfall_rate .gt. 0.0_wp) then
+            if (mass(1) .gt. 0.0_wp) then
+                mass_w(1) = mass_w(1) + rainfall_rate*dt_seconds
+            else
+                runoff = runoff + real(rainfall_rate*dt_seconds,wp_acc)
+            end if
         end if
 
-        ! --- Step 3: split loop ---------------------------------------------
-        do while (n .gt. 0 .and. mass(1) .gt. mass_max)
-
-            if (n .eq. Ntot) then
-
-                if (Ntot .le. 2) then
-                    call free_slot_for_surface_split(mass,mass_w,density,temperature,n, &
-                                                     mass_base,smb_ice,runoff,t_srf,albedo, &
-                                                     Ntot,mass_max,c)
-                else
-                    call merge_bottom_layer(mass,mass_w,density,temperature,n, &
-                                            mass_base,smb_ice,c)
-                end if
-
-                ! Re-test after freeing a slot: either the column emptied or the
-                ! surface is already back under mass_max.
-                if (n .eq. 0) exit
-                if (mass(1) .le. mass_max) exit
-
-            end if
-
-            call split_surface_layer(mass,mass_w,density,temperature,n, &
-                                     Ntot,mass_max,mass_split)
-
-        end do
-
-        ! --- Step 4: merge loop ---------------------------------------------
-        do while (n .gt. 1 .and. mass(1) .lt. mass_min)
-            call merge_surface_layer(mass,mass_w,density,temperature,n, &
-                                     mass_split,mass_min,c)
-        end do
+        ! --- Steps 3-4: split loop while mass(1) > mass_max, then merge loop
+        !     while n > 1 and mass(1) < mass_min ---------------------------
+        call rebalance_layer(mass,mass_w,density,temperature,n,1, &
+                             mass_base,smb_ice,runoff,t_srf,albedo, &
+                             Ntot,mass_max,mass_split,mass_min,c)
 
         ! --- Step 5: depth cap ----------------------------------------------
         call enforce_snow_depth_cap(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    mass_split,c)
+                                    mass_base,smb_ice,runoff,t_srf,albedo,c)
 
         return
 

@@ -32,11 +32,10 @@ module chion_model
     !               -- takes four scalars by reference; it has no layers and
     !                  no state object worth threading.
     !   itm     call itm_step(itm,icol,fc,z_srf,H_ice,PDDs,c)
-    !               -- takes the state object plus three extra arguments that
-    !                  are deliberately NOT in chion_step_forcing_class,
-    !                  because they are ice-sheet state, not atmosphere.
-    ! Forcing a common signature onto these would mean either polluting the
-    ! shared forcing type with ice-sheet fields or wrapping PDD in a state
+    !               -- takes the state object plus three extra arguments
+    !                  (z_srf and H_ice are also in the step forcing now, for
+    !                  BESSI; PDDs is not).
+    ! Forcing a common signature onto these would mean wrapping PDD in a state
     ! object it does not need. Each case is written out instead.
     !
     ! -----------------------------------------------------------------------
@@ -56,6 +55,16 @@ module chion_model
     !
     ! default(shared) is stated explicitly rather than relied upon, so that a
     ! newly added local cannot silently become shared.
+    !
+    ! BESSI's columns differ in cost by an order of magnitude: a melting
+    ! column runs the diurnal substeps (8 core steps a day), a cold interior
+    ! or bare land column one or none, and the active list is ordered by grid
+    ! position, so a static split hands some threads mostly margin columns.
+    ! The BESSI loop is therefore scheduled dynamically in chunks of
+    ! BESSI_OMP_CHUNK columns (GRL-16KM, 16 threads: 69 s static, 44 s
+    ! dynamic,8; 45/46/50 s for chunks 32/64/128; guided,8 48 s). Results do
+    ! not depend on the schedule (no reductions). PDD and ITM cost the same
+    ! per column and keep the static default.
 
     use chion_defs, only : wp, wp_acc, io_unit_err, MV, &
                            chion_const_class, chion_param_class, &
@@ -70,10 +79,14 @@ module chion_model
                            pdd_column_step
     use snow_itm,   only : itm_class, itm_alloc, itm_dealloc, &
                            itm_init_state, itm_step
+    use snow_diurnal, only : solar_declination_class, solar_declination
 
     implicit none
 
     private
+
+    ! Columns per dynamic chunk of the BESSI column loop (see above).
+    integer, parameter :: BESSI_OMP_CHUNK = 8
 
     ! The allowed values of par%model, in one place. Used by the dispatcher's
     ! error messages and by chion_api's enum validation, so the two can never
@@ -114,9 +127,11 @@ contains
         ! Fields are assigned in declaration order, which is also the order of
         ! Chion.jl's SnowpackStepForcing, so the two can be diffed by eye.
         !
-        ! NOTE what is NOT here: surface_height, H_ice and PDDs. The first is
-        ! used by the host to derive air_pressure; the last two are ITM's, and
-        ! are passed to itm_step directly (see the module header).
+        ! NOTE what is NOT here: PDDs, ITM's alone, passed to itm_step
+        ! directly (see the module header). surface_height is packed (Chion.jl
+        ! d0146e1: elevation-dependent diurnal T amplitude) and H_ice too
+        ! (chion: BESSI's ice substrate only under ice, D34); ITM still
+        ! receives both as its explicit z_srf and H_ice arguments as well.
 
         implicit none
 
@@ -161,8 +176,14 @@ contains
         fc%has_alb_ice_host = forc%has_alb_ice_host(icol)
 
         fc%latitude_deg        = forc%latitude_deg(icol)
+        fc%surface_height      = forc%surface_height(icol)
         fc%day_of_year         = forc%day_of_year
         fc%solar_longitude_deg = forc%solar_longitude_deg
+
+        fc%H_ice = forc%H_ice(icol)
+
+        fc%toa_shortwave     = forc%toa_shortwave(icol)
+        fc%has_toa_shortwave = forc%has_toa_shortwave(icol)
 
         return
 
@@ -364,6 +385,7 @@ contains
         ! Local variables
         integer :: i, icol
         type(chion_step_forcing_class) :: fc
+        type(solar_declination_class)  :: decl
 
         if (forc%ncol .ne. grd%ncol) then
             write(io_unit_err,*) "chion_model_step:: Error: forcing and grid column counts differ."
@@ -381,11 +403,14 @@ contains
 
             case("bessi")
 
-                !$omp parallel do default(shared) private(i,icol,fc)
+                ! The day's solar declination terms, once for all columns.
+                decl = solar_declination(forc%solar_longitude_deg)
+
+                !$omp parallel do default(shared) private(i,icol,fc) schedule(dynamic,BESSI_OMP_CHUNK)
                 do i = 1, grd%n_active
                     icol = grd%active_idx(i)
                     call chion_pack_step_forcing(forc,icol,dt_days,fc)
-                    call bessi_column_step(bsi,icol,fc,c)
+                    call bessi_column_step(bsi,icol,fc,c,decl)
                 end do
                 !$omp end parallel do
 

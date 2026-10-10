@@ -29,8 +29,7 @@ module snow_percolation
     ! See docs/PLAN.md section 5, item 4.
 
     use chion_defs,        only : wp, wp_acc, TOL_TINY
-    use snow_column_utils, only : is_lowest_active_snow_layer, &
-                                  layer_pore_volume, layer_lwc
+    use snow_column_utils, only : is_lowest_active_snow_layer, layer_pore_volume
 
     implicit none
 
@@ -103,7 +102,14 @@ contains
             end if
 
             ! === Case C: normal retention =================================
-            lwc = layer_lwc(m_s,m_w,density(k),rho_i,rho_w)
+            ! layer_lwc (snow_column_utils) from the pore volume already in
+            ! hand, in its expression: m_s > 0 and phi > TOL_TINY hold here,
+            ! so of its guards only rho > 0 is left (no water content
+            ! otherwise). Not a call: it is not inlined across modules, and
+            ! it would form phi a second time.
+            lwc = 0.0_wp_acc
+            if (density(k) .gt. 0.0_wp) &
+                lwc = max(real(m_w,wp_acc),0.0_wp_acc)/real(rho_w,wp_acc)/phi
 
             if (lwc .gt. lwc_max) then
                 excess    = (lwc - lwc_max)*phi*real(rho_w,wp_acc)

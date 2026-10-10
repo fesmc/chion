@@ -26,8 +26,8 @@ program chion_column
     !   wind_speed      = wind_speed                     (constant)
     !   latitude_deg    = latitude
     !   surface_height  = surface_height
-    !   H_ice           = H_ice                          (ITM only)
-    !   solar_longitude_deg = 360*(d - 1)/Y
+    !   H_ice           = H_ice                          (ITM; BESSI ice substrate)
+    !   solar_longitude_deg = calendar_solar_longitude_deg(d)   (Chion.jl calendar formula)
     !
     ! Shortwave shares the temperature phase, which is deliberate: it is a
     ! driver simplification, not a solar-geometry calculation, and keeping one
@@ -215,7 +215,7 @@ program chion_column
         end if
 
         chn%forc%day_of_year         = doy
-        chn%forc%solar_longitude_deg = 360.0_wp*(doy - 1.0_wp)/YEAR_LENGTH
+        chn%forc%solar_longitude_deg = calendar_solar_longitude_deg(doy)
 
         call chion_update(chn,dt)
 

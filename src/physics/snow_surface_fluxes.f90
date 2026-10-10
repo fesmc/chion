@@ -34,26 +34,43 @@ module snow_surface_fluxes
     ! mass conversion are accumulated in real(wp_acc) locals. See
     ! docs/PLAN.md section 3.1.
 
+    use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
+
     use chion_defs, only : wp, wp_acc, TOL_EMPTY_LAYER, io_unit_err, &
-                           CHION_ALBEDO_PRESCRIBED, CHION_SEB_SEMIX, &
+                           CHION_SEB_SEMIX, &
+                           CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
+                           CHION_LONGWAVE_CLOUD_PROXY, &
                            chion_const_class, chion_step_forcing_class
     use snow_column_utils, only : surface_has_snow
+
+    ! Daily-mean top-of-atmosphere shortwave for the cloud-proxy longwave,
+    ! from the column-day's solar geometry.
+    use snow_diurnal, only : diurnal_geometry_class, diurnal_geometry, daily_toa_shortwave
 
     ! Vapour-pressure parameterizations and the BESSI latent flux built from
     ! them. Extracted to snow_vapor so that snow_seb_semix can share them
     ! without a circular dependency on this module.
-    use snow_vapor, only : latent_vapor_flux
+    use snow_vapor, only : latent_vapor_flux, vapor_mass_flux, surface_vapor_latent_heat, &
+                           safe_positive
 
-    ! SEMIX aerodynamic surface scheme, selected by c%seb_scheme. It supplies
-    ! the exact-at-known-T turbulent fluxes here, as it supplies the linearized
-    ! ones in snow_energy: all three flux sites move together, so the bare-ice
-    ! branch and the vapour-mass budget never fall back to BESSI's D_sh while
-    ! the energy solve uses r_a (docs/semix_port_scope.md).
+    ! CLIMBER-X SEMIX aerodynamic exchange, selected by
+    ! c%turbulent_flux_scheme = "climberx". It supplies the exact-at-known-T
+    ! turbulent fluxes here, as it supplies the linearized ones in
+    ! snow_energy: all three flux sites move together, so the bare-ice branch
+    ! and the vapour-mass budget never fall back to BESSI's D_sh while the
+    ! energy solve uses r_a (docs/semix_port_scope.md). Its longwave helpers
+    ! serve c%seb_scheme = "semix".
     use snow_seb_semix, only : semix_exchange_class, semix_snow_depth, &
                                semix_turbulent_exchange, &
                                semix_sensible_heat_flux, semix_latent_heat_flux, &
                                semix_surface_emissivity, semix_longwave_down, &
                                semix_longwave_flux
+
+    ! Chion.jl's bulk turbulence, selected by c%turbulent_flux_scheme =
+    ! "semix": linearized about the surface temperature, so its exact flux at
+    ! a known temperature is constant - linear*T.
+    use snow_turbulence, only : turb_semix_lin_class, turb_semix_flux_linearized, &
+                                turb_semix_neutral_exchange, turb_semix_latent_heat
 
     ! snow_layers supplies the layer removal/merge used by
     ! apply_snow_surface_vapor_mass_flux when sublimation empties the surface
@@ -61,11 +78,21 @@ module snow_surface_fluxes
     ! _merge_surface_layer!; the Fortran signature has no such argument, so it
     ! is simply dropped.
     use snow_layers, only : remove_depleted_surface_and_route_water, &
-                            merge_surface_layer
+                            merge_layer
 
     implicit none
 
     private
+
+    ! Cloud-proxy longwave limits, literals in Chion.jl 03bb445
+    ! (surface_fluxes.jl LONGWAVE_CLOUD_PROXY_MIN_TOA, _cloud_proxy_emissivity):
+    ! below this daily-mean TOA (polar night) the shortwave cloudiness proxy is
+    ! undefined; it needs a daily-mean shortwave, so a step of at least
+    ! CLOUD_PROXY_DT_DAYS_MIN; the emissivity is clamped to [MIN, MAX].
+    real(wp), parameter :: CLOUD_PROXY_MIN_TOA        = 50.0_wp   ! [W m-2]
+    real(wp), parameter :: CLOUD_PROXY_DT_DAYS_MIN    = 0.75_wp   ! [d]
+    real(wp), parameter :: CLOUD_PROXY_EMISSIVITY_MIN = 0.4_wp    ! [1]
+    real(wp), parameter :: CLOUD_PROXY_EMISSIVITY_MAX = 1.3_wp    ! [1]
 
     ! === Return types ========================================================
     ! Julia returns named tuples; Fortran gets small derived types. FIELD ORDER
@@ -123,6 +150,22 @@ module snow_surface_fluxes
     public :: surface_vapor_flux_class
     public :: latent_heat_coeff_class
 
+    ! Parameterized downwelling longwave (longwave_scheme). The (c,forc) forms
+    ! derive the solar geometry from the forcing; bessi_column_step passes the
+    ! column-day's geometry it already holds.
+    interface cloud_proxy_emissivity
+        module procedure cloud_proxy_emissivity_forc
+        module procedure cloud_proxy_emissivity_geom
+    end interface cloud_proxy_emissivity
+
+    interface with_parameterized_longwave
+        module procedure with_parameterized_longwave_forc
+        module procedure with_parameterized_longwave_geom
+    end interface with_parameterized_longwave
+
+    public :: cloud_proxy_emissivity
+    public :: with_parameterized_longwave
+
     ! Resolved (exact-at-known-T) surface fluxes
     public :: resolved_nonshortwave_surface_flux_components
     public :: resolved_bare_ice_surface_flux_components
@@ -136,6 +179,147 @@ module snow_surface_fluxes
 contains
 
     ! =====================================================================
+    ! Parameterized downwelling longwave
+    ! =====================================================================
+
+    pure function cloud_proxy_emissivity_forc(c,forc) result(emissivity)
+        ! cloud_proxy_emissivity with the solar geometry taken from the forcing.
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        real(wp) :: emissivity                                ! [1]
+
+        emissivity = cloud_proxy_emissivity_geom(c,forc, &
+                         diurnal_geometry(forc%latitude_deg,forc%solar_longitude_deg))
+
+        return
+
+    end function cloud_proxy_emissivity_forc
+
+    pure function cloud_proxy_emissivity_geom(c,forc,geom) result(emissivity)
+        ! Chion.jl/src/processes/surface_fluxes.jl:_cloud_proxy_emissivity
+        ! (03bb445). Effective atmospheric emissivity relative to the air
+        ! temperature,
+        !     eps = clamp(eps0 + eps_T*(T_a - T0) + eps_n*n, 0.4, 1.3),
+        ! with the cloudiness n = clamp(1 - SWdn/(TOA*tau_clear(z)), 0, 1)
+        ! from the daily shortwave transmissivity the forcing already carries,
+        ! and tau_clear = tau0 + tau_km*z/1000 (z = surface_height; non-finite
+        ! or negative -> 0). Where the proxy is undefined -- polar night
+        ! (TOA <= 50 W m-2), a sub-daily step (dt < 0.75 d, where SWdn is not
+        ! a daily mean), no latitude -- n is the constant night cloudiness.
+        !
+        ! TOA is chion's fixed-orbit daily mean from latitude, solar longitude
+        ! and day of year, as in Julia, unless the host supplies its own
+        ! (has_toa_shortwave; chion only, docs/porting_notes.md D33). The
+        ! host's TOA needs no latitude. geom is the column-day's solar geometry
+        ! (diurnal_geometry of the forcing's latitude and solar longitude).
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        type(diurnal_geometry_class),   intent(IN) :: geom
+        real(wp) :: emissivity                                ! [1]
+
+        ! Local variables
+        logical  :: daily
+        real(wp) :: toa, height, clear_transmissivity, cloudiness
+
+        if (forc%has_toa_shortwave) then
+            toa   = forc%toa_shortwave
+            daily = .TRUE.
+        else if (geom%defined) then
+            toa   = daily_toa_shortwave(geom,forc%day_of_year)
+            daily = .TRUE.
+        else
+            toa   = 0.0_wp
+            daily = .FALSE.
+        end if
+
+        daily = daily .and. toa .gt. CLOUD_PROXY_MIN_TOA &
+                      .and. forc%dt_days .ge. CLOUD_PROXY_DT_DAYS_MIN
+
+        ! Forcing without a surface height (NaN) uses the sea-level clear-sky
+        ! transmissivity.
+        if (ieee_is_finite(forc%surface_height)) then
+            height = max(forc%surface_height,0.0_wp)
+        else
+            height = 0.0_wp
+        end if
+
+        clear_transmissivity = c%lw_clear_sky_transmissivity &
+                               + c%lw_clear_sky_transmissivity_per_km*height/1000.0_wp
+
+        if (daily) then
+            cloudiness = min(max(1.0_wp - forc%shortwave_down &
+                                 /safe_positive(toa*clear_transmissivity), &
+                                 0.0_wp),1.0_wp)
+        else
+            cloudiness = c%lw_night_cloud_fraction
+        end if
+
+        emissivity = c%lw_emissivity_base &
+                     + c%lw_emissivity_temperature_slope*(forc%air_temperature - c%T0) &
+                     + c%lw_emissivity_cloud_slope*cloudiness
+
+        emissivity = min(max(emissivity,CLOUD_PROXY_EMISSIVITY_MIN),CLOUD_PROXY_EMISSIVITY_MAX)
+
+        return
+
+    end function cloud_proxy_emissivity_geom
+
+    pure function with_parameterized_longwave_forc(c,forc) result(fc)
+        ! with_parameterized_longwave with the solar geometry taken from the
+        ! forcing.
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        type(chion_step_forcing_class) :: fc
+
+        fc = with_parameterized_longwave_geom(c,forc, &
+                 diurnal_geometry(forc%latitude_deg,forc%solar_longitude_deg))
+
+        return
+
+    end function with_parameterized_longwave_forc
+
+    pure function with_parameterized_longwave_geom(c,forc,geom) result(fc)
+        ! Chion.jl/src/processes/surface_fluxes.jl:_with_parameterized_longwave
+        ! (03bb445), applied by bessi_column_step to the step forcing BEFORE
+        ! the diurnal substeps. Under longwave_scheme = "cloud_proxy", and only
+        ! when the host prescribes no longwave, the daily downwelling flux
+        !     q_lw_down = eps*sigma*T_a^4
+        ! is resolved once from the daily forcing and passed on as if
+        ! prescribed (has_q_lw_down), so every substep reuses the daily cloud
+        ! proxy and every downstream site -- the snow energy solve, both
+        ! bare-ice paths, either seb_scheme -- takes it as given. Prescribed
+        ! longwave and the graybody scheme pass through unchanged. geom is the
+        ! column-day's solar geometry, for the TOA.
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        type(diurnal_geometry_class),   intent(IN) :: geom
+        type(chion_step_forcing_class) :: fc
+
+        fc = forc
+
+        if (c%longwave_scheme .ne. CHION_LONGWAVE_CLOUD_PROXY) return
+        if (forc%has_q_lw_down) return
+
+        fc%q_lw_down     = cloud_proxy_emissivity_geom(c,forc,geom)*c%sigma_sb*forc%air_temperature**4
+        fc%has_q_lw_down = .TRUE.
+
+        return
+
+    end function with_parameterized_longwave_geom
+
+    ! =====================================================================
     ! Resolved (exact-at-known-T) surface fluxes
     ! =====================================================================
 
@@ -146,16 +330,24 @@ contains
         ! Every has_* flag selects a PRESCRIBED value over the internal
         ! parameterization. Note the latent flux has three cases, in order:
         !   has_q_lh                 -> prescribed q_lh
-        !   has_relative_humidity    -> BESSI vapor flux
+        !   has_relative_humidity    -> the turbulent scheme's vapor flux
         !   otherwise                -> zero
         !
-        ! Under seb_scheme = semix the longwave, sensible and latent terms all
-        ! come from the SEMIX scheme instead. That needs two things BESSI does
-        ! not: the snow depth, for the roughness blend, and whether the surface
-        ! is snow or bare ice, for the emissivity (ebal's mask_snow). Both are
+        ! seb_scheme selects the longwave only (semix: absorbed with the
+        ! surface emissivity, eps_snow or eps_ice), turbulent_flux_scheme the
+        ! sensible and latent terms (Chion.jl d0146e1). Chion.jl's semix
+        ! turbulence is exact here as constant - linear*T of its linearization
+        ! at T, with the bare-ice roughness and latent heat (D35) when the
+        ! surface is not snow. The CLIMBER-X
+        ! turbulence and the semix longwave need two things BESSI does not:
+        ! the snow depth, for the roughness blend, and whether the surface is
+        ! snow or bare ice, for the emissivity (ebal's mask_snow). Both are
         ! arguments rather than inferred from each other -- a snow column can be
-        ! arbitrarily thin without ceasing to be snow. The BESSI scheme ignores
-        ! both.
+        ! arbitrarily thin without ceasing to be snow. The BESSI turbulence
+        ! ignores the depth; whether the surface is snow selects the latent
+        ! heat of its vapour exchange: the phase's at surface_temperature on
+        ! snow, Lv + Lm on bare ice, which stays solid at T0
+        ! (surface_fluxes.jl:110-116).
         !
         ! Julia carries a dt_seconds argument here purely to spell zero() in
         ! the right type; it is never used numerically. Dropped (cleanup:
@@ -171,16 +363,27 @@ contains
         type(nonshortwave_flux_class) :: flx
 
         ! Local variables
-        logical                    :: uses_semix_seb
+        logical                    :: uses_semix_seb, uses_climberx_turb, uses_semix_turb
+        real(wp)                   :: L_vap
         type(semix_exchange_class) :: sx
+        type(turb_semix_lin_class) :: tx
 
-        uses_semix_seb = (c%seb_scheme .eq. CHION_SEB_SEMIX)
+        uses_semix_seb     = (c%seb_scheme .eq. CHION_SEB_SEMIX)
+        uses_climberx_turb = (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX)
+        uses_semix_turb    = (c%turbulent_flux_scheme .eq. CHION_TURB_SEMIX)
 
-        if (uses_semix_seb) then
+        if (uses_climberx_turb) then
             sx = semix_turbulent_exchange(c,h_snow,forc%air_temperature, &
                                           surface_temperature,forc%wind_speed, &
                                           forc%air_pressure,forc%relative_humidity, &
                                           forc%has_relative_humidity)
+        else if (uses_semix_turb) then
+            tx = turb_semix_flux_linearized(c,surface_temperature,forc%air_temperature, &
+                                            forc%relative_humidity,forc%air_pressure, &
+                                            forc%wind_speed, &
+                                            turb_semix_neutral_exchange(c,.not. has_snow), &
+                                            turb_semix_latent_heat(c,surface_temperature, &
+                                                                   .not. has_snow))
         end if
 
         ! Longwave. semix absorbs the downwelling flux with the surface
@@ -203,24 +406,33 @@ contains
 
         if (forc%has_q_sh) then
             flx%sensible = forc%q_sh
-        else if (uses_semix_seb) then
+        else if (uses_climberx_turb) then
             flx%sensible = semix_sensible_heat_flux(sx,forc%air_temperature, &
                                                     surface_temperature)
+        else if (uses_semix_turb) then
+            flx%sensible = tx%sensible_constant - tx%sensible_linear*surface_temperature
         else
             flx%sensible = c%D_sh*(forc%air_temperature - surface_temperature)
         end if
 
         if (forc%has_q_lh) then
             flx%latent = forc%q_lh
-        else if (uses_semix_seb) then
+        else if (uses_climberx_turb) then
             ! f_lh is already zero without humidity forcing, so this covers the
             ! third case of the BESSI selection too.
             flx%latent = semix_latent_heat_flux(sx)
-        else if (forc%has_relative_humidity) then
-            flx%latent = latent_vapor_flux(surface_temperature,c,forc%air_temperature, &
-                                           forc%relative_humidity,forc%air_pressure)
-        else
+        else if (.not. forc%has_relative_humidity) then
             flx%latent = 0.0_wp
+        else if (uses_semix_turb) then
+            flx%latent = tx%latent_constant - tx%latent_linear*surface_temperature
+        else
+            if (has_snow) then
+                L_vap = surface_vapor_latent_heat(surface_temperature,c)
+            else
+                L_vap = c%Lv + c%Lm
+            end if
+            flx%latent = latent_vapor_flux(surface_temperature,c,forc%air_temperature, &
+                                           forc%relative_humidity,forc%air_pressure,L_vap)
         end if
 
         flx%rain = forc%rainfall_rate*c%cw*(forc%air_temperature - c%T0)
@@ -259,8 +471,9 @@ contains
         end if
 
         ! h_snow = 0 and has_snow = .FALSE.: this branch runs only when the
-        ! column has no surface snow, so the SEMIX roughness blend collapses to
-        ! the bare-ice value and the emissivity is eps_ice.
+        ! column has no surface snow, so the CLIMBER-X roughness blend
+        ! collapses to the bare-ice value, Chion.jl's semix turbulence takes
+        ! semix_z0m_ice, and the emissivity is eps_ice.
         nsw = resolved_nonshortwave_surface_flux_components(c,forc,c%T0,0.0_wp,.FALSE.)
 
         flx%longwave = nsw%longwave
@@ -272,11 +485,17 @@ contains
 
     end function resolved_bare_ice_surface_flux_components
 
-    pure function resolved_turbulent_latent_heat_flux(c,forc,surface_temperature,h_snow) &
-                                                                            result(q_lh)
+    pure function resolved_turbulent_latent_heat_flux(c,forc,surface_temperature,h_snow, &
+                                                      has_snow) result(q_lh)
         ! Chion.jl/src/processes/surface_fluxes.jl:187-200.
         ! The latent-flux-only subset of the three-case selection above, with
-        ! the same seb_scheme branch and the same h_snow argument.
+        ! the same turbulent_flux_scheme branch and the same h_snow and
+        ! has_snow arguments. Chion.jl takes the snow roughness here (the
+        ! post-solve vapour of a snow surface) and the ice roughness on the
+        ! substrate path; has_snow selects between them, and the semix
+        ! latent heat on bare ice (D35). The BESSI branch keeps the phase's
+        ! latent heat at surface_temperature on either surface, as Julia's
+        ! substrate path does.
 
         implicit none
 
@@ -284,31 +503,42 @@ contains
         type(chion_step_forcing_class), intent(IN) :: forc
         real(wp),                       intent(IN) :: surface_temperature   ! [K]
         real(wp),                       intent(IN) :: h_snow                ! [m]
+        logical,                        intent(IN) :: has_snow
         real(wp) :: q_lh                                                    ! [W m-2]
 
         ! Local variables
         type(semix_exchange_class) :: sx
+        type(turb_semix_lin_class) :: tx
 
         if (forc%has_q_lh) then
             q_lh = forc%q_lh
-        else if (c%seb_scheme .eq. CHION_SEB_SEMIX) then
+        else if (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX) then
             sx = semix_turbulent_exchange(c,h_snow,forc%air_temperature, &
                                           surface_temperature,forc%wind_speed, &
                                           forc%air_pressure,forc%relative_humidity, &
                                           forc%has_relative_humidity)
             q_lh = semix_latent_heat_flux(sx)
-        else if (forc%has_relative_humidity) then
-            q_lh = latent_vapor_flux(surface_temperature,c,forc%air_temperature, &
-                                     forc%relative_humidity,forc%air_pressure)
-        else
+        else if (.not. forc%has_relative_humidity) then
             q_lh = 0.0_wp
+        else if (c%turbulent_flux_scheme .eq. CHION_TURB_SEMIX) then
+            tx = turb_semix_flux_linearized(c,surface_temperature,forc%air_temperature, &
+                                            forc%relative_humidity,forc%air_pressure, &
+                                            forc%wind_speed, &
+                                            turb_semix_neutral_exchange(c,.not. has_snow), &
+                                            turb_semix_latent_heat(c,surface_temperature, &
+                                                                   .not. has_snow))
+            q_lh = tx%latent_constant - tx%latent_linear*surface_temperature
+        else
+            q_lh = latent_vapor_flux(surface_temperature,c,forc%air_temperature, &
+                                     forc%relative_humidity,forc%air_pressure, &
+                                     surface_vapor_latent_heat(surface_temperature,c))
         end if
 
         return
 
     end function resolved_turbulent_latent_heat_flux
 
-    pure function bare_ice_ablation_mass(c,forc,dt_seconds) result(abl)
+    pure function bare_ice_ablation_mass(c,forc,dt_seconds,surface_albedo) result(abl)
         ! Chion.jl/src/processes/surface_fluxes.jl:104-185
         ! (_bare_ice_surface_mass_fluxes_resolved + _bare_ice_ablation_mass).
         !
@@ -320,28 +550,23 @@ contains
         ! went into sublimation/deposition, and the vapor mass always uses
         ! (Lv + Lm) on bare ice regardless of temperature. Preserve both.
         !
-        ! Albedo selection mirrors surface_fluxes.jl:181-183: the prescribed
-        ! albedo is used only when the scheme is PRESCRIBED *and* the forcing
-        ! actually carries one; otherwise bare ice uses c%alpha_ice.
+        ! The albedo is the caller's: the column's bare-surface albedo, i.e.
+        ! the prescribed one when the scheme is PRESCRIBED *and* the forcing
+        ! carries one (surface_fluxes.jl:181-183), else the background
+        ! (alpha_ice, or the host's alb_ice_host; D40). Chion.jl takes
+        ! alpha_ice here whatever the host gives.
 
         implicit none
 
         type(chion_const_class),        intent(IN) :: c
         type(chion_step_forcing_class), intent(IN) :: forc
-        real(wp),                       intent(IN) :: dt_seconds   ! [s]
+        real(wp),                       intent(IN) :: dt_seconds       ! [s]
+        real(wp),                       intent(IN) :: surface_albedo   ! [1]
         type(bare_ice_ablation_class) :: abl
 
         ! Local variables
-        real(wp)                  :: surface_albedo
         type(bare_ice_flux_class) :: flx
         real(wp_acc)              :: q_net
-
-        surface_albedo = c%alpha_ice
-        if (c%albedo_scheme .eq. CHION_ALBEDO_PRESCRIBED) then
-            if (forc%has_prescribed_albedo) then
-                surface_albedo = min(max(forc%prescribed_albedo,0.0_wp),1.0_wp)
-            end if
-        end if
 
         flx = resolved_bare_ice_surface_flux_components(c,forc,surface_albedo)
 
@@ -412,24 +637,38 @@ contains
                                                   mass_split,mass_min,vflux)
         ! Chion.jl/src/processes/surface_fluxes.jl:210-269.
         !
-        ! Called AFTER the implicit energy solve, so temperature(1) is the NEW
-        ! surface temperature T^{n+1}. The latent heat flux is therefore
-        ! re-evaluated EXACTLY at T^{n+1}, while the energy solve used the
-        ! linearization about T^n -- trap 2 again, deliberate.
+        ! Called AFTER the implicit energy solve, so t_srf is the NEW interface
+        ! temperature Ts^{n+1} (Chion.jl 03bb445: the flux is evaluated at Tsrf,
+        ! no longer at the top cell's centre temperature(1)). The latent heat
+        ! flux is therefore re-evaluated EXACTLY at Ts^{n+1}, while the energy
+        ! solve used the linearization about Ts^n -- trap 2 again, deliberate.
+        ! t_srf is left as the solve set it, except that an emptied column
+        ! resets it to T0.
         !
-        ! Two branches, on the NEW surface temperature:
-        !   Ts <  T0  solid exchange:  vapor = Q*dt/(Lv+Lm), applied to mass(1)
-        !   Ts >= T0  liquid exchange: vapor = Q*dt/Lv,      applied to mass_w(1)
-        ! Both take max(...,0) on the updated layer value, so a sublimation
-        ! demand larger than the available surface mass is silently truncated
-        ! and the vapor_mass returned is NOT reduced to match. Preserved as-is.
+        ! Two branches, on the NEW interface temperature:
+        !   Ts <  T0  solid exchange,  applied to mass(1)
+        !   Ts >= T0  liquid exchange, applied to mass_w(1)
+        ! The vapour MASS (surface_fluxes.jl:294-309, dev_nils d0146e1):
+        !   parameterized BESSI turbulence: vapor = E*dt, E the vapour-mass
+        !       flux from the humidity gradient (vapor_mass_flux), independent
+        !       of the latent heat; the energy flux Q = L(Ts)*E carries it
+        !   prescribed q_lh: vapor = q_lh*dt/L(Ts), Lv+Lm below T0, Lv at it,
+        !       so the prescribed flux controls its own mass exchange
+        !   Chion.jl's semix turbulence: vapor = q_lh*dt/L(Ts) likewise, its
+        !       flux being built with the same L(Ts)
+        ! All take max(...,0) on the updated layer value, and the vapor_mass
+        ! returned is then the change actually applied, so a sublimation demand
+        ! larger than the available surface mass reports what was removed
+        ! (Chion.jl 03bb445; closes our upstream defect 1).
         !
         ! Only the solid branch can empty the surface layer, so only it runs
         ! the depleted-surface removal and surface-merge loops.
         !
-        ! seb_scheme = semix splits those two roles apart. The RESERVOIR choice
-        ! (solid mass(1) against liquid mass_w(1)) still turns on T0, but the
-        ! LATENT HEAT used to convert the flux into mass no longer does: SEMIX
+        ! turbulent_flux_scheme = climberx (CLIMBER-X, not Julia's :semix
+        ! turbulence) converts its flux, prescribed or not, with a fixed latent
+        ! heat. The RESERVOIR choice (solid mass(1) against liquid mass_w(1))
+        ! still turns on T0, but
+        ! the LATENT HEAT used to convert the flux into mass no longer does: SEMIX
         ! builds f_lh with the latent heat of sublimation at every temperature
         ! (smb_ebal.f90:107), so converting with Lv above the melting point
         ! would overstate the mass by (Lv+Lm)/Lv. Bare ice already uses
@@ -455,6 +694,7 @@ contains
 
         ! Local variables
         real(wp)     :: surface_temperature, q_lh, h_snow, L_exchange
+        real(wp)     :: previous_mass
         real(wp_acc) :: vapor
 
         vflux%vapor_mass       = 0.0_wp
@@ -463,10 +703,14 @@ contains
 
         if (.not. surface_has_snow(mass,n)) return
 
-        surface_temperature = temperature(1)
-        h_snow              = semix_snow_depth(mass,density,n)
+        ! The snow depth enters only the CLIMBER-X exchange (its roughness
+        ! blend); the other schemes ignore the argument.
+        surface_temperature = t_srf
+        h_snow              = 0.0_wp
+        if (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX) &
+            h_snow = semix_snow_depth(mass,density,n)
 
-        q_lh = resolved_turbulent_latent_heat_flux(c,forc,surface_temperature,h_snow)
+        q_lh = resolved_turbulent_latent_heat_flux(c,forc,surface_temperature,h_snow,.TRUE.)
 
         vflux%latent_heat_flux = q_lh
 
@@ -474,23 +718,28 @@ contains
         ! humidity forcing never touches the layer structure. Reproduced.
         if (q_lh .eq. 0.0_wp) return
 
-        if (c%seb_scheme .eq. CHION_SEB_SEMIX) then
+        if (c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX) then
             L_exchange = c%Lv + c%Lm
-        else if (surface_temperature .lt. c%T0) then
-            L_exchange = c%Lv + c%Lm
+            vapor      = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(L_exchange,wp_acc)
+        else if (forc%has_q_lh .or. c%turbulent_flux_scheme .eq. CHION_TURB_SEMIX) then
+            L_exchange = surface_vapor_latent_heat(surface_temperature,c)
+            vapor      = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(L_exchange,wp_acc)
         else
-            L_exchange = c%Lv
+            vapor = real(vapor_mass_flux(surface_temperature,c,forc%air_temperature, &
+                                         forc%relative_humidity,forc%air_pressure),wp_acc) &
+                    *real(dt_seconds,wp_acc)
         end if
 
-        vapor = real(q_lh,wp_acc)*real(dt_seconds,wp_acc)/real(L_exchange,wp_acc)
-
-        vflux%vapor_mass       = real(vapor,wp)
-        vflux%sublimation_mass = max(-vflux%vapor_mass,0.0_wp)
+        vflux%vapor_mass = real(vapor,wp)
 
         if (surface_temperature .lt. c%T0) then
 
             ! Solid exchange: sublimation/deposition of the surface snow layer.
-            mass(1) = max(mass(1) + vflux%vapor_mass,0.0_wp)
+            ! The exchange diagnosed to the atmosphere is the mass actually
+            ! available, not the unconstrained demand.
+            previous_mass    = mass(1)
+            mass(1)          = max(previous_mass + vflux%vapor_mass,0.0_wp)
+            vflux%vapor_mass = mass(1) - previous_mass
 
             ! Peel off any surface layer that sublimation has emptied, routing
             ! its liquid water to runoff.
@@ -503,25 +752,26 @@ contains
             ! Re-merge a surface layer that has become too thin.
             do while (n .gt. 1)
                 if (mass(1) .ge. mass_min) exit
-                call merge_surface_layer(mass,mass_w,density,temperature,n, &
-                                         mass_split,mass_min,c)
+                call merge_layer(mass,mass_w,density,temperature,n,1, &
+                                 mass_split,mass_min,c)
             end do
 
         else
 
             ! Liquid exchange: evaporation/condensation of surface liquid water.
             ! This branch cannot change the layer structure.
-            mass_w(1) = max(mass_w(1) + vflux%vapor_mass,0.0_wp)
+            previous_mass    = mass_w(1)
+            mass_w(1)        = max(previous_mass + vflux%vapor_mass,0.0_wp)
+            vflux%vapor_mass = mass_w(1) - previous_mass
 
         end if
 
-        if (n .gt. 0) then
-            t_srf = temperature(1)
-        else
-            t_srf = c%T0
-        end if
+        vflux%sublimation_mass = max(-vflux%vapor_mass,0.0_wp)
 
-        if (n .eq. 0) albedo = c%alpha_ice
+        if (n .eq. 0) then
+            t_srf  = c%T0
+            albedo = c%alpha_ice
+        end if
 
         return
 

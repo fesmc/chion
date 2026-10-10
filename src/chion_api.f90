@@ -65,13 +65,15 @@ module chion_api
     use chion_defs, only : wp, wp_acc, io_unit_err, MV, &
                            chion_const_class, chion_param_class, &
                            chion_grid_class, chion_forcing_class, &
-                           chion_const_init, chion_const_print, &
+                           chion_const_init, chion_const_print, chion_const_validate, &
+                           chion_const_derive, &
                            chion_forcing_alloc, chion_forcing_dealloc, &
                            chion_grid_init, chion_grid_dealloc, &
                            chion_grid_set_active, &
                            chion_albedo_scheme_flag, &
                            chion_semix_snow_albedo_flag, &
-                           chion_seb_scheme_flag, chion_semix_qsat_flag, &
+                           chion_seb_scheme_flag, chion_longwave_scheme_flag, &
+                           chion_turbulent_flux_scheme_flag, chion_climberx_qsat_flag, &
                            chion_fresh_snow_density_scheme_flag, &
                            chion_densify_scheme_flag, &
                            chion_check_enum, chion_check_file
@@ -111,13 +113,15 @@ module chion_api
     character(len=*), parameter :: def_const = "chion_const"
 
     ! Allowed values, in one place so the error messages and the validation
-    ! can never disagree. Aliases are included because chion_defs' *_flag
-    ! functions accept them (docs/porting_notes.md D4).
-    character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|bessi|legacy"
-    character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "ww|dang|warren|warren_wiscombe"
+    ! can never disagree. Canonical names only, as in Chion.jl since 03bb445
+    ! (docs/porting_notes.md D4).
+    character(len=*), parameter :: CHION_ALBEDO_CHOICES  = "constant|dynamic|prescribed|semix|aging"
+    character(len=*), parameter :: CHION_SEMIX_SNOW_ALB_CHOICES = "warren_wiscombe|dang"
     character(len=*), parameter :: CHION_SEB_CHOICES     = "bessi|semix"
-    character(len=*), parameter :: CHION_SEMIX_QSAT_CHOICES = "semix|bessi|climberx|chion"
-    character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized|bessi|htessel"
+    character(len=*), parameter :: CHION_LONGWAVE_CHOICES = "graybody|cloud_proxy"
+    character(len=*), parameter :: CHION_TURB_CHOICES    = "bessi|semix|climberx"
+    character(len=*), parameter :: CHION_CLIMBERX_QSAT_CHOICES = "climberx|bessi"
+    character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized"
     character(len=*), parameter :: CHION_DENSIFY_CHOICES = "bessi|htessel"
     character(len=*), parameter :: CHION_PDD_CHOICES     = "simple|pism"
 
@@ -1029,7 +1033,9 @@ contains
         character(len=56) :: albedo_scheme
         character(len=56) :: semix_snow_albedo
         character(len=56) :: seb_scheme
-        character(len=56) :: semix_qsat
+        character(len=56) :: longwave_scheme
+        character(len=56) :: turbulent_flux_scheme
+        character(len=56) :: climberx_qsat
         character(len=56) :: fresh_snow_density_scheme
         character(len=56) :: low_density_densification
 
@@ -1045,7 +1051,6 @@ contains
         call nml_read(filename,group,"rho_s_c",                  c%rho_s_c,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"fresh_snow_density_scheme",fresh_snow_density_scheme, init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
-        call nml_read(filename,group,"Ki",                       c%Ki,                      init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"Lv",                       c%Lv,                      init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"cp_air",                   c%cp_air,                  init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"latent_heat_flux_ratio",   c%latent_heat_flux_ratio,  init=init_pars,defaults_file=def_file,defaults_group=def_const)
@@ -1053,6 +1058,7 @@ contains
         call nml_read(filename,group,"D_sh",                     c%D_sh,                    init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"seb_scheme",               seb_scheme,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"turbulent_flux_scheme",    turbulent_flux_scheme,     init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"z0m_snow",                 c%z0m_snow,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"z0m_ice",                  c%z0m_ice,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"zm_to_zh",                 c%zm_to_zh,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
@@ -1061,13 +1067,29 @@ contains
         call nml_read(filename,group,"R_dry",                    c%R_dry,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"l_neutral",                c%l_neutral,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"l_dew",                    c%l_dew,                   init=init_pars,defaults_file=def_file,defaults_group=def_const)
-        call nml_read(filename,group,"semix_qsat",               semix_qsat,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"climberx_qsat",            climberx_qsat,             init=init_pars,defaults_file=def_file,defaults_group=def_const)
+
+        call nml_read(filename,group,"semix_karman",             c%semix_karman,            init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_surface_height",     c%semix_surface_height,    init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_z0m_snow",           c%semix_z0m_snow,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_z0m_ice",            c%semix_z0m_ice,           init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_zm_to_zh",           c%semix_zm_to_zh,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_sensible_exchange_factor", c%semix_sensible_exchange_factor, init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_stable_coefficient", c%semix_stable_coefficient, init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"semix_latent_exchange_factor",   c%semix_latent_exchange_factor,   init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"alpha_dry",                c%alpha_dry,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"alpha_wet",                c%alpha_wet,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"alpha_ice",                c%alpha_ice,               init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"max_lwc_albedo",           c%max_lwc_albedo,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"albedo_scheme",            albedo_scheme,             init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"aging_cold_timescale_days",   c%aging_cold_timescale_days,   init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"aging_melting_timescale_days",c%aging_melting_timescale_days,init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"aging_snowfall_ref",       c%aging_snowfall_ref,      init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"swe_crit_albedo",          c%swe_crit_albedo,         init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"alpha_land",               c%alpha_land,              init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"c_fsnow",                  c%c_fsnow,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"c_fsnow_orog",             c%c_fsnow_orog,            init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"frac_vu",                  c%frac_vu,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"alb_snow_vis_new",         c%alb_snow_vis_new,        init=init_pars,defaults_file=def_file,defaults_group=def_const)
@@ -1089,6 +1111,13 @@ contains
         call nml_read(filename,group,"sigma_orog_crit",          c%sigma_orog_crit,         init=init_pars,defaults_file=def_file,defaults_group=def_const)
 
         call nml_read(filename,group,"eps_air",                  c%eps_air,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"longwave_scheme",          longwave_scheme,           init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"lw_emissivity_base",       c%lw_emissivity_base,      init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"lw_emissivity_temperature_slope",    c%lw_emissivity_temperature_slope,    init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"lw_emissivity_cloud_slope",          c%lw_emissivity_cloud_slope,          init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"lw_clear_sky_transmissivity",        c%lw_clear_sky_transmissivity,        init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"lw_clear_sky_transmissivity_per_km", c%lw_clear_sky_transmissivity_per_km, init=init_pars,defaults_file=def_file,defaults_group=def_const)
+        call nml_read(filename,group,"lw_night_cloud_fraction",            c%lw_night_cloud_fraction,            init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"eps_snow",                 c%eps_snow,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"eps_ice",                  c%eps_ice,                 init=init_pars,defaults_file=def_file,defaults_group=def_const)
         call nml_read(filename,group,"sigma_sb",                 c%sigma_sb,                init=init_pars,defaults_file=def_file,defaults_group=def_const)
@@ -1101,16 +1130,23 @@ contains
         call chion_check_enum(group,"albedo_scheme",            albedo_scheme,            CHION_ALBEDO_CHOICES)
         call chion_check_enum(group,"semix_snow_albedo",        semix_snow_albedo,        CHION_SEMIX_SNOW_ALB_CHOICES)
         call chion_check_enum(group,"seb_scheme",               seb_scheme,               CHION_SEB_CHOICES)
-        call chion_check_enum(group,"semix_qsat",               semix_qsat,               CHION_SEMIX_QSAT_CHOICES)
+        call chion_check_enum(group,"longwave_scheme",          longwave_scheme,          CHION_LONGWAVE_CHOICES)
+        call chion_check_enum(group,"turbulent_flux_scheme",    turbulent_flux_scheme,    CHION_TURB_CHOICES)
+        call chion_check_enum(group,"climberx_qsat",            climberx_qsat,            CHION_CLIMBERX_QSAT_CHOICES)
         call chion_check_enum(group,"fresh_snow_density_scheme",fresh_snow_density_scheme,CHION_RHOS_CHOICES)
         call chion_check_enum(group,"low_density_densification",low_density_densification,CHION_DENSIFY_CHOICES)
 
         c%albedo_scheme             = chion_albedo_scheme_flag(albedo_scheme)
         c%semix_snow_albedo         = chion_semix_snow_albedo_flag(semix_snow_albedo)
         c%seb_scheme                = chion_seb_scheme_flag(seb_scheme)
-        c%semix_qsat                = chion_semix_qsat_flag(semix_qsat)
+        c%longwave_scheme           = chion_longwave_scheme_flag(longwave_scheme)
+        c%turbulent_flux_scheme     = chion_turbulent_flux_scheme_flag(turbulent_flux_scheme)
+        c%climberx_qsat             = chion_climberx_qsat_flag(climberx_qsat)
         c%fresh_snow_density_scheme = chion_fresh_snow_density_scheme_flag(fresh_snow_density_scheme)
         c%low_density_densification = chion_densify_scheme_flag(low_density_densification)
+
+        call chion_const_derive(c)
+        call chion_const_validate(c)
 
         return
 
@@ -1127,7 +1163,7 @@ contains
         !   ci              cp_ice
         !   cw              cp_w
         !   Lm              L_ice
-        !   grav            g            (SEMIX SEB only)
+        !   grav            g            (CLIMBER-X turbulence only)
         !   T0              T0
         !
         ! Densification's DENSIFY_GRAVITY is deliberately NOT taken from g: it
@@ -1182,12 +1218,20 @@ contains
         call nml_read(filename,group,"density_init",    par%density_init,    init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"temperature_init",par%temperature_init,init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
 
+        call nml_read(filename,group,"ice_substrate_layers",       par%ice_substrate_layers,       init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+        call nml_read(filename,group,"ice_substrate_top_thickness",par%ice_substrate_top_thickness,init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+
+        call nml_read(filename,group,"near_surface_layer_max_thicknesses",par%near_surface_layer_max_thicknesses,init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+
         call nml_read(filename,group,"diurnal_shortwave_substeps",            par%diurnal_shortwave_substeps,            init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_shortwave_threshold",           par%diurnal_shortwave_threshold,           init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_shortwave_max_substeps",        par%diurnal_shortwave_max_substeps,        init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_shortwave_min_air_temperature", par%diurnal_shortwave_min_air_temperature, init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_temperature_cycle",             par%diurnal_temperature_cycle,             init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"diurnal_temperature_amplitude",         par%diurnal_temperature_amplitude,         init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+        call nml_read(filename,group,"diurnal_temperature_amplitude_gradient",         par%diurnal_temperature_amplitude_gradient,         init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+        call nml_read(filename,group,"diurnal_temperature_amplitude_reference_height", par%diurnal_temperature_amplitude_reference_height, init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+        call nml_read(filename,group,"diurnal_temperature_amplitude_max",              par%diurnal_temperature_amplitude_max,              init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
 
         call bessi_par_validate(par)
 
@@ -1199,9 +1243,9 @@ contains
         ! The &pdd block. One nml_read per parameter, in the declaration order
         ! of pdd_par_class (snow_pdd.f90:56-66).
         !
-        ! pdd_method arrives as a string and replaces Chion.jl's implicit
-        ! "27 <= dt_days <= 32" monthly trigger. See the defaults file for why
-        ! the default is "pism" and not "simple".
+        ! pdd_method arrives as a string and replaces Chion.jl's former
+        ! implicit "27 <= dt_days <= 32" monthly trigger. The default is
+        ! "simple", as in Chion.jl; see the defaults file.
         !
         ! Belongs in snow_pdd.f90; see the note on bessi_par_load.
 

@@ -13,7 +13,7 @@
 !
 ! chion uses seven of these:
 !     rho_ice -> rho_i    rho_w  -> rho_w    cp_ice -> ci
-!     cp_w    -> cw       L_ice  -> Lm       g      -> grav (SEMIX SEB)
+!     cp_w    -> cw       L_ice  -> Lm       g      -> grav (CLIMBER-X turbulence)
 !     T0      -> T0
 ! Their values here are Chion.jl's (src/constants.jl:173-200), NOT the
 ! fesm-utils Earth reference set, so that standalone chion stays
@@ -27,7 +27,7 @@
 
 &Earth
 
-    g            = 9.81         ! [m s-2]      Gravitational acceleration (SEMIX SEB)
+    g            = 9.81         ! [m s-2]      Gravitational acceleration (CLIMBER-X turbulence)
     T0           = 273.15       ! [K]          Reference freezing temperature
 
     rho_ice      =  917.0       ! [kg m-3]     Density of ice           (Chion.jl; Earth ref 910)

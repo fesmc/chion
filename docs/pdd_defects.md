@@ -14,13 +14,18 @@ fixed upstream.
 > becomes superimposed ice and leaves the melt-able reservoir, and the reservoir is capped at
 > `H_snow_max`. See `docs/porting_notes.md` D23 and Chion.jl issue #19.
 >
-> Every defect below still describes **Chion.jl** accurately — that is what the file is for.
-> The per-defect *chion status* is in the summary table and repeated at the head of each
-> resolved section. All twelve remain open upstream.
+> Every defect below describes **Chion.jl as it was at the port base** (`a9ec154`). Chion.jl
+> `ce6a68d` (on `dev_nils`) rewrote its PDD to chion's D23 budget, with `H_snow_max`, an
+> explicit `pdd_method` and `erfc`; the *upstream* column records what that closed, checked
+> against `src/processes/pdd.jl` at `main` `9ec6cc7` (the current reference; `pdd.jl` unchanged
+since `12407a3`). Only D9 and D11 remain open upstream. The
+> per-defect *chion status* is in the summary table and repeated at the head of each resolved
+> section.
 >
 > One consequence worth stating up front: the identity D2 shows cannot hold,
 > `d(smb_ice) + d(runoff) + d(snowpack_swe) == snowfall + rainfall`, **now holds exactly in
-> chion** and is the WP16 gate for PDD.
+> chion** and is gated in WP16, together with field-by-field agreement with Chion.jl for both
+> `pdd_method`s.
 
 Sources compared, line numbers as of `Chion.jl@main`:
 
@@ -37,20 +42,21 @@ Summary:
 
 | id | severity | one line | upstream | chion status |
 |---|---|---|---|---|
-| D1 | A | refreezing has no cold-content and no capacity limit | [#12](https://github.com/fesmc/Chion.jl/issues/12) | **fixed** — capacity limited by `H_snow` (D23) |
-| D2 | A | `smb_ice` is credited with the snowpack, so it is not "net mass forcing to the ice sheet" | [#19](https://github.com/fesmc/Chion.jl/issues/19) | **fixed** — `smb_ice` is ice-facing (D23) |
-| D3 | A | `snowpack_swe` is uncapped, un-aged, un-densified and never becomes ice | [#14](https://github.com/fesmc/Chion.jl/issues/14) | **fixed** — capped at `H_snow_max`, excess → ice (D23) |
-| D4 | A | PDD flavour is selected implicitly by timestep length | — | fixed — explicit `pdd_method` (P1) |
-| D5 | B | two entry points apply different physics | [#17](https://github.com/fesmc/Chion.jl/issues/17) | fixed — one kernel (P4) |
-| D6 | A | refrozen mass re-enters the melt-able snow reservoir; the reservoir is never exhausted | [#13](https://github.com/fesmc/Chion.jl/issues/13) | **fixed** — refrozen mass becomes ice (D23) |
-| D7 | B | the six-line core exists in three copies that have already diverged | [#17](https://github.com/fesmc/Chion.jl/issues/17) | fixed — one kernel (P4) |
-| D8 | B | the active-column mask is ignored, and the GPU call sites are `MethodError`s | [#11](https://github.com/fesmc/Chion.jl/issues/11) | fixed — mask honoured (P5) |
-| D9 | C | no `melt` / `refreezing` diagnostics, unlike `BESSIState` | — | partly — optional per-step diagnostics on the kernel (P8) |
-| D10 | C | `273.15` and `86400.0` hard-coded rather than taken from the constants struct | [#17](https://github.com/fesmc/Chion.jl/issues/17) | fixed — from `chion_const_class` (P3) |
-| D11 | C | one global `temperature_sigma`; smbpal uses three, by surface type | [#17](https://github.com/fesmc/Chion.jl/issues/17) | open — still one `sigma` |
-| D12 | C | Abramowitz–Stegun `_normal_cdf` polynomial instead of `erfc` | — | fixed — `erfc` form (P2) |
+| D1 | A | refreezing has no cold-content and no capacity limit | [#12](https://github.com/fesmc/Chion.jl/issues/12); capacity limit **closed** in `ce6a68d` (no cold content, as chion) | **fixed** — capacity limited by `H_snow` (D23) |
+| D2 | A | `smb_ice` is credited with the snowpack, so it is not "net mass forcing to the ice sheet" | [#19](https://github.com/fesmc/Chion.jl/issues/19); **closed** in `ce6a68d` | **fixed** — `smb_ice` is ice-facing (D23) |
+| D3 | A | `snowpack_swe` is uncapped, un-aged, un-densified and never becomes ice | [#14](https://github.com/fesmc/Chion.jl/issues/14); **closed** in `ce6a68d` (`H_snow_max`) | **fixed** — capped at `H_snow_max`, excess → ice (D23) |
+| D4 | A | PDD flavour is selected implicitly by timestep length | **closed** in `ce6a68d` (`pdd_method`, default `:simple`) | fixed — explicit `pdd_method` (P1), default `simple` |
+| D5 | B | two entry points apply different physics | [#17](https://github.com/fesmc/Chion.jl/issues/17); **closed** — both entry points call `_pdd_step_arrays!` | fixed — one kernel (P4) |
+| D6 | A | refrozen mass re-enters the melt-able snow reservoir; the reservoir is never exhausted | [#13](https://github.com/fesmc/Chion.jl/issues/13); **closed** in `ce6a68d` | **fixed** — refrozen mass becomes ice (D23) |
+| D7 | B | the six-line core exists in three copies that have already diverged | [#17](https://github.com/fesmc/Chion.jl/issues/17); **closed** — one `_pdd_apply_column!` | fixed — one kernel (P4) |
+| D8 | B | the active-column mask is ignored, and the GPU call sites are `MethodError`s | [#11](https://github.com/fesmc/Chion.jl/issues/11); **closed** — runtime passes active indices (`6fca5d7`), KernelAbstractions kernel | fixed — mask honoured (P5) |
+| D9 | C | no `melt` / `refreezing` diagnostics, unlike `BESSIState` | open — `PDDState` still has none | partly — optional per-step diagnostics on the kernel (P8) |
+| D10 | C | `273.15` and `86400.0` hard-coded rather than taken from the constants struct | [#17](https://github.com/fesmc/Chion.jl/issues/17); **closed** — `c.T0`, `c.seconds_per_day` | fixed — from `chion_const_class` (P3) |
+| D11 | C | one global `temperature_sigma`; smbpal uses three, by surface type | [#17](https://github.com/fesmc/Chion.jl/issues/17); open | open — still one `sigma` |
+| D12 | C | Abramowitz–Stegun `_normal_cdf` polynomial instead of `erfc` | **closed** in `ce6a68d` | fixed — `erfc` form (P2) |
 
-All twelve remain open **upstream**; the status column is chion's port only.
+Upstream status as of Chion.jl `main` `9ec6cc7` (`pdd.jl` unchanged since `12407a3`).
+Since chion and Chion.jl now run the same PDD, validation/ gates them field by field (WP3).
 
 One defect was also found **in smbpal**, running the other way — see S1 at the end.
 
@@ -58,7 +64,7 @@ One defect was also found **in smbpal**, running the other way — see S1 at the
 
 ## D1 — `refreezing_fraction` has no cold-content and no capacity limit
 
-> **FIXED IN CHION** (`docs/porting_notes.md` D23): refreezing is now `min(refreezing_fraction*H_snow, snow_melt)`, so capacity scales with the snow actually left after melt. Still open upstream. The analysis below describes Chion.jl.
+> **FIXED IN CHION** (`docs/porting_notes.md` D23): refreezing is now `min(refreezing_fraction*H_snow, snow_melt)`, so capacity scales with the snow actually left after melt. Closed upstream in `ce6a68d` (the same budget). The analysis below describes Chion.jl at `a9ec154`.
 
 **Where.** `pdd.jl:52`, `:232`, `:274`:
 
@@ -123,7 +129,7 @@ models field for field. It is not the recommended physics; do not carry it into 
 
 ## D2 — refrozen mass in `snowpack_swe` **and** `smb_ice` **and** `runoff`
 
-> **FIXED IN CHION** (`docs/porting_notes.md` D23): `smb_ice` accumulates `snow_to_ice - ice_melt` only, and the full three-reservoir closure holds exactly. Still open upstream. The analysis below describes Chion.jl.
+> **FIXED IN CHION** (`docs/porting_notes.md` D23): `smb_ice` accumulates `snow_to_ice - ice_melt` only, and the full three-reservoir closure holds exactly. Closed upstream in `ce6a68d` (the same budget). The analysis below describes Chion.jl at `a9ec154`.
 
 This is PLAN §3.2's "check this is not double-counting". The answer is subtler than
 double-counting, and worse in practice.
@@ -219,7 +225,7 @@ and the exact size of the violation of the one that does not.
 
 ## D3 — `snowpack_swe` is uncapped, un-aged and un-densified
 
-> **FIXED IN CHION** (`docs/porting_notes.md` D23): the reservoir is capped at `H_snow_max` (default 5000 kg m-2) and the excess is converted to ice, so the ablation buffer no longer depends on spin-up length. Still open upstream. The analysis below describes Chion.jl.
+> **FIXED IN CHION** (`docs/porting_notes.md` D23): the reservoir is capped at `H_snow_max` (default 5000 kg m-2) and the excess is converted to ice, so the ablation buffer no longer depends on spin-up length. Closed upstream in `ce6a68d` (the same budget). The analysis below describes Chion.jl at `a9ec154`.
 
 **Where.** Nothing anywhere in `pdd.jl` bounds `snowpack_swe`, converts it to ice, or ages it.
 Its only sink is melt.
@@ -376,7 +382,7 @@ exist only for GPU dispatch is explicitly allowed by PLAN §4.1.
 
 ## D6 — refrozen mass re-enters the melt-able snow reservoir
 
-> **FIXED IN CHION** (`docs/porting_notes.md` D23): refrozen mass becomes superimposed ice and leaves the reservoir, so a snowpack under sustained melt is exhausted rather than decaying as `0.4^n`. Still open upstream. The analysis below describes Chion.jl.
+> **FIXED IN CHION** (`docs/porting_notes.md` D23): refrozen mass becomes superimposed ice and leaves the reservoir, so a snowpack under sustained melt is exhausted rather than decaying as `0.4^n`. Closed upstream in `ce6a68d` (the same budget). The analysis below describes Chion.jl at `a9ec154`.
 
 **Where.** `pdd.jl:54`: `snowpack_swe = available_snow - snow_melt + refrozen`.
 
@@ -493,9 +499,9 @@ a PDD scheme most obviously produces, and smbpal returns both (`calc_ablation_pd
 `melt` and `refrz`). Recommend adding `melt` and `refreezing` accumulators — they are two
 lines in the core and make PDD and BESSI output directly comparable, which WP16 needs.
 
-*Port status:* not added; adding state fields is a design change, not a cleanup. chion's test
-recovers `ice_melt` as `d(snowpack_swe) - d(smb_ice)`, which works only because of D2 and
-would stop working once D2 is fixed — an argument for D9.
+*Port status:* no state fields added; the kernel returns optional per-step diagnostics
+instead (P8), which `tests/test_pdd.f90` uses since D2 made `d(snowpack_swe) - d(smb_ice)`
+stop being the ice melt.
 
 ---
 
@@ -615,9 +621,9 @@ only `src/physics/snow_pdd.f90`, `tests/test_pdd.f90` and this file).
 
 | id | deviation | authority | impact |
 |---|---|---|---|
-| P1 | `pdd_method = "simple" \| "pism"` replaces the implicit `27 <= dt_days <= 32` trigger | PLAN §4.1 "fix outright bugs"; explicitly requested in the WP9 brief | Same physics for daily and 27–32-day forcing with the default `simple`; different (and better) for every other step length. Set `pism` in WP13 for production. See D4. |
+| P1 | `pdd_method = "simple" \| "pism"` replaces the implicit `27 <= dt_days <= 32` trigger | PLAN §4.1 "fix outright bugs"; explicitly requested in the WP9 brief | Same physics for daily and 27–32-day forcing with the default `simple`; different (and better) for every other step length. chion's default is `simple`, as Chion.jl's (PLAN_dev_nils WP3); set `pism` for monthly steps. See D4. |
 | P2 | `0.5*erfc(-z/sqrt(2))` replaces the Abramowitz–Stegun polynomial | PLAN §4.1, first bullet, names this case | ≤ 7.45e-8 absolute in Φ; below `sp` round-off. See D12. |
-| P3 | `T0` and `seconds_per_day` come from `chion_const_class` | PLAN §4.1 "promote magic numbers"; requested in the brief | None at default constants. See D10. |
+| P3 | `T0` from `chion_const_class`, the day length from fesm-utils `phys_constants:sec_day` (`porting_notes.md` D28) | PLAN §4.1 "promote magic numbers"; requested in the brief | None at default constants. See D10. |
 | P4 | one kernel + one wrapper + one driver, instead of six overlapping entry points | PLAN §4.1 "remove the duplicate/inconsistent entry points that exist only for GPU dispatch" | Removes the D5/D7 ambiguity. |
 | P5 | `pdd_step` honours `active_idx` | PLAN §4.1 "fix outright bugs, provided they are reported back" — reported as D8 | Deactivated columns no longer advance. Differs from Chion.jl, which advances them. WP16 must compare with all columns active. |
 | P6 | an unrecognized `pdd_method` stops with a message rather than falling through | consistency with `chion_densify_scheme_flag`, `docs/porting_notes.md` D5 | Behaviour differs only for input that was already invalid. |
@@ -651,8 +657,8 @@ Consequences:
 
 - the identity D2 shows cannot hold now **does**:
   `snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)`, measured at 2.3e-15
-  relative in the `dp` build and 3.8e-07 in `sp`. It is the WP16 gate for PDD, which is no
-  longer gated against Chion.jl at all — the two implement different budgets on purpose.
+  relative in the `dp` build and 3.8e-07 in `sp`. It is a WP16 gate for PDD; since Chion.jl
+  adopted the same budget (`ce6a68d`) PDD is gated against Chion.jl field by field too.
 - `chion_get_smb`'s PDD special case (`smb_ice - snowpack_swe`, `porting_notes.md` D13) is
   deleted; all three models now share one ice-facing definition.
 - PDD can report a **positive** ice-facing flux in the accumulation zone. Under the previous

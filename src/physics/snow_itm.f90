@@ -2,9 +2,7 @@ module snow_itm
     ! Insolation-Temperature-Melt (ITM) snowpack model.
     !
     ! =====================================================================
-    ! SOURCE OF TRUTH IS *NOT* Chion.jl. ITM does not exist there --
-    ! build_model(:itm,...) deliberately errors (Chion.jl
-    ! test/test_case_api.jl:538). This module is a port of
+    ! SOURCE OF TRUTH IS *NOT* Chion.jl. This module is a port of
     !     ~/models/smbpal/src/smb_itm.f90
     ! (equivalently ~/models/yelmox/libs/smbpal/smb_itm.f90), which is the
     ! scheme actually in production use in yelmox. See docs/PLAN.md WP12.
@@ -15,6 +13,8 @@ module snow_itm
     ! the smbpal originals. Acceptance for this WP is numerical equivalence
     ! with smbpal (tests/test_itm.f90), because chion is to replace smbpal
     ! in yelmox and that equivalence is the evidence the migration is safe.
+    ! Chion.jl's ITMModel (29eb867) was later ported from this module;
+    ! validation/ also gates the two against each other (legacy_chion=1, D27).
     ! =====================================================================
     !
     ! ---------------------------------------------------------------------
@@ -59,18 +59,13 @@ module snow_itm
     ! remains in smbpal's units and is directly comparable.
 
     use chion_defs, only : wp, wp_acc, io_unit_err, chion_step_forcing_class, &
-                           chion_const_class
+                           chion_const_class, ITM_FIRN_DAYS_YEAR
     use nml,        only : nml_read
-    use phys_constants, only : sec_year_360d, sec_day
+    use phys_constants, only : sec_day
 
     implicit none
 
     private
-
-    ! Days per year of the calendar firn_fac is calibrated on: smbpal's annual
-    ! totals are on a 360-day year. A property of the calibration, not of the
-    ! host's calendar (fesm-utils phys_constants names the convention).
-    real(wp), parameter :: days_year_firn = real(sec_year_360d/sec_day, wp)
 
     ! ITM's physical constants come from chion_const_class, NOT from private
     ! copies. smbpal carries its own (smb_itm.f90:12-14), and this module used
@@ -558,12 +553,13 @@ contains
         ! the ANNUAL MEAN t2m and melt_net (smbpal.f90:457); chion applies it
         ! per step to the step values. firn_fac is calibrated against smbpal's
         ! annual net melt [mm w.e. yr-1] on its 360-day year, so the step rate
-        ! [mm w.e. d-1] is scaled to that annual rate first (days_year_firn).
+        ! [mm w.e. d-1] is scaled to that annual rate first (ITM_FIRN_DAYS_YEAR,
+        ! chion_defs; 1 under legacy_chion, as in Chion.jl -- D27).
         ! Even so the two agree only where neither max(0,.) nor the min(T0,.)
         ! cap is active: both are nonlinear, so a per-step mean is not the same
         ! as a function of the means. Recorded as a deviation; the host can
         ! recover smbpal's exact behaviour by averaging tsrf's inputs itself.
-        itm%now%tsrf(icol) = calc_temp_surf(cn,t2m,H_ice,melt_net*days_year_firn,itm%par%firn_fac)
+        itm%now%tsrf(icol) = calc_temp_surf(cn,t2m,H_ice,melt_net*ITM_FIRN_DAYS_YEAR,itm%par%firn_fac)
 
         ! Cumulative accumulators, in wp_acc. Rates x dt, so these are the
         ! integrated quantities in [mm w.e.].

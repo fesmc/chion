@@ -1,6 +1,7 @@
 program test_seb
     ! Acceptance test for snow_seb_semix: the CLIMBER-X SEMIX aerodynamic
-    ! turbulent exchange (docs/semix_port_scope.md, rung 2).
+    ! turbulent exchange (turbulent_flux_scheme = "climberx") and its
+    ! longwave (seb_scheme = "semix"); docs/semix_port_scope.md, rung 2.
     !
     ! PRECISION: the default build is wp = sp (single). Hand-computed values
     ! are therefore checked to ~1e-5 relative, and the two num/denom identities
@@ -11,7 +12,7 @@ program test_seb
     !   * semix_resistance against hand-computed values, in all three
     !     stability regimes plus the dead-calm guard
     !   * semix_air_density against the ideal gas law
-    !   * both saturation-humidity variants (c%semix_qsat) against
+    !   * both saturation-humidity variants (c%climberx_qsat) against
     !     hand-computed values, and their derivatives against finite
     !     differences of the humidity itself
     !   * the exchange coefficients f_sh / f_lh, the no-humidity case and the
@@ -27,10 +28,17 @@ program test_seb
 
     use chion_defs,   only : wp, chion_const_class, chion_const_init, &
                              DEF_SEA_LEVEL_AIR_PRESSURE, &
-                             SEMIX_QSAT_SEMIX, SEMIX_QSAT_BESSI, &
+                             CLIMBERX_QSAT_CLIMBERX, CLIMBERX_QSAT_BESSI, &
                              CHION_SEB_BESSI, CHION_SEB_SEMIX, &
-                             chion_seb_scheme_flag, chion_semix_qsat_flag
+                             CHION_TURB_BESSI, CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
+                             SEMIX_SNOW_ALBEDO_WW, &
+                             chion_seb_scheme_flag, chion_climberx_qsat_flag, &
+                             chion_turbulent_flux_scheme_flag, CHION_TURB_SEMIX, &
+                             TURB_SEMIX_R_AIR_LITERAL, TURB_SEMIX_ICE_SUBLIMATION, &
+                             chion_semix_snow_albedo_flag
     use snow_seb_semix
+    use snow_turbulence
+    use snow_vapor, only : ice_saturation_vapor_pressure
 
     implicit none
 
@@ -61,16 +69,27 @@ program test_seb
     ! === Scheme flags ====================================================
     write(*,"(a)") "--- scheme flags ---"
 
-    call check("seb_scheme default is bessi", c%seb_scheme .eq. CHION_SEB_BESSI, nfail)
-    call check("semix_qsat default is semix", c%semix_qsat .eq. SEMIX_QSAT_SEMIX, nfail)
+    call check("seb_scheme default is semix", c%seb_scheme .eq. CHION_SEB_SEMIX, nfail)
+    call check("turbulent_flux_scheme default is semix", &
+               c%turbulent_flux_scheme .eq. CHION_TURB_SEMIX, nfail)
+    call check("climberx_qsat default is climberx", &
+               c%climberx_qsat .eq. CLIMBERX_QSAT_CLIMBERX, nfail)
     call check("flag('bessi') = CHION_SEB_BESSI", &
                chion_seb_scheme_flag("bessi") .eq. CHION_SEB_BESSI, nfail)
     call check("flag('semix') = CHION_SEB_SEMIX", &
                chion_seb_scheme_flag("semix") .eq. CHION_SEB_SEMIX, nfail)
-    call check("qsat flag('chion') = SEMIX_QSAT_BESSI", &
-               chion_semix_qsat_flag("chion") .eq. SEMIX_QSAT_BESSI, nfail)
-    call check("qsat flag('climberx') = SEMIX_QSAT_SEMIX", &
-               chion_semix_qsat_flag("climberx") .eq. SEMIX_QSAT_SEMIX, nfail)
+    call check("turbulence flag('bessi') = CHION_TURB_BESSI", &
+               chion_turbulent_flux_scheme_flag("bessi") .eq. CHION_TURB_BESSI, nfail)
+    call check("turbulence flag('semix') = CHION_TURB_SEMIX", &
+               chion_turbulent_flux_scheme_flag("semix") .eq. CHION_TURB_SEMIX, nfail)
+    call check("turbulence flag('climberx') = CHION_TURB_CLIMBERX", &
+               chion_turbulent_flux_scheme_flag("climberx") .eq. CHION_TURB_CLIMBERX, nfail)
+    call check("qsat flag('bessi') = CLIMBERX_QSAT_BESSI", &
+               chion_climberx_qsat_flag("bessi") .eq. CLIMBERX_QSAT_BESSI, nfail)
+    call check("qsat flag('climberx') = CLIMBERX_QSAT_CLIMBERX", &
+               chion_climberx_qsat_flag("climberx") .eq. CLIMBERX_QSAT_CLIMBERX, nfail)
+    call check("snow albedo flag('warren_wiscombe') = SEMIX_SNOW_ALBEDO_WW", &
+               chion_semix_snow_albedo_flag("warren_wiscombe") .eq. SEMIX_SNOW_ALBEDO_WW, nfail)
 
     ! === Aerodynamic resistance ==========================================
     ! Hand-computed for h_snow = 1 m, wind = 5 m s-1, z0m_ice = 0.002,
@@ -131,13 +150,13 @@ program test_seb
     write(*,*)
     write(*,"(a)") "--- semix_q_sat / semix_dqsat_dT ---"
 
-    c%semix_qsat = SEMIX_QSAT_SEMIX
+    c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
     call check_close("q_sat semix at T0", semix_q_sat(c%T0,P0,c), &
                      3.7520118431e-3_wp, 1.0e-6_wp, nfail)
     call check_close("q_sat semix at 263.15 K", semix_q_sat(263.15_wp,P0,c), &
                      1.5940374185e-3_wp, 1.0e-6_wp, nfail)
 
-    c%semix_qsat = SEMIX_QSAT_BESSI
+    c%climberx_qsat = CLIMBERX_QSAT_BESSI
     call check_close("q_sat bessi at T0", semix_q_sat(c%T0,P0,c), &
                      3.7519506538e-3_wp, 1.0e-6_wp, nfail)
     call check_close("q_sat bessi at 263.15 K", semix_q_sat(263.15_wp,P0,c), &
@@ -145,9 +164,9 @@ program test_seb
 
     ! The two variants must stay close: the option exists to test sensitivity,
     ! not to change the answer.
-    c%semix_qsat = SEMIX_QSAT_SEMIX
+    c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
     q_a = semix_q_sat(263.15_wp,P0,c)
-    c%semix_qsat = SEMIX_QSAT_BESSI
+    c%climberx_qsat = CLIMBERX_QSAT_BESSI
     call check("the two q_sat variants agree within 1%", &
                abs(semix_q_sat(263.15_wp,P0,c) - q_a) .lt. 0.01_wp*q_a, nfail)
 
@@ -161,12 +180,12 @@ program test_seb
     ! 273.86-offset e_sat_i while q_sat_i uses the T+0.71 approximation. That
     ! ~0.2% mismatch is CLIMBER-X's, reproduced deliberately, and the looser
     ! tolerance below is what pins it.
-    c%semix_qsat = SEMIX_QSAT_BESSI
+    c%climberx_qsat = CLIMBERX_QSAT_BESSI
     dq_fd = (semix_q_sat(263.65_wp,P0,c) - semix_q_sat(262.65_wp,P0,c))/1.0_wp
     call check_close("dq/dT bessi matches a central difference", &
                      semix_dqsat_dT(263.15_wp,P0,c), dq_fd, 5.0e-3_wp, nfail)
 
-    c%semix_qsat = SEMIX_QSAT_SEMIX
+    c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
     dq_fd = (semix_q_sat(263.65_wp,P0,c) - semix_q_sat(262.65_wp,P0,c))/1.0_wp
     call check_close("dq/dT semix matches a central difference to 1%", &
                      semix_dqsat_dT(263.15_wp,P0,c), dq_fd, 1.0e-2_wp, nfail)
@@ -324,6 +343,9 @@ program test_seb
                      x%f_sh*T_AIR - x%f_sh*T_COLD, &
                      semix_sensible_heat_flux(x,T_AIR,T_COLD), 1.0e-4_wp, nfail)
 
+    ! === Chion.jl semix turbulence (turbulent_flux_scheme = "semix") =====
+    call test_turb_semix(nfail)
+
     ! === Summary =========================================================
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -337,6 +359,111 @@ program test_seb
     if (nfail .gt. 0) stop 1
 
 contains
+
+    subroutine test_turb_semix(nfail)
+        ! snow_turbulence: Chion.jl energy_flux.jl _semix_aerodynamic_resistance
+        ! and _semix_turbulent_flux_linearized (03bb445). Port of Chion.jl's
+        ! test_case_api.jl "SEMIX aerodynamic resistance follows atmospheric
+        ! stability", plus hand-computed resistances (z = 10 m, z0m = 0.001 m,
+        ! z0h = 1e-4 m, k = 0.4, g = 9.80665, wind 5 m s-1):
+        !   C_hn = 0.16/(ln(1e4) ln(1e5)) = 1.5088935761e-3
+        !   neutral  (T_s = T_a = 268)      r_a = 1/(5 C_hn)        = 132.54745276
+        !   stable   (T_s 268, T_a 273)     Ri = 0.0718435897, /(1+40 Ri)
+        !                                   r_a                     = 513.45484547
+        !   unstable (T_s 273, T_a 268)     Ri = -0.0731839552, *sqrt(1-16 Ri)
+        !                                   r_a                     = 89.959523688
+        !   stable, b = 2                   r_a                     = 151.59282240
+        !   calm (wind floored at 0.1)      r_a                     = 6627.3726381
+        !   bare ice (z0m = 0.01)           r_a                     = 79.528471657
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        type(chion_const_class)    :: c
+        type(turb_semix_lin_class) :: tx
+        real(wp) :: rho, R_air, q_a, q_s, L
+
+        write(*,*)
+        write(*,"(a)") "--- Chion.jl semix turbulence (snow_turbulence) ---"
+
+        call chion_const_init(c)
+
+        call check_close("r_a neutral", &
+                         turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
+                         132.54745276_wp, 1.0e-5_wp, nfail)
+        call check_close("r_a stable (b = 40)", &
+                         turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
+                         513.45484547_wp, 1.0e-5_wp, nfail)
+        call check_close("r_a unstable", &
+                         turb_semix_resistance(c,273.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
+                         89.959523688_wp, 1.0e-5_wp, nfail)
+        call check_close("r_a calm: wind floored at 0.1", &
+                         turb_semix_resistance(c,268.0_wp,268.0_wp,0.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
+                         6627.3726381_wp, 1.0e-5_wp, nfail)
+        call check_close("r_a over bare ice (z0m_ice)", &
+                         turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.TRUE.)), &
+                         79.528471657_wp, 1.0e-5_wp, nfail)
+        call check("stable > neutral > unstable (Julia's stability test)", &
+                   turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)) .gt. &
+                   turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)) .and. &
+                   turb_semix_resistance(c,268.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)) .gt. &
+                   turb_semix_resistance(c,273.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), nfail)
+        c%semix_stable_coefficient = 2.0_wp
+        call check_close("r_a stable, b = 2: weaker suppression", &
+                         turb_semix_resistance(c,268.0_wp,273.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
+                         151.59282240_wp, 1.0e-5_wp, nfail)
+        c%semix_stable_coefficient = 40.0_wp
+
+        ! Air density: c%R_dry, or Julia's 287.05 under legacy_chion (D38).
+        R_air = c%R_dry
+        if (TURB_SEMIX_R_AIR_LITERAL) R_air = 287.05_wp
+        rho = turb_semix_air_density(c,268.0_wp,80000.0_wp)
+        call check_close("rho_a = p/(R T_a)", rho, 80000.0_wp/(R_air*268.0_wp), 1.0e-6_wp, nfail)
+
+        ! Latent heat: phase's on snow; on bare ice Lv+Lm (D35), or Julia's
+        ! phase rule under legacy_chion.
+        call check_close("L on snow below T0 = Lv+Lm", &
+                         turb_semix_latent_heat(c,263.0_wp,.FALSE.), c%Lv + c%Lm, 1.0e-6_wp, nfail)
+        call check_close("L on snow at T0 = Lv", &
+                         turb_semix_latent_heat(c,c%T0,.FALSE.), c%Lv, 1.0e-6_wp, nfail)
+        L = c%Lv
+        if (TURB_SEMIX_ICE_SUBLIMATION) L = c%Lv + c%Lm
+        call check_close("L on bare ice at T0 (D35)", &
+                         turb_semix_latent_heat(c,c%T0,.TRUE.), L, 1.0e-6_wp, nfail)
+        call check_close("neutral exchange over snow = k^2/(ln(z/z0m) ln(z/z0h))", &
+                         turb_semix_neutral_exchange(c,.FALSE.), &
+                         0.16_wp/(log(10.0_wp/0.001_wp)*log(10.0_wp/0.0001_wp)), 1.0e-6_wp, nfail)
+        call check_close("neutral exchange over ice (z0m_ice)", &
+                         turb_semix_neutral_exchange(c,.TRUE.), &
+                         0.16_wp/(log(10.0_wp/0.01_wp)*log(10.0_wp/0.001_wp)), 1.0e-6_wp, nfail)
+
+        ! Fluxes at Ts = 263, Ta = 268, rh = 0.8, p = 80 kPa (Julia's test).
+        tx = turb_semix_flux_linearized(c,263.0_wp,268.0_wp,0.8_wp,80000.0_wp,5.0_wp, &
+                                        turb_semix_neutral_exchange(c,.FALSE.),c%Lv + c%Lm)
+        rho = turb_semix_air_density(c,268.0_wp,80000.0_wp)
+        call check_close("sensible coefficient = 2.5 rho cp/r_a", tx%sensible_linear, &
+                         2.5_wp*rho*c%cp_air &
+                         /turb_semix_resistance(c,263.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
+                         1.0e-5_wp, nfail)
+        call check_close("Q_sh = coefficient*(Ta - Ts)", &
+                         tx%sensible_constant - tx%sensible_linear*263.0_wp, &
+                         tx%sensible_linear*5.0_wp, 1.0e-4_wp, nfail)
+        q_a = 0.622_wp*0.8_wp*ice_saturation_vapor_pressure(268.0_wp,c%T0)/80000.0_wp
+        q_s = 0.622_wp*ice_saturation_vapor_pressure(263.0_wp,c%T0)/80000.0_wp
+        call check_close("Q_lh = L rho (q_a - q_s(Ts))/r_a, q over ice", &
+                         tx%latent_constant - tx%latent_linear*263.0_wp, &
+                         (c%Lv + c%Lm)*rho*(q_a - q_s) &
+                         /turb_semix_resistance(c,263.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
+                         1.0e-4_wp, nfail)
+        call check("latent linear > 0 (a warmer surface loses more vapour)", &
+                   tx%latent_linear .gt. 0.0_wp, nfail)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_turb_semix
 
     subroutine check(label,condition,nfail)
 

@@ -26,9 +26,17 @@ ln -s <chion>/input input                 # chion reads input/chion_defaults.nml
 
 Edit `path_ice_data` / `path_insol` in the par file. The conservative ERA5
 weight map is generated on the first run and cached under `maps/` (gitignored,
-regenerated if absent). A 50-year GRL-16KM BESSI run (7204 columns) is ~47 s on
-one core; the build is OpenMP by default, so `OMP_NUM_THREADS=8` cuts it to
-~17 s (see Performance).
+regenerated if absent). A 50-year GRL-16KM BESSI run (7204 columns) takes
+29-45 s at 16 threads on Levante with the current physics (~370 s on one core;
+the build is OpenMP by default, threads via `OMP_NUM_THREADS`); see *After the
+Chion.jl 9ec6cc7 sync*.
+
+The Greenland loader needs ~34 MB of main-thread stack: fesm-utils'
+`grid_init` of the global 0.25° ERA5 source grid passes `reshape` temporaries
+of the 1440×721 point set (8.3 MB each) on the stack. With an 8 MB default
+(Levante) `chion_grid.x` segfaults at start-up, so run with
+`ulimit -s unlimited` (or ≥ 40000). The library and the column loop need no
+large stack (the default 4 MB per OpenMP thread suffices).
 
 ### Antarctica (RACMO2.4 / ANT-12)
 
@@ -55,13 +63,146 @@ set `path_racmo` (and `path_ice_data` for BedMachine) in the par file:
 The CORDEX set is atmospheric only: no reference SMB (chion computes it), and
 total precip is split into snow/rain at the freezing point.
 
+## After the Chion.jl 9ec6cc7 sync
+
+chion now defaults to Chion.jl 9ec6cc7's calibrated surface set (`alpha_ice`
+0.40, Julia SEMIX turbulence 2.5/40, cloud-proxy longwave, 8 diurnal substeps
+with a 1 K cycle, 5-layer ice substrate, fine near-surface layers) plus chion's
+thin-snow albedo blend (D40, `swe_crit_albedo` 10 kg m-2). All runs: 50 years,
+final year, Levante, 16 OpenMP threads (`shared` partition). Baseline = chion
+`main` (cead36b, BESSI's original physics with the −1 °C diurnal gate). Run
+dirs, per-run maps (`mar_maps.png`, `racmo_maps.png`) and the grid figure
+(`grid_grl16.png`): `/work/ba1442/robinson/chion-runs/wp19/`.
+
+### Greenland vs MAR v3.11
+
+Gt/yr; SMB skill in mm w.e./yr over the MAR ice mask; ablation zone = cells
+where MAR SMB < 0.
+
+| GRL-16KM | SMB | melt | runoff | refr. | bias | RMSE | R² | abl.-zone bias | abl. area |
+|---|---|---|---|---|---|---|---|---|---|
+| MAR | 348 | 518 | 349 | 208 | | | | | 14.4 % |
+| baseline `main` | 377 | 374 | 329 | 83 | +18 | 214 | 0.84 | +122 | 15.5 % |
+| 9ec6cc7 set, no blend | 448 | 334 | 259 | 113 | +55 | 215 | 0.83 | +344 | 11.5 % |
+| new defaults (`alpha_ice` 0.40) | 279 | 500 | 427 | 111 | −34 | 252 | 0.77 | −259 | 12.1 % |
+| **par file (`alpha_ice` 0.50)** | **340** | **440** | **367** | **112** | **−2** | **199** | **0.86** | **−44** | **12.0 %** |
+
+| GRL-8KM | SMB | melt | runoff | refr. | bias | RMSE | R² | abl.-zone bias | abl. area |
+|---|---|---|---|---|---|---|---|---|---|
+| MAR | 358 | 512 | 341 | 209 | | | | | 14.0 % |
+| baseline `main` | 382 | 374 | 328 | 84 | +15 | 212 | 0.84 | +117 | 15.3 % |
+| new defaults | 282 | 501 | 428 | 111 | −39 | 255 | 0.77 | −282 | 12.1 % |
+| **par file (`alpha_ice` 0.50)** | **343** | **441** | **368** | **111** | **−6** | **200** | **0.86** | **−58** | **11.9 %** |
+
+**Why the blend needs its own bare-ice albedo.** The driver's daily forcing is
+the mean-preserving interpolation of monthly MAR, so it snows a trace on 98 % of
+ablation-zone melt days (83 % below 1 mm d-1). Without the blend any trace of
+snow lifts the albedo to ≥ `alpha_wet`, and `alpha_ice` hardly matters (0.3/0.4/0.5
+give SMB 447/448/449). With it the bare ice shows through, and Chion.jl's 0.40,
+calibrated without a blend, over-melts the margins (margin SMB −1149 vs MAR
+−740 mm/yr). yelmox spreads monthly precipitation over days in the same way.
+
+**Calibration grid** (GRL-16KM; Gt/yr, mm/yr):
+
+| `alpha_ice` | `swe_crit_albedo` | SMB | melt | runoff | bias | RMSE | R² | abl.-zone bias | margin bias |
+|---|---|---|---|---|---|---|---|---|---|
+| 0.40 | 5 / 10 / 20 / 40 | 287 / 279 / 273 / 263 | 493 / 500 / 506 / 515 | 420 / 427 / 433 / 443 | −31 … −43 | 249 … 263 | 0.78 … 0.75 | −234 … −313 | −385 … −462 |
+| 0.45 | 5 / 10 / 20 / 40 | 316 / 310 / 305 / 297 | 464 / 470 / 475 / 481 | 391 / 397 / 402 / 409 | −15 … −25 | 220 … 227 | 0.83 … 0.82 | −130 … −194 | −264 … −326 |
+| 0.50 | 5 / 10 / 20 / 40 | 344 / 340 / 335 / 330 | 436 / 440 / 444 / 449 | 363 / 367 / 371 / 377 | 0 … −8 | 199 … 201 | 0.86 | −28 … −78 | −145 … −193 |
+| 0.55 | 5 / 10 / 20 / 40 | 372 / 369 / 366 / 361 | 409 / 412 / 414 / 418 | 335 / 338 / 341 / 345 | +15 … +9 | 188 … 187 | 0.87 … 0.88 | +71 … +36 | −28 … −63 |
+
+`alpha_ice` sets the result (~30 Gt/yr of SMB per 0.05); `swe_crit_albedo` moves
+SMB by 11-24 Gt/yr over 5-40 kg m-2. Ablation area is 11.9-12.7 % everywhere (MAR
+14.4 %). **Chosen: `alpha_ice` = 0.50, `swe_crit_albedo` = 10** in
+`par/chion_grl16.nml` and `par/chion_grl8.nml` (library defaults unchanged). It
+matches MAR's SMB within 2 % at both resolutions (domain bias −2, ablation-zone
+bias −44 mm/yr; 0.50/5 is marginally closer but also moves the blend's default),
+R² 0.86 (baseline 0.84), and changes one value (0.40 → 0.50, within the 0.35-0.55 observed for bare
+Greenland ice) and keeps the blend's default. 0.55 has slightly better R²/RMSE
+(0.875/187) but overshoots SMB by 13-24 Gt/yr and widens the melt deficit to
+−100 Gt/yr.
+
+**What remains.** Melt stays 15 % below MAR and refreezing at about half of
+MAR's (112 vs 208 Gt/yr), so runoff is 5 % high when SMB matches: MAR retains
+more meltwater in the firn. The ablation area is 2 points short (12.0 vs
+14.4 %) while the margins over-ablate (−160 mm/yr): the ablation is too
+concentrated at the lowest cells. Accounting note: the analysis converts MAR's and the
+forcing's mean daily rates with 365 days but takes chion's runoff over its
+360-day year, so chion's SMB is ~10 Gt/yr high and its melt/runoff ~1.4 % low
+against MAR (in every number above, baseline included).
+
+### ITM: TOA insolation
+
+ITM takes top-of-atmosphere insolation in `shortwave_down` and applies its own
+transmissivity (as smbpal; yelmox feeds it TOA). `chion_grid.x` fed it the ERA5
+surface shortwave (`swd_source = "file"`), attenuated a second time. The driver
+now gives ITM the daily TOA insolation whatever `swd_source` says. GRL-16KM:
+
+| ITM | SMB | melt | runoff | refr. | bias | RMSE | R² | abl. area |
+|---|---|---|---|---|---|---|---|---|
+| surface SW (before) | 663 | 62 | 44 | 56 | +172 | 463 | 0.24 | 2.0 % |
+| TOA (now) | 480 | 271 | 226 | 83 | +73 | 225 | 0.82 | 8.8 % |
+
+ITM still under-melts (margins −441 vs −740 mm/yr) with its default melt
+coefficients (`itm_c` −45 W m-2, `itm_t` 10 W m-2 K-1) under monthly-interpolated
+forcing; it has not been recalibrated here.
+
+### Antarctica vs RACMO
+
+Forcing: the RACMO2.4/ANT-12 CORDEX climatology (atmosphere only, no SMB
+components). Reference: the RACMO2.3 monthly climatology on ice_data
+(`ANT-16KM_RACMO-VW23.nc`: smb, snowmelt, ru, refreeze, sub, alb; coarsened 2×2
+conservatively for ANT-32KM). Different RACMO version and period, so precip
+agrees to 0.3 % but the comparison is indicative. Gt/yr; chion's sublimation is
+0 because the domain has no humidity forcing (`rh_default = 0`).
+
+| | precip | SMB | melt | runoff | refr. | subl. | precip − runoff | SMB R² |
+|---|---|---|---|---|---|---|---|---|
+| RACMO2.3 (32 km) | 2762 | 2478 | 96 | 1 | 99 | −175 | 2760 | |
+| ANT-32KM baseline `main` | 2755 | 2748 | 25 | 8 | 19 | 0 | 2748 | 0.79 |
+| ANT-32KM new defaults | 2755 | 2739 | 37 | 16 | 22 | 0 | 2739 | 0.79 |
+| ANT-16KM baseline `main` | 2767 | 2757 | 26 | 10 | 19 | 0 | 2757 | 0.74 |
+| ANT-16KM new defaults | 2767 | 2752 | 37 | 15 | 25 | 0 | 2752 | 0.74 |
+
+The +260 Gt/yr SMB excess is the missing sublimation (RACMO −175) and RACMO's
+drifting-snow terms (its SMB is 108 Gt/yr below precip − runoff − sublimation);
+precip − runoff agrees within 1 %. The new physics raises melt 25 → 37 Gt/yr
+(RACMO 96), about 40 % of RACMO's, and refreezes less of it (runoff 8 → 16, RACMO 1). Interior SMB is
+close (plateau > 2500 m: +47 vs +57 mm/yr, R² 0.89); the excess sits at the
+margins and on the shelves (z < 1000 m: +69 mm/yr).
+
+**Plateau albedo.** With the default dynamic scheme dry snow stays at
+`alpha_dry` = 0.81; chion's summer albedo (end of the year, late December) on
+the plateau is 0.810 vs RACMO's December mean 0.844, and 0.761 vs 0.833 below
+1000 m. The steady-state darkening of the aging scheme (≈ 0.71 at 0.2 kg m-2
+d-1 snowfall, WP6b) does not arise at the default; the remaining 0.03 is
+`alpha_dry` itself.
+
+### Timing (run loop, 50 yr, 16 threads, Levante `shared`)
+
+| case | columns | baseline `main` | new defaults |
+|---|---|---|---|
+| GRL-16KM BESSI | 7 204 | 16-20 s | 34-47 s |
+| GRL-8KM BESSI | 28 879 | 71 s | 120-125 s |
+| ANT-32KM BESSI | 13 212 | 17 s | 50 s |
+| ANT-16KM BESSI | 52 859 | 90 s | 146 s |
+| GRL-16KM ITM | 7 204 | 2.9 s | 3.3 s |
+
+The new physics costs 1.6-2.9× per column-step (ice substrate, fine layers, 8
+diurnal substeps); node-to-node noise on `shared` is ±20 %. Set-up adds 13-20 s
+per Greenland run (ERA5 regrid), ~4 s for Antarctica.
+The PERF commits that followed take ~30 % off BESSI (GRL-16KM 50 yr, exclusive
+`compute` node: 40.4 -> 29.1 s at 16 threads, 549 -> 371 s on one core). Of the
+remaining 16-thread time, ~4 s is the yearly netCDF output (deflate, serial).
+
 ## Result (GRL-16KM, BESSI, 50 yr, ERA5 shortwave)
 
-> This section establishes how SMB is measured and the **baseline** (no diurnal
-> substepping) behaviour, whose elevation-dependent under-ablation motivates the
-> two sections that follow. The **current default** (diurnal substepping, gate
-> −1 °C) improves the domain bias from +68 to +18 mm/yr and R² from 0.74 to
-> 0.84 — see *Diurnal shortwave substepping*.
+> This and the following sections describe chion **before** the Chion.jl
+> 9ec6cc7 sync (BESSI's original surface physics). They establish how SMB is
+> measured; their numbers are superseded by *After the Chion.jl 9ec6cc7 sync*.
+> Pre-sync, diurnal substepping with the −1 °C gate improved the domain bias
+> from +68 to +18 mm/yr and R² from 0.74 to 0.84 (*Diurnal shortwave
+> substepping*).
 
 **Which chion field is the MAR-comparable SMB.** MAR `smb` is the surface mass
 balance, precip − runoff − sublimation. The matching chion quantity is the same
@@ -94,7 +235,7 @@ bias is this coherent, elevation-dependent **under-ablation toward the warm
 margins** — the signature of monthly-mean forcing with no sub-monthly
 temperature extremes.
 
-## Diurnal shortwave substepping (the default)
+## Diurnal shortwave substepping (pre-sync default)
 
 Melt is nonlinear in the instantaneous shortwave flux, so daily-mean forcing
 systematically under-melts. Resolving the solar-noon peak with
@@ -117,8 +258,16 @@ over-ablates it (lower zone −294 where MAR is −16); raised to near-melting
 (−1 °C, 272.15 K) the boost is confined to the warm margins and every elevation
 band improves at once — domain bias +68→+18, R² 0.74→**0.84**, net-ablating area
 12.4→15.5 % (MAR 14.4 %), lower zone +210→+29. This is one physically-motivated
-threshold moved to a sensible value, not a fit, so it is the GRL-16KM default in
+threshold moved to a sensible value, not a fit, so it was the GRL-16KM default in
 `par/chion_grl16.nml`. Residual: margins still ~15 % short of MAR (−640 vs −740).
+
+**Superseded (C11).** The sweep above is for the pre-C11 physics (BESSI longwave
+and turbulence, no substrate, no fine layers). Since C11 chion defaults to
+Chion.jl's calibrated `03bb445` set, whose diurnal part (8 substeps above −8 °C,
+±1 K cycle) was calibrated together with the rest against MAR, and the domain par
+files no longer override it. GRL-16KM, 50 yr, final year, vs MAR 348 Gt/yr SMB:
+defaults SMB 448, melt 334, runoff 259, refreezing 113 Gt/yr, R² 0.83, ablation
+area 11.5 %; with the −1 °C / 3-substep / no-cycle tuning on top SMB 485, R² 0.78.
 
 ## Performance and resolution
 

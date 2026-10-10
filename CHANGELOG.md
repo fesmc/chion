@@ -10,34 +10,114 @@ tag is the port itself, summarised rather than enumerated.
 
 ## [Unreleased]
 
+Synced with Chion.jl `main` `9ec6cc7` (= `03bb445`; `docs/PLAN_dev_nils.md`, deviations
+`docs/porting_notes.md` D29-D43). Default BESSI results change; the validation gate is green
+against `9ec6cc7` in twelve BESSI configurations, PDD and ITM.
+
+### Breaking
+
+- Namelists (re-sync host copies of `input/chion_defaults.nml`):
+  - `Ki` removed from `&chion_const` (Calonne conductivity); a par file that sets it is
+    not read for it.
+  - Scheme aliases removed, canonical names only: albedo `bessi`/`legacy`, fresh-snow
+    density `bessi`/`htessel`, PDD `calov_greve`, `semix_snow_albedo` `ww`/`warren` (now
+    `warren_wiscombe`) are rejected.
+  - `seb_scheme` selects the longwave only (`bessi` | `semix`); the turbulence is
+    `turbulent_flux_scheme` (`bessi` | `semix` | `climberx`). chion's CLIMBER-X exchange is
+    `"climberx"`: the former `seb_scheme = "semix"` is `seb_scheme = "semix"` +
+    `turbulent_flux_scheme = "climberx"` (bit-identical); `"semix"` turbulence is now
+    Chion.jl's bulk scheme. `semix_qsat` is renamed `climberx_qsat` (D37).
+  - `diurnal_temperature_amplitude_max` (default 1 K) caps the amplitude; a larger
+    `diurnal_temperature_amplitude` needs it raised.
+  - `chion_grid.x` file mode reads `&ctrl name_hice`, `name_pdds` (`"None"` = 0).
+- BESSI `H_ice = 0` is a land column (no ice substrate, no ice ablation, `alpha_land`):
+  a host must fill `forc%H_ice` for BESSI, as for ITM (D34, D41).
+- ITM output takes Chion.jl's names and units (D42): `alb_s`, rates `smb` (total SMB),
+  `smbi`, `melt`, `runoff`, `refreezing`, `melt_net` [mmWE day-1], cumulative `smb_cum`,
+  `smb_ice`, `melt_cum`, `runoff_cum`, `refreezing_cum` (were `albedo`, `smb_total`,
+  cumulative `melt`/`runoff`/`refreezing`, ice-facing `smb` in kg m-2 s-1). Restarts
+  unchanged.
+
 ### Added
 
-- `chion_get_surface_flux_totals`: cumulative melt/runoff/refrz/subl [kg m-2],
-  so a host aggregating over many steps differences two calls.
-
-### Fixed
-
-- ITM per-step `tsrf`: `melt_net` scaled to the annual rate `firn_fac` is
-  calibrated on (360-day year); firn warming was ~360x too small (D27).
+- BESSI thermal ice substrate (`&bessi ice_substrate_layers`, `ice_substrate_top_thickness`;
+  restart `ice_temperature`, older restarts start at `min(t_srf, T0)`; D34).
+- Fine near-surface layers (`&bessi near_surface_layer_max_thicknesses`, 0 = no limit,
+  D36); the first layer below them is split and merged by mass (D32).
+- Cloud-proxy longwave (`&chion_const longwave_scheme`, `lw_*`); optional host
+  `forc%toa_shortwave` (D33).
+- `turbulent_flux_scheme = "semix"`: Chion.jl's bulk turbulence (`semix_*` parameters);
+  bare ice with `Lv + Lm` (D35) and `R_dry` (D38).
+- Albedo `"aging"` (`aging_*_timescale_days`; `snow_age_days` in output and restart), with
+  a snowfall refresh `1 - exp(-S/aging_snowfall_ref)` (D30).
+- Thin-snow albedo: snow albedo blended with the background by `min(1, SWE/swe_crit_albedo)`
+  (CLIMBER-X `tanh` form under `albedo_scheme = "semix"`; `c_fsnow`, `c_fsnow_orog`); new
+  state `albedo_snow`; land background `alpha_land` (D40, D41).
+- Elevation-dependent diurnal T amplitude (`diurnal_temperature_amplitude_gradient`,
+  `_reference_height`, `_max`); `surface_height` and `H_ice` packed into the step forcing.
+- BESSI output `ice_temperature`; `calendar_solar_longitude_deg`;
+  `chion_get_surface_flux_totals` (cumulative melt/runoff/refrz/subl).
+- Build: `fpsafe=1` (value-safe `-O2`, `libchion/*-fpsafe`) for the tests and validation/;
+  make creates every flavour's directories.
+- validation/: PDD (both methods) and ITM gated against Chion.jl; BESSI configurations
+  for each switchable `03bb445` option and for the defaults.
 
 ### Changed
 
-- Shared physical constants (`rho_i`, `rho_w`, `ci`, `cw`, `Lm`, `grav`, `T0`)
-  come from fesm-utils `phys_const_class`: `chion_init(..., cnst=)` takes the
-  host's record, otherwise chion loads `phys_const_file` (now the `phys_const`
-  schema, Chion.jl values). chion's own constants moved to `&chion_const` in
-  `input/chion_defaults.nml` (sparse overrides). `seconds_per_day` removed
-  (`phys_constants:sec_day`). Standalone output unchanged (D28).
-- `chion_get_surface`: outputs optional; parallel over columns (including the
-  MV fill of inactive ones), no full-array copies, so it is cheap enough to
-  call every step.
-- `chion_update` snapshots (for `chion_get_smb`/`chion_get_surface_fluxes`)
-  only active columns, in parallel (`chion_model_cum_active`); was a serial
-  copy over all columns every step.
-- `itm_par_load` takes optional `defaults_file`/`defaults_group`; `&itm` may now
-  be sparse or absent, like `&bessi` and `&pdd` (needed to share smbpal's `&itm`
-  group in yelmox).
-- Build: `libchion.a` is a file target; objects depend on `libfesmutils.a`.
+- Defaults are Chion.jl `03bb445`'s calibrated GrIS set: `alpha_ice` 0.40, `seb_scheme =
+  turbulent_flux_scheme = "semix"` (2.5, 40), `longwave_scheme = "cloud_proxy"`, 5 substrate
+  layers, fine layers (0.02, 0.05, 0.10, 0.30 m), 8 diurnal substeps with a 1 K cycle; plus
+  chion's thin-snow blend (`swe_crit_albedo` 10 kg m-2). PDD `pdd_method = "simple"`.
+- BESSI physics from Chion.jl (unswitchable): Robin surface boundary (`Tsrf` = interface
+  temperature), harmonic interface conductance, Calonne et al. (2019) conductivity,
+  phase-dependent latent heat with a gradient-based vapour mass, wetness relaxation
+  `(1-r)^dt`, depth cap 22.5 m, aging × `dt_days`.
+- Default results (all of the above): 10-yr `chion_column` melt +27 %, refreezing +78 %;
+  GRL-16KM vs MAR (Gt/yr; MAR SMB 348, melt 518, runoff 349): SMB 377 -> 279, melt 374 ->
+  500, runoff 329 -> 427, R² 0.84 -> 0.77. Cost per step ~2x at 16 threads (GRL-16KM 50 yr
+  20 -> 43 s, shared node), ~4x serial.
+- Domain calibration: `par/chion_grl16.nml`, `chion_grl8.nml` take `alpha_ice = 0.50`
+  (MAR grid 0.40-0.55 x `swe_crit_albedo` 5-40): GRL-16KM SMB 340, melt 440, runoff 367,
+  R² 0.86 (baseline 0.84); GRL-8KM SMB 343 (MAR 358). Library defaults stay Chion.jl's.
+- Shared physical constants from fesm-utils `phys_const_class` (`chion_init(..., cnst=)`);
+  chion's own constants in `&chion_const`; `seconds_per_day` removed (D28).
+- Performance: dynamic OpenMP schedule, solar geometry once per column-day
+  (bit-identical); `chion_get_surface` and `chion_update` snapshots over active columns
+  only, in parallel.
+- Performance (PERF): BESSI ~32 % faster serial, ~28 % at 16 threads (GRL-16KM 50 yr,
+  exclusive node: 549 -> 371 s, 40.4 -> 29.1 s): vectorised conductivities and no
+  per-row cross-module calls in the energy solve, water content from the pore volume in
+  percolation, no sub-ulp near-surface remesh transfers (D43), vectorised densification
+  Arrhenius factors, solar declination once per step and substep sines once per
+  column-day, semix neutral exchange coefficients as derived constants
+  (`chion_const_derive`), and `src/physics` compiled as one translation unit
+  (`chion_physics.f90` includes the modules; cross-module inlining without `-ipo`).
+  Results move at the round-off noise floor (as for a recompile).
+- Layer merges mix as `x1 + w2*(x2 - x1)` (exact for equal values; D31).
+- `itm_par_load` takes optional `defaults_file`/`defaults_group` (sparse `&itm`).
+- `legacy_chion=1` reverts the deliberate corrections to Chion.jl's values for validation
+  (D24 list; gas constant 8.314, ITM `tsrf` scaling D27).
+
+### Fixed
+
+- Rain on a bare column runs off exactly once (Chion.jl dropped it, then double-counted
+  it; D29).
+- ITM per-step `tsrf`: `melt_net` scaled to the annual rate `firn_fac` is calibrated on
+  (firn warming was ~360x too small; D27).
+- BESSI vapour diagnostics report the mass actually removed (Chion.jl `03bb445`); fresh
+  snow on a bare column takes the air temperature in every new layer.
+- Diurnal substeps: a day not split keeps its forcing (no polar-night shortwave loss; D39).
+- `chion_grid.x` (domain) drives ITM with the TOA insolation (it got the surface
+  shortwave, attenuated twice: GRL-16KM SMB 663 -> 480, melt 62 -> 271 Gt/yr).
+- Drivers use Chion.jl's calendar solar longitude (was 0 on 1 January).
+- Build: objects depend on an `openmp` stamp, so switching it rebuilds them; a fresh
+  `configme install` leaves an OpenMP `libchion.a`. `libchion.a` is a file target; missing
+  module dependencies added (`make -j`).
+- `chion_grid.x` reads `trans_a/b/c` only for the `swd_source` that uses them.
+
+### Removed
+
+- `Ki`, the scheme aliases, `semix_qsat` (see Breaking); `seconds_per_day`.
 
 ## [v0.1.0] — 2026-07-24
 

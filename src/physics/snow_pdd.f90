@@ -11,19 +11,13 @@ module snow_pdd
     ! upstream fix, in docs/pdd_defects.md. Read that file before changing
     ! anything here.
     !
-    ! This module DELIBERATELY DIVERGES from Chion.jl on the snowpack budget:
-    ! smb_ice is ice-facing, refreezing is capacity-limited by the snowpack,
-    ! refrozen mass becomes ice rather than re-entering the reservoir, and the
+    ! The snowpack budget is chion's (docs/porting_notes.md D23): smb_ice is
+    ! ice-facing, refreezing is capacity-limited by the snowpack, refrozen
+    ! mass becomes ice rather than re-entering the reservoir, and the
     ! reservoir is capped. That is the capped one-layer scheme smbpal and
-    ! Chion.jl's own BESSI use. See pdd_column_apply's header for the full
-    ! rationale, docs/porting_notes.md D23, and Chion.jl issue #19.
-    !
-    ! Consequence for WP16: PDD is NOT gated against Chion.jl any more, because
-    ! the two now implement different budgets on purpose. It is gated on its own
-    ! mass-closure identity instead, and the Chion.jl comparison is reported as
-    ! a diagnostic. Reproducing Chion.jl's convention behind the CHION_LEGACY
-    ! switch was considered and rejected: it would mean maintaining a second
-    ! copy of this core, which is upstream defect 13 reintroduced on purpose.
+    ! Chion.jl's own BESSI use; see pdd_column_apply's header. Chion.jl
+    ! adopted it in ce6a68d, so WP16 gates PDD against Chion.jl (both
+    ! pdd_methods) as well as on its own mass-closure identity.
     !
     ! This is a BULK model: no layers, no temperature profile, no density, no
     ! energy balance, no albedo. State is four per-column scalars.
@@ -224,7 +218,7 @@ contains
         select case(trim(adjustl(name)))
             case("simple")
                 flag = CHION_PDD_SIMPLE
-            case("pism","calov_greve","calov-greve")
+            case("pism")
                 flag = CHION_PDD_PISM
             case DEFAULT
                 write(io_unit_err,*) "pdd_method_flag:: Error: pdd method not recognized."

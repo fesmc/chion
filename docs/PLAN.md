@@ -6,6 +6,13 @@ FESM-style static library `libchion.a` with a clean public API and pluggable sno
 > **This plan supersedes an earlier draft** that was written against the stale `alex-dev`
 > branch. Everything below is based on `main`.
 
+> **Reference now: Chion.jl `main` `9ec6cc7`** (= `03bb445`, 2026-10). This plan describes the
+> port of `a9ec154` (v0.2.0); the sync to `9ec6cc7` (Calonne conductivity, harmonic
+> conductance, Robin surface boundary, ice substrate, fine near-surface layers, cloud-proxy
+> longwave, Julia SEMIX turbulence, the calibrated default set) is
+> [PLAN_dev_nils.md](PLAN_dev_nils.md), its deviations `porting_notes.md` D29-D42. Where
+> the text below describes Chion.jl's physics or defaults, the sync supersedes it.
+
 ## Reference material
 
 | Source | Role |
@@ -317,7 +324,7 @@ build; all should be resolved before the yelmox cutover.
 | 2 | `9.81` vs `9.80665` in the overburden | 3.6e-4 relative on overburden, ~1.1e-3 on the cubed mid/high tendencies (WP7) | **RESOLVED (D25).** Unified onto standard gravity, which is exact by definition. Covered by `legacy_chion=1`. |
 | 3 | ITM's `L_m = 3.35e5` vs `chion_const_class%Lm = 3.34e5`, and its hard-coded `273.15` | `itm_c`/`itm_t` are calibrated against them; the true latent heat of fusion is 3.337e5, so 3.34e5 is the more accurate | **RESOLVED (D26).** ITM reads all four constants from `chion_const_class`. +0.30% on potential melt, measured. Two constant sets would let a host retuning `T0`/`Lm` leave ITM on different physics from BESSI. |
 | 4 | PDD `smb_ice` convention: whole-column mass change (PDD) vs ice-only forcing (BESSI) | the two Chion.jl models disagree; `smb_ice` feeds `ice_sheet_net_forcing_yearly` (WP9). PDD has no firn representation, so a whole-column `smb_ice` implies a reservoir it does not have | **RESOLVED (D23).** BESSI's ice-facing convention adopted, with a capped one-layer reservoir as in smbpal. Full mass closure now holds. Chion.jl issue #19. |
-| 5 | Whether `pdd_method` should default to `pism` rather than `simple` | the simple form loses 1.25 kg m-2 d-1 at -5 C and 5.98 at 0 C, concentrated at the ELA; smbpal always uses the integral (WP9) | Recommend `pism` at WP13. |
+| 5 | Whether `pdd_method` should default to `pism` rather than `simple` | the simple form loses 1.25 kg m-2 d-1 at -5 C and 5.98 at 0 C, concentrated at the ELA; smbpal always uses the integral (WP9) | **RESOLVED (PLAN_dev_nils WP3):** default `simple`, Chion.jl's default, so the default is the gated physics; a host replacing smbpal sets `pism` explicitly. |
 
 ### 3.2 Caution: PDD is not fully working in Chion.jl
 
@@ -379,7 +386,6 @@ into "silent behaviour change", every WP applies this policy and records each cl
 **Not allowed without asking first** — these look like cleanups but change behaviour:
 - Unifying the three empty-layer thresholds (§5 item 1). They gate different physics.
 - Reconciling the linearized vs. exact surface-flux evaluations (§5 item 2).
-- Adding `dt` to the albedo aging law (§5 item 5), even though it is dimensionally wrong.
 - Making the two-pass energy re-solve a true Dirichlet row (§5 item 6).
 - Enforcing volume conservation in the refreezing density cap (§5 item 7).
 - Making the depth cap respect the configured `Ntot` (§5 item 11).
@@ -531,7 +537,8 @@ Port `Chion.jl/src/processes/accumulation.jl`, `albedo.jl`, `densification.jl`,
   `Ntot <= 2` special case calling `free_slot_for_surface_split` instead of
   `merge_bottom_layer`); the merge `while` loop; then the depth cap.
 - Albedo, three schemes. Dynamic law, applied **once per call, with no `dt`** (so it is
-  timestep-dependent — call exactly once per step, as Julia does):
+  timestep-dependent — call exactly once per step, as Julia does; since dev_nils `6d077c5`
+  the decrement is scaled by `dt_days`, see §5 item 5):
   `a = min(a_prev, a_prev - (1.35e-3*(Ts-T0) + 0.0278))`, floored at `alpha_wet`; then the
   wetness relaxation `a - (a - alpha_wet)*lwc/max_lwc_albedo`; then clamp to
   `[alpha_wet, alpha_dry]`. Snowfall brightening:
@@ -747,7 +754,9 @@ must restate each one next to the code that honours it.
    percolation `max_lwc = 0.1`; PDD's hard-coded `273.15` and `86400.0`.
 4. **`max_lwc` (percolation, 0.1) and `c%max_lwc_albedo` (albedo, 0.1) are different
    parameters** that happen to share a default. Keep them independently configurable.
-5. **The albedo aging law has no `dt`** — it decays per *call*. Call it exactly once per step.
+5. ~~**The albedo aging law has no `dt`** — it decays per *call*.~~ Fixed upstream
+   (dev_nils `6d077c5`): the decrement is scaled by `dt_days`; ported in
+   `docs/PLAN_dev_nils.md` WP5.
 6. **The two-pass energy re-solve is not a Dirichlet row.** Row 1 keeps its conduction
    coupling; only the surface flux term is removed and the rhs replaced by `T0`.
 7. **The refreezing density cap breaks volume conservation on purpose** — mass gains the full

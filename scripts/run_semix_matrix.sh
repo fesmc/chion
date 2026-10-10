@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Full SEMIX configuration matrix, GRL-16KM.
-#   albedo_scheme x seb_scheme x rh_default, at Ntot=1, plus the full config at Ntot=15.
+#   albedo_scheme x surface scheme x rh_default, at Ntot=1, plus the full config at Ntot=15.
+#   Surface scheme "bessi" = seb_scheme "bessi" + turbulent_flux_scheme "bessi";
+#   "semix" = CLIMBER-X SEMIX, seb_scheme "semix" + turbulent_flux_scheme "climberx".
 set -euo pipefail
 chion=/Users/alrobi001/models/chion
 bin=$chion/libchion/bin/chion_grid.x
@@ -27,13 +29,15 @@ for cfg in "${configs[@]}"; do
   sed -e "s/^\( *Ntot *= *\)[0-9]*/\1$nt/" \
       -e "s/^\( *rh_default *= *\)0\.0/\1$rh/" \
       "$chion/par/chion_grl16.nml" > "$d/chion_grl16.nml"
-  printf '\n&chion_const\n    albedo_scheme = "%s"\n    seb_scheme    = "%s"\n/\n' \
-      "$alb" "$seb" >> "$d/chion_grl16.nml"
+  turb=bessi; [ "$seb" = semix ] && turb=climberx
+  printf '\n&chion_const\n    albedo_scheme = "%s"\n    seb_scheme    = "%s"\n    turbulent_flux_scheme = "%s"\n/\n' \
+      "$alb" "$seb" "$turb" >> "$d/chion_grl16.nml"
 
   echo "=== $name : albedo=$alb seb=$seb rh=$rh Ntot=$nt"
   ( cd "$d" && OMP_NUM_THREADS=1 "$bin" "$d/chion_grl16.nml" > run.log 2>&1 )
   grep -m1 'albedo_scheme =' "$d/run.log" || true
   grep -m1 'seb_scheme =' "$d/run.log" || true
+  grep -m1 'turbulent_flux_scheme =' "$d/run.log" || true
   grep -m1 'rh_default =' "$d/run.log" || true
   grep -m1 'wall time' "$d/run.log" || true
 done

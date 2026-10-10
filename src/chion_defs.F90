@@ -14,6 +14,7 @@ module chion_defs
     use, intrinsic :: iso_fortran_env, only : error_unit
     use precision, only : sp, dp
     use nml, only : nml_replace
+    use phys_constants, only : sec_year_360d, sec_day
 
     implicit none
 
@@ -100,24 +101,44 @@ module chion_defs
     integer, parameter, public :: CHION_ALBEDO_DYNAMIC    = 2
     integer, parameter, public :: CHION_ALBEDO_PRESCRIBED = 3
     integer, parameter, public :: CHION_ALBEDO_SEMIX      = 4
+    integer, parameter, public :: CHION_ALBEDO_AGING      = 5   ! Chion.jl ALBEDO_AGING = 4
 
     ! Which spectral snow-albedo parameterization the SEMIX scheme uses.
     ! CLIMBER-X defaults to Dang (its isnow_albedo = 2).
     integer, parameter, public :: SEMIX_SNOW_ALBEDO_WW   = 1
     integer, parameter, public :: SEMIX_SNOW_ALBEDO_DANG = 2
 
-    ! Surface energy balance family. "bessi" is the bulk-coefficient scheme
-    ! chion was ported with; "semix" is CLIMBER-X SEMIX's aerodynamic scheme.
-    ! Orthogonal to albedo_scheme and to Ntot -- see docs/semix_port_scope.md.
+    ! Surface energy balance: since Chion.jl d0146e1 it selects the LONGWAVE
+    ! treatment only. "bessi": LWdn - eps_snow*sigma*Ts^4 (the downwelling
+    ! flux absorbed in full); "semix": eps_s*(LWdn - sigma*Ts^4), with eps_s
+    ! = eps_snow on snow and eps_ice on bare ice (CLIMBER-X SEMIX's ebal).
     integer, parameter, public :: CHION_SEB_BESSI = 1
     integer, parameter, public :: CHION_SEB_SEMIX = 2
 
-    ! Which saturation-specific-humidity parameterization the SEMIX surface
-    ! scheme uses for the turbulent latent flux. SEMIX is CLIMBER-X's own
-    ! q_sat_i/dqsat_dT_i; BESSI routes chion's ice saturation vapour pressure
-    ! through the same 0.622/p conversion.
-    integer, parameter, public :: SEMIX_QSAT_SEMIX = 1
-    integer, parameter, public :: SEMIX_QSAT_BESSI = 2
+    ! Turbulent sensible and latent heat, independent of seb_scheme (Chion.jl
+    ! turbulent_flux_scheme). "bessi": the bulk coefficient D_sh and BESSI's
+    ! vapour-pressure gradient; "semix": Chion.jl's bulk scheme of that name
+    ! (log-law, Richardson stability, calibrated exchange factors;
+    ! snow_turbulence); "climberx": CLIMBER-X SEMIX's aerodynamic resistance
+    ! (snow_seb_semix; docs/semix_port_scope.md). Orthogonal to albedo_scheme
+    ! and to Ntot.
+    integer, parameter, public :: CHION_TURB_BESSI    = 1
+    integer, parameter, public :: CHION_TURB_SEMIX    = 2
+    integer, parameter, public :: CHION_TURB_CLIMBERX = 3
+
+    ! Downwelling longwave when the host does not prescribe it (Chion.jl
+    ! 03bb445 longwave_scheme): "graybody" eps_air*sigma*T_air^4, or
+    ! "cloud_proxy", an emissivity from air temperature and a shortwave
+    ! cloudiness proxy, resolved once per forcing step.
+    integer, parameter, public :: CHION_LONGWAVE_GRAYBODY    = 1
+    integer, parameter, public :: CHION_LONGWAVE_CLOUD_PROXY = 2
+
+    ! Which saturation-specific-humidity parameterization the CLIMBER-X
+    ! turbulence uses for the latent flux. "climberx" is CLIMBER-X's own
+    ! q_sat_i/dqsat_dT_i; "bessi" routes chion's ice saturation vapour
+    ! pressure through the same 0.622/p conversion.
+    integer, parameter, public :: CLIMBERX_QSAT_CLIMBERX = 1
+    integer, parameter, public :: CLIMBERX_QSAT_BESSI    = 2
 
     integer, parameter, public :: CHION_DENSIFY_BESSI   = 1
     integer, parameter, public :: CHION_DENSIFY_HTESSEL = 2
@@ -146,24 +167,74 @@ module chion_defs
     ! wrong. Nothing but validation/ should ever build with it.
     !
     ! Currently reverted under CHION_LEGACY:
-    !   * DENSIFY_R_GAS  -> 8.13, Chion.jl's typo for the gas constant
-    !     (Chion.jl issue #18, docs/porting_notes.md D22).
+    !   * DENSIFY_R_GAS  -> 8.314, Chion.jl's rounded gas constant (it had
+    !     the typo 8.13 until dev_nils 408e91c; Chion.jl issue #18,
+    !     docs/porting_notes.md D22). Drop once Chion.jl uses 8.31446...
     !   * DENSIFY_GRAVITY -> 9.81, Chion.jl's second gravity constant
     !     (docs/porting_notes.md D25).
+    !   * ITM_FIRN_DAYS_YEAR -> 1, i.e. ITM's tsrf applies firn_fac to the
+    !     daily melt_net rate, as Chion.jl's ITMModel does (docs/porting_notes.md
+    !     D27). chion scales it to the annual rate firn_fac is calibrated on.
+    !   * ALBEDO_AGING_BINARY_REFRESH -> .TRUE., i.e. the aging albedo scheme
+    !     resets to alpha_dry (age 0) on any snowfall, as Chion.jl does.
+    !     chion rejuvenates in proportion to the step's snowfall
+    !     (docs/porting_notes.md D30).
+    !   * NEAR_SURFACE_SPLIT_MERGE_BELOW -> .FALSE., i.e. with fine
+    !     near-surface layers everything below them stays in one layer that
+    !     is never split or merged, as in Chion.jl. chion splits and merges
+    !     it by mass like the surface layer (docs/porting_notes.md D32).
+    !   * TURB_SEMIX_ICE_SUBLIMATION -> .FALSE., i.e. the semix turbulence's
+    !     latent exchange over bare ice carries the phase's latent heat at
+    !     the surface temperature (Lv at T0), as in Chion.jl; chion uses
+    !     Lv + Lm, the latent heat its vapour mass is converted with
+    !     (docs/porting_notes.md D35).
+    !   * TURB_SEMIX_R_AIR_LITERAL -> .TRUE., i.e. the semix turbulence's air
+    !     density uses Chion.jl's literal 287.05 instead of c%R_dry
+    !     (docs/porting_notes.md D38).
+    !   * ALBEDO_THIN_SNOW_BLEND -> .FALSE., i.e. any surface snow covers the
+    !     column (snow-cover fraction 1) and the albedo switches straight from
+    !     the snow albedo to the bare one, as in Chion.jl. chion blends the
+    !     two by a snow-cover fraction from the column's snow water
+    !     equivalent (docs/porting_notes.md D40).
+    !   * LAND_COLUMNS_WITHOUT_ICE -> .FALSE., i.e. a column with H_ice = 0
+    !     has bare ice under its snow (alpha_ice background, ice melt), as in
+    !     Chion.jl, which has no ice thickness. chion gives it a land
+    !     background albedo and no ice ablation (docs/porting_notes.md D41).
+    !   * DIURNAL_SINGLE_INTERVAL_AVERAGED -> .TRUE., i.e. with diurnal
+    !     substeps on, a day that is not split still takes the interval
+    !     averages over [-pi, pi], which zero its shortwave when the solar
+    !     geometry has no daylight (polar night), as in Chion.jl. chion steps
+    !     such a day with its forcing as given (docs/porting_notes.md D39).
     !
-    ! Deliberately NOT covered: the PDD smb_ice convention (Chion.jl issue #19,
-    ! D23). Chion.jl's PDD is not authoritative (docs/PLAN.md section 3.2), so
-    ! reproducing its convention would mean maintaining a second PDD core --
-    ! which is upstream defect 13 (three diverged copies) reintroduced on
-    ! purpose. PDD is compared to Chion.jl as a REPORTED diagnostic instead,
-    ! and gated on its own mass-closure identity.
+    ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
+    ! the plain build is gated against Chion.jl for PDD.
+    !
+    ! ITM_FIRN_DAYS_YEAR: days per year of the calendar ITM's firn_fac is
+    ! calibrated on. smbpal's annual totals are on a 360-day year; a property
+    ! of the calibration, not of the host's calendar.
 #ifdef CHION_LEGACY
-    real(wp_acc), parameter, public :: DENSIFY_R_GAS   = 8.13_wp_acc
+    real(wp_acc), parameter, public :: DENSIFY_R_GAS   = 8.314_wp_acc
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc
+    real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = 1.0_wp
+    logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .TRUE.
+    logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .FALSE.
+    logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .FALSE.
+    logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .TRUE.
+    logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .TRUE.
+    logical,      parameter, public :: ALBEDO_THIN_SNOW_BLEND = .FALSE.
+    logical,      parameter, public :: LAND_COLUMNS_WITHOUT_ICE = .FALSE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = real(DEF_GRAVITY,wp_acc)
+    real(wp),     parameter, public :: ITM_FIRN_DAYS_YEAR = real(sec_year_360d/sec_day,wp)
+    logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .FALSE.
+    logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .TRUE.
+    logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .TRUE.
+    logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .FALSE.
+    logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .FALSE.
+    logical,      parameter, public :: ALBEDO_THIN_SNOW_BLEND = .TRUE.
+    logical,      parameter, public :: LAND_COLUMNS_WITHOUT_ICE = .TRUE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
 #endif
 
@@ -174,11 +245,24 @@ module chion_defs
     real(wp), parameter, public :: DEF_DENSITY_INIT     = 300.0_wp
     real(wp), parameter, public :: DEF_TEMPERATURE_INIT = 273.0_wp
 
-    ! Depth cap reference values. NOTE: the cap uses this hard-coded layer
-    ! count, NOT the configured Ntot. Chion.jl/src/constants.jl:37-38 and
-    ! processes/layer_structure.jl. See docs/PLAN.md section 5, item 11.
-    integer,  parameter, public :: BESSI_REFERENCE_LAYER_COUNT   = 15
-    real(wp), parameter, public :: BESSI_REFERENCE_DEPTH_DENSITY = 300.0_wp
+    ! Thermal ice substrate below the snow/firn column (Chion.jl 03bb445,
+    ! src/models.jl:98-99), Chion.jl's default 5 layers (0 = none, the
+    ! bare-ice-at-T0 treatment).
+    integer,  parameter, public :: DEF_ICE_SUBSTRATE_LAYERS        = 5
+    real(wp), parameter, public :: DEF_ICE_SUBSTRATE_TOP_THICKNESS = 0.05_wp
+
+    ! Fine near-surface layers (Chion.jl 03bb445, src/models.jl:97): maximum
+    ! thicknesses of the top NEAR_SURFACE_LAYERS layers, held by a
+    ! conservative remesh. 0 = no limit (Julia Inf; docs/porting_notes.md
+    ! D36). Chion.jl's defaults, (0.02, 0.05, 0.10, 0.30) m.
+    integer,  parameter, public :: NEAR_SURFACE_LAYERS = 4
+    real(wp), parameter, public :: DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES(NEAR_SURFACE_LAYERS) = &
+                                   [0.02_wp, 0.05_wp, 0.10_wp, 0.30_wp]
+
+    ! Depth cap: a fixed total solid depth, independent of Ntot and of
+    ! mass_split (Chion.jl 03bb445, src/constants.jl:39). It replaces the
+    ! former 15*mass_split*1.5/300, identical at mass_split = 300.
+    real(wp), parameter, public :: BESSI_REFERENCE_SNOW_DEPTH_M = 22.5_wp
 
     ! === Physical constants ==================================================
 
@@ -210,7 +294,6 @@ module chion_defs
         integer  :: fresh_snow_density_scheme   ! CHION_FRESH_SNOW_DENSITY_*
 
         ! Thermal properties
-        real(wp) :: Ki                 ! [W m-1 K-1] thermal conductivity of ice
         real(wp) :: ci                 ! [J kg-1 K-1] heat capacity of ice   (shared: cp_ice)
         real(wp) :: cw                 ! [J kg-1 K-1] heat capacity of water (shared: cp_w)
         real(wp) :: Lm                 ! [J kg-1] latent heat of melting     (shared: L_ice)
@@ -221,14 +304,16 @@ module chion_defs
         ! Turbulent exchange
         real(wp) :: D_sh               ! [W m-2 K-1] sensible heat exchange coefficient
 
-        ! Surface energy balance scheme, and the aerodynamic exchange it needs
-        ! (CHION_SEB_SEMIX only). Roughness lengths and the surface-layer height
-        ! are CLIMBER-X smb_par / constants values; karman, grav and R_dry are
-        ! the universal constants SEMIX pulls from its constants module. The
-        ! heat capacity of air is chion's existing cp_air (1003 vs SEMIX's
-        ! 1000 J kg-1 K-1, 0.3% on f_sh) rather than a second constant for the
-        ! same quantity.
-        integer  :: seb_scheme         ! CHION_SEB_*
+        ! Surface energy balance (longwave) and turbulent-flux schemes.
+        integer  :: seb_scheme             ! CHION_SEB_*
+        integer  :: turbulent_flux_scheme  ! CHION_TURB_*
+
+        ! CLIMBER-X SEMIX aerodynamic exchange (CHION_TURB_CLIMBERX only).
+        ! Roughness lengths and the surface-layer height are CLIMBER-X smb_par
+        ! / constants values; karman, grav and R_dry are the universal
+        ! constants SEMIX pulls from its constants module. The heat capacity
+        ! of air is chion's existing cp_air (1003 vs SEMIX's 1000 J kg-1 K-1,
+        ! 0.3% on f_sh) rather than a second constant for the same quantity.
         real(wp) :: z0m_snow           ! [m] momentum roughness length, snow
         real(wp) :: z0m_ice            ! [m] momentum roughness length, ice
         real(wp) :: zm_to_zh           ! [1] heat/momentum roughness ratio
@@ -238,7 +323,28 @@ module chion_defs
         real(wp) :: R_dry              ! [J kg-1 K-1] gas constant of dry air
         logical  :: l_neutral          ! [1] force neutral stratification
         logical  :: l_dew              ! [1] allow dew/frost deposition
-        integer  :: semix_qsat         ! SEMIX_QSAT_*
+        integer  :: climberx_qsat      ! CLIMBERX_QSAT_*
+
+        ! Chion.jl's bulk turbulence (CHION_TURB_SEMIX only; Chion.jl's
+        ! semix_* keywords, 03bb445 defaults). z0h = z0m/semix_zm_to_zh; the
+        ! sensible exchange factor and the stable coefficient b of the
+        ! Richardson damping 1/(1 + b Ri) are calibrated against MAR.
+        real(wp) :: semix_karman                    ! [1] von Karman constant
+        real(wp) :: semix_surface_height            ! [m] reference height of T_a, wind
+        real(wp) :: semix_z0m_snow                  ! [m] momentum roughness, snow
+        real(wp) :: semix_z0m_ice                   ! [m] momentum roughness, bare ice
+        real(wp) :: semix_zm_to_zh                  ! [1] z0m/z0h
+        real(wp) :: semix_sensible_exchange_factor  ! [1]
+        real(wp) :: semix_stable_coefficient        ! [1] b
+        real(wp) :: semix_latent_exchange_factor    ! [1]
+
+        ! DERIVED from the five above by chion_const_derive (chion_const_init,
+        ! chion_const_load): the neutral exchange coefficient
+        ! k^2/(ln(z/z0m) ln(z/z0h)) over snow and over bare ice, which the
+        ! turbulence would otherwise form (two logarithms of constants) at
+        ! every call. Call chion_const_derive after changing those parameters.
+        real(wp) :: semix_neutral_exchange_snow     ! [1]
+        real(wp) :: semix_neutral_exchange_ice      ! [1]
 
         ! Albedo
         real(wp) :: alpha_dry          ! [1] dry snow albedo (upper bound)
@@ -246,6 +352,27 @@ module chion_defs
         real(wp) :: alpha_ice          ! [1] bare ice albedo
         real(wp) :: max_lwc_albedo     ! [1] LWC at which albedo reaches alpha_wet
         integer  :: albedo_scheme      ! CHION_ALBEDO_*
+
+        ! Snowfall-age albedo (CHION_ALBEDO_AGING): e-folding time of the
+        ! relaxation towards alpha_wet, cold vs melting surface.
+        real(wp) :: aging_cold_timescale_days     ! [d]
+        real(wp) :: aging_melting_timescale_days  ! [d]
+        ! e-folding step snowfall of the aging albedo's rejuvenation (D30).
+        real(wp) :: aging_snowfall_ref            ! [kg m-2]
+
+        ! Thin-snow albedo (chion only, D40): the albedo the surface energy
+        ! balance sees is f*alpha_snow + (1-f)*alpha_bg. Snow-cover fraction
+        ! f = min(1, SWE/swe_crit_albedo) from the column's snow water
+        ! equivalent (dynamic, aging, constant; swe_crit_albedo = 0 is off,
+        ! f = 1 on any surface snow); under albedo_scheme = semix CLIMBER-X's
+        ! tanh(h_snow/(c_fsnow*z0m_ice)), times h_snow/(h_snow +
+        ! c_fsnow_orog*z_sur_std) when the host gives a subgrid orography.
+        ! Background alpha_bg: the bare-ice albedo under ice, alpha_land on a
+        ! land column (H_ice = 0, D41).
+        real(wp) :: swe_crit_albedo               ! [kg m-2]
+        real(wp) :: alpha_land                    ! [1]
+        real(wp) :: c_fsnow                       ! [1]
+        real(wp) :: c_fsnow_orog                  ! [1]
 
         ! SEMIX spectral albedo (CHION_ALBEDO_SEMIX). Warren & Wiscombe 1980
         ! bands, collapsed to broadband by the incoming-SW spectral weights.
@@ -271,7 +398,21 @@ module chion_defs
         ! Radiation. eps_ice is consulted ONLY by seb_scheme = semix, which
         ! carries SEMIX's snow/ice emissivity pair; the bessi scheme applies
         ! eps_snow to bare ice as well, as Chion.jl does.
-        real(wp) :: eps_air            ! [1] emissivity of air
+        real(wp) :: eps_air            ! [1] emissivity of air (graybody longwave)
+
+        ! Cloud-proxy downwelling longwave (CHION_LONGWAVE_CLOUD_PROXY,
+        ! Chion.jl 03bb445): eps = base + temperature_slope*(T_a - T0)
+        ! + cloud_slope*n, n = 1 - SWdn/(TOA*tau_clear(z)), tau_clear =
+        ! clear_sky_transmissivity + clear_sky_transmissivity_per_km*z/1000;
+        ! n = night_cloud_fraction without a daily-mean TOA.
+        integer  :: longwave_scheme                     ! CHION_LONGWAVE_*
+        real(wp) :: lw_emissivity_base                  ! [1]
+        real(wp) :: lw_emissivity_temperature_slope     ! [K-1]
+        real(wp) :: lw_emissivity_cloud_slope           ! [1]
+        real(wp) :: lw_clear_sky_transmissivity         ! [1] at sea level
+        real(wp) :: lw_clear_sky_transmissivity_per_km  ! [km-1]
+        real(wp) :: lw_night_cloud_fraction             ! [1]
+
         real(wp) :: eps_snow           ! [1] emissivity of snow
         real(wp) :: eps_ice            ! [1] emissivity of bare ice (semix SEB)
         real(wp) :: sigma_sb           ! [W m-2 K-4] Stefan-Boltzmann constant
@@ -332,8 +473,21 @@ module chion_defs
         logical  :: has_alb_ice_host = .FALSE.
 
         real(wp) :: latitude_deg        ! [deg N]
+        real(wp) :: surface_height = 0.0_wp  ! [m] diurnal T amplitude gradient; non-finite = no excess
         real(wp) :: day_of_year         ! [d] fractional, 1-based
         real(wp) :: solar_longitude_deg ! [deg]
+
+        ! chion only, not in SnowpackStepForcing: the host's ice thickness.
+        ! BESSI puts its thermal ice substrate only under ice (H_ice > 0); a
+        ! land column (H_ice = 0, the forcing default) has none
+        ! (docs/porting_notes.md D34). ITM still takes it as an argument.
+        real(wp) :: H_ice = 0.0_wp      ! [m]
+
+        ! chion only: the host's daily-mean top-of-atmosphere shortwave. When
+        ! given, the cloud-proxy longwave divides by it instead of chion's
+        ! fixed-orbit TOA from latitude and season (docs/porting_notes.md D33).
+        real(wp) :: toa_shortwave = 0.0_wp       ! [W m-2]
+        logical  :: has_toa_shortwave = .FALSE.
     end type chion_step_forcing_class
 
     ! === Host-facing forcing =================================================
@@ -364,7 +518,7 @@ module chion_defs
         real(wp), allocatable :: relative_humidity(:)    ! [1]
         logical,  allocatable :: has_relative_humidity(:)
 
-        real(wp), allocatable :: surface_height(:)       ! [m] used for air pressure
+        real(wp), allocatable :: surface_height(:)       ! [m] host air pressure; BESSI diurnal amplitude; ITM
         real(wp), allocatable :: air_pressure(:)         ! [Pa]
         real(wp), allocatable :: prescribed_albedo(:)    ! [1]
         logical,  allocatable :: has_prescribed_albedo(:)
@@ -373,6 +527,8 @@ module chion_defs
         logical,  allocatable :: has_coszm(:)
         real(wp), allocatable :: cloud(:)                ! [1] cloud fraction
         logical,  allocatable :: has_cloud(:)
+        ! dust_dep and alb_ice_host are Chion.jl's dust_deposition and
+        ! prescribed_ice_albedo under the host-contract names (D42).
         real(wp), allocatable :: dust_dep(:)             ! [kg m-2 s-1] dust deposition
         logical,  allocatable :: has_dust_dep(:)
         real(wp), allocatable :: z_sur_std(:)            ! [m] subgrid height std dev
@@ -382,14 +538,20 @@ module chion_defs
 
         real(wp), allocatable :: latitude_deg(:)         ! [deg N]
 
-        ! --- ITM-only fields (WP11) ------------------------------------
+        ! Optional daily-mean top-of-atmosphere shortwave for the cloud-proxy
+        ! longwave (chion only, D33); unset, chion computes a fixed-orbit TOA.
+        real(wp), allocatable :: toa_shortwave(:)        ! [W m-2]
+        logical,  allocatable :: has_toa_shortwave(:)
+
+        ! --- Ice-sheet fields (WP11; H_ice also BESSI since C3) ---------
         !
-        ! These three are deliberately NOT part of chion_step_forcing_class.
-        ! That type mirrors Chion.jl's SnowpackStepForcing and is the shared,
-        ! model-neutral contract every kernel takes; adding ice-sheet state to
-        ! it would make BESSI and PDD carry fields they can never use. ITM
-        ! instead receives them as explicit arguments from the dispatcher
-        ! (itm_step(itm,icol,fc,z_srf,H_ice,PDDs)).
+        ! PDDs is deliberately NOT part of chion_step_forcing_class. That type
+        ! mirrors Chion.jl's SnowpackStepForcing and is the shared,
+        ! model-neutral contract every kernel takes. ITM receives z_srf, H_ice
+        ! and PDDs as explicit arguments from the dispatcher
+        ! (itm_step(itm,icol,fc,z_srf,H_ice,PDDs)). H_ice is packed into the
+        ! step forcing as well, because BESSI places its thermal ice substrate
+        ! only where H_ice > 0 (docs/porting_notes.md D34).
         !
         ! ITM's z_srf is the EXISTING surface_height(:) field above -- there is
         ! no separate array for it.
@@ -466,7 +628,9 @@ module chion_defs
     public :: chion_param_class
 
     public :: chion_const_init
+    public :: chion_const_derive
     public :: chion_const_print
+    public :: chion_const_validate
 
     public :: chion_forcing_alloc
     public :: chion_forcing_dealloc
@@ -477,7 +641,9 @@ module chion_defs
     public :: chion_albedo_scheme_flag
     public :: chion_semix_snow_albedo_flag
     public :: chion_seb_scheme_flag
-    public :: chion_semix_qsat_flag
+    public :: chion_longwave_scheme_flag
+    public :: chion_turbulent_flux_scheme_flag
+    public :: chion_climberx_qsat_flag
     public :: chion_fresh_snow_density_scheme_flag
     public :: chion_densify_scheme_flag
 
@@ -506,7 +672,6 @@ contains
         c%rho_s_c = 26.0_wp
         c%fresh_snow_density_scheme = CHION_FRESH_SNOW_DENSITY_CONSTANT
 
-        c%Ki      = 2.1_wp
         c%ci      = 2110.0_wp
         c%cw      = 4181.0_wp
         c%Lm      = 334000.0_wp
@@ -516,9 +681,13 @@ contains
 
         c%D_sh    = 10.0_wp
 
-        ! SEMIX aerodynamic exchange defaults (CLIMBER-X smb_par.nml /
-        ! smb_params.f90 / constants.f90).
-        c%seb_scheme  = CHION_SEB_BESSI
+        ! Chion.jl 03bb445's calibrated surface scheme: graybody longwave
+        ! absorbed with the surface emissivity, its own bulk turbulence.
+        c%seb_scheme            = CHION_SEB_SEMIX
+        c%turbulent_flux_scheme = CHION_TURB_SEMIX
+
+        ! CLIMBER-X SEMIX aerodynamic exchange defaults (CLIMBER-X
+        ! smb_par.nml / smb_params.f90 / constants.f90).
         c%z0m_snow    = 0.0024_wp
         c%z0m_ice     = 0.002_wp
         c%zm_to_zh    = exp(-2.0_wp)
@@ -528,13 +697,35 @@ contains
         c%R_dry       = 287.058_wp
         c%l_neutral   = .FALSE.
         c%l_dew       = .TRUE.
-        c%semix_qsat  = SEMIX_QSAT_SEMIX
+        c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
+
+        ! Chion.jl bulk turbulence defaults (src/constants.jl, 03bb445).
+        c%semix_karman                   = 0.4_wp
+        c%semix_surface_height           = 10.0_wp
+        c%semix_z0m_snow                 = 0.001_wp
+        c%semix_z0m_ice                  = 0.01_wp
+        c%semix_zm_to_zh                 = 10.0_wp
+        c%semix_sensible_exchange_factor = 2.5_wp
+        c%semix_stable_coefficient       = 40.0_wp
+        c%semix_latent_exchange_factor   = 1.0_wp
 
         c%alpha_dry      = 0.81_wp
         c%alpha_wet      = 0.70_wp
-        c%alpha_ice      = 0.30_wp
+        c%alpha_ice      = 0.40_wp
         c%max_lwc_albedo = 0.10_wp
         c%albedo_scheme  = CHION_ALBEDO_DYNAMIC
+
+        ! dev_nils defaults (27113b6); 12407a3 had 5 d for the melting surface.
+        c%aging_cold_timescale_days    = 20.0_wp
+        c%aging_melting_timescale_days =  2.0_wp
+        c%aging_snowfall_ref           = 10.0_wp
+
+        ! Thin-snow albedo (D40, D41); c_fsnow and c_fsnow_orog are CLIMBER-X's
+        ! smb_par values.
+        c%swe_crit_albedo = 10.0_wp
+        c%alpha_land      = 0.2_wp
+        c%c_fsnow         = 10.0_wp
+        c%c_fsnow_orog    = 2.0e-4_wp
 
         ! SEMIX spectral albedo defaults (CLIMBER-X smb_par / constants).
         c%frac_vu          = 0.45_wp
@@ -557,6 +748,17 @@ contains
         c%sigma_orog_crit   = 1000.0_wp
 
         c%eps_air  = 0.80_wp
+
+        ! Chion.jl 03bb445 coefficients (fitted to daily MAR longwave over
+        ! Greenland) and default, the cloud proxy.
+        c%longwave_scheme                    = CHION_LONGWAVE_CLOUD_PROXY
+        c%lw_emissivity_base                 = 0.624_wp
+        c%lw_emissivity_temperature_slope    = 0.0032_wp
+        c%lw_emissivity_cloud_slope          = 0.613_wp
+        c%lw_clear_sky_transmissivity        = 0.85_wp
+        c%lw_clear_sky_transmissivity_per_km = 0.075_wp
+        c%lw_night_cloud_fraction            = 0.389_wp
+
         c%eps_snow = 0.98_wp
         c%eps_ice  = 0.98_wp
         c%sigma_sb = 5.670373e-8_wp
@@ -565,9 +767,52 @@ contains
 
         c%low_density_densification = CHION_DENSIFY_BESSI
 
+        call chion_const_derive(c)
+
         return
 
     end subroutine chion_const_init
+
+    subroutine chion_const_derive(c)
+        ! The derived constants of chion_const_class, from the parameters they
+        ! derive from. Only constants: the formulas are those of the physics
+        ! modules that use them, evaluated there exactly so.
+        !
+        ! semix_neutral_exchange_*: Chion.jl's _semix_aerodynamic_resistance
+        ! (snow_turbulence), C_hn = k^2/(ln(z/z0m) ln(z/z0h)), z0h =
+        ! z0m/zm_to_zh, the product floored at EPS_TINY as there.
+
+        implicit none
+
+        type(chion_const_class), intent(INOUT) :: c
+
+        c%semix_neutral_exchange_snow = semix_neutral_exchange(c,c%semix_z0m_snow)
+        c%semix_neutral_exchange_ice  = semix_neutral_exchange(c,c%semix_z0m_ice)
+
+        return
+
+    end subroutine chion_const_derive
+
+    pure function semix_neutral_exchange(c,z0m) result(neutral_ch)
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+        real(wp),                intent(IN) :: z0m          ! [m]
+        real(wp) :: neutral_ch                              ! [1]
+
+        ! Local variables
+        real(wp) :: z0h, log_product
+
+        z0h         = z0m/c%semix_zm_to_zh
+        log_product = log(c%semix_surface_height/z0m)*log(c%semix_surface_height/z0h)
+        if (.not. (real(log_product,wp_acc) .gt. TOL_TINY)) log_product = real(TOL_TINY,wp)
+
+        neutral_ch = (c%semix_karman*c%semix_karman)/log_product
+
+        return
+
+    end function semix_neutral_exchange
 
     subroutine chion_const_print(c)
         ! Write the full constants set to stdout, for provenance in run logs.
@@ -584,7 +829,6 @@ contains
         write(*,"(a25,g14.6,a)") "rho_s_b = ", c%rho_s_b, "  [kg m-3 K-1]"
         write(*,"(a25,g14.6,a)") "rho_s_c = ", c%rho_s_c, "  [kg m-3 (m s-1)^-1/2]"
         write(*,"(a25,i14)")     "fresh_snow_density_scheme = ", c%fresh_snow_density_scheme
-        write(*,"(a25,g14.6,a)") "Ki      = ", c%Ki,      "  [W m-1 K-1]"
         write(*,"(a25,g14.6,a)") "ci      = ", c%ci,      "  [J kg-1 K-1]"
         write(*,"(a25,g14.6,a)") "cw      = ", c%cw,      "  [J kg-1 K-1]"
         write(*,"(a25,g14.6,a)") "Lm      = ", c%Lm,      "  [J kg-1]"
@@ -593,19 +837,47 @@ contains
         write(*,"(a25,g14.6,a)") "latent_heat_flux_ratio = ", c%latent_heat_flux_ratio, "  [1]"
         write(*,"(a25,g14.6,a)") "D_sh    = ", c%D_sh,    "  [W m-2 K-1]"
         write(*,"(a25,i14)")     "seb_scheme = ", c%seb_scheme
+        write(*,"(a25,i14)")     "turbulent_flux_scheme = ", c%turbulent_flux_scheme
         write(*,"(a25,g14.6,a)") "z0m_snow = ", c%z0m_snow, "  [m]"
         write(*,"(a25,g14.6,a)") "z0m_ice  = ", c%z0m_ice,  "  [m]"
         write(*,"(a25,g14.6,a)") "zm_to_zh = ", c%zm_to_zh, "  [1]"
         write(*,"(a25,g14.6,a)") "z_sfl    = ", c%z_sfl,    "  [m]"
         write(*,"(a25,l14)")     "l_neutral = ", c%l_neutral
         write(*,"(a25,l14)")     "l_dew     = ", c%l_dew
-        write(*,"(a25,i14)")     "semix_qsat = ", c%semix_qsat
+        write(*,"(a25,i14)")     "climberx_qsat = ", c%climberx_qsat
+        write(*,"(a37,g14.6,a)") "semix_karman = ", c%semix_karman, "  [1]"
+        write(*,"(a37,g14.6,a)") "semix_surface_height = ", c%semix_surface_height, "  [m]"
+        write(*,"(a37,g14.6,a)") "semix_z0m_snow = ", c%semix_z0m_snow, "  [m]"
+        write(*,"(a37,g14.6,a)") "semix_z0m_ice = ", c%semix_z0m_ice, "  [m]"
+        write(*,"(a37,g14.6,a)") "semix_zm_to_zh = ", c%semix_zm_to_zh, "  [1]"
+        write(*,"(a37,g14.6,a)") "semix_sensible_exchange_factor = ", &
+                                 c%semix_sensible_exchange_factor, "  [1]"
+        write(*,"(a37,g14.6,a)") "semix_stable_coefficient = ", c%semix_stable_coefficient, "  [1]"
+        write(*,"(a37,g14.6,a)") "semix_latent_exchange_factor = ", &
+                                 c%semix_latent_exchange_factor, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_dry = ", c%alpha_dry, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_wet = ", c%alpha_wet, "  [1]"
         write(*,"(a25,g14.6,a)") "alpha_ice = ", c%alpha_ice, "  [1]"
         write(*,"(a25,g14.6,a)") "max_lwc_albedo = ", c%max_lwc_albedo, "  [1]"
         write(*,"(a25,i14)")     "albedo_scheme = ", c%albedo_scheme
+        write(*,"(a25,g14.6,a)") "aging_cold_timescale_days = ",    c%aging_cold_timescale_days,    "  [d]"
+        write(*,"(a25,g14.6,a)") "aging_melting_timescale_days = ", c%aging_melting_timescale_days, "  [d]"
+        write(*,"(a25,g14.6,a)") "aging_snowfall_ref = ", c%aging_snowfall_ref, "  [kg m-2]"
+        write(*,"(a25,g14.6,a)") "swe_crit_albedo = ", c%swe_crit_albedo, "  [kg m-2]"
+        write(*,"(a25,g14.6,a)") "alpha_land = ", c%alpha_land, "  [1]"
+        write(*,"(a25,g14.6,a)") "c_fsnow = ", c%c_fsnow, "  [1]"
+        write(*,"(a25,g14.6,a)") "c_fsnow_orog = ", c%c_fsnow_orog, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_air  = ", c%eps_air,  "  [1]"
+        write(*,"(a25,i14)")     "longwave_scheme = ", c%longwave_scheme
+        write(*,"(a37,g14.6,a)") "lw_emissivity_base = ", c%lw_emissivity_base, "  [1]"
+        write(*,"(a37,g14.6,a)") "lw_emissivity_temperature_slope = ", &
+                                 c%lw_emissivity_temperature_slope, "  [K-1]"
+        write(*,"(a37,g14.6,a)") "lw_emissivity_cloud_slope = ", c%lw_emissivity_cloud_slope, "  [1]"
+        write(*,"(a37,g14.6,a)") "lw_clear_sky_transmissivity = ", &
+                                 c%lw_clear_sky_transmissivity, "  [1]"
+        write(*,"(a37,g14.6,a)") "lw_clear_sky_transmissivity_per_km = ", &
+                                 c%lw_clear_sky_transmissivity_per_km, "  [km-1]"
+        write(*,"(a37,g14.6,a)") "lw_night_cloud_fraction = ", c%lw_night_cloud_fraction, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_snow = ", c%eps_snow, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_ice  = ", c%eps_ice,  "  [1]"
         write(*,"(a25,g14.6,a)") "sigma_sb = ", c%sigma_sb, "  [W m-2 K-4]"
@@ -615,6 +887,97 @@ contains
         return
 
     end subroutine chion_const_print
+
+    subroutine chion_const_validate(c)
+        ! Constraints Chion.jl's SnowpackPhysicalConstants constructor checks
+        ! (src/constants.jl, 6d06af6, 03bb445): the aging timescales are
+        ! positive, under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1,
+        ! the clear-sky transmissivity is positive and the night cloud
+        ! fraction in [0,1], the semix turbulence's karman constant, height,
+        ! roughness lengths, roughness ratio and exchange factors positive and
+        ! its stable coefficient non-negative. Plus chion's
+        ! aging_snowfall_ref > 0 (D30), and for the thin-snow albedo (D40,
+        ! D41) swe_crit_albedo >= 0, alpha_land in [0,1], c_fsnow > 0 and
+        ! c_fsnow_orog >= 0.
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+
+        if (.not. (c%semix_karman .gt. 0.0_wp .and. c%semix_surface_height .gt. 0.0_wp &
+                   .and. c%semix_z0m_snow .gt. 0.0_wp .and. c%semix_z0m_ice .gt. 0.0_wp &
+                   .and. c%semix_zm_to_zh .gt. 0.0_wp &
+                   .and. c%semix_sensible_exchange_factor .gt. 0.0_wp &
+                   .and. c%semix_latent_exchange_factor .gt. 0.0_wp)) then
+            write(io_unit_err,*) "chion_const_validate:: Error: semix_karman, &
+                                 &semix_surface_height, semix_z0m_snow, semix_z0m_ice, &
+                                 &semix_zm_to_zh and the semix exchange factors must be positive."
+            stop "Program stopped."
+        end if
+
+        if (.not. c%semix_stable_coefficient .ge. 0.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: semix_stable_coefficient &
+                                 &must be non-negative."
+            write(io_unit_err,*) "semix_stable_coefficient = ", c%semix_stable_coefficient
+            stop "Program stopped."
+        end if
+
+        if (.not. c%lw_clear_sky_transmissivity .gt. 0.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: lw_clear_sky_transmissivity &
+                                 &must be positive."
+            write(io_unit_err,*) "lw_clear_sky_transmissivity = ", c%lw_clear_sky_transmissivity
+            stop "Program stopped."
+        end if
+
+        if (c%lw_night_cloud_fraction .lt. 0.0_wp .or. c%lw_night_cloud_fraction .gt. 1.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: lw_night_cloud_fraction &
+                                 &must be in [0,1]."
+            write(io_unit_err,*) "lw_night_cloud_fraction = ", c%lw_night_cloud_fraction
+            stop "Program stopped."
+        end if
+
+        if (c%aging_cold_timescale_days .le. 0.0_wp .or. &
+            c%aging_melting_timescale_days .le. 0.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: aging timescales must be positive."
+            write(io_unit_err,*) "aging_cold_timescale_days    = ", c%aging_cold_timescale_days
+            write(io_unit_err,*) "aging_melting_timescale_days = ", c%aging_melting_timescale_days
+            stop "Program stopped."
+        end if
+
+        if (c%aging_snowfall_ref .le. 0.0_wp) then
+            write(io_unit_err,*) "chion_const_validate:: Error: aging_snowfall_ref must be positive."
+            write(io_unit_err,*) "aging_snowfall_ref = ", c%aging_snowfall_ref
+            stop "Program stopped."
+        end if
+
+        if (.not. (c%swe_crit_albedo .ge. 0.0_wp .and. c%c_fsnow .gt. 0.0_wp &
+                   .and. c%c_fsnow_orog .ge. 0.0_wp)) then
+            write(io_unit_err,*) "chion_const_validate:: Error: swe_crit_albedo and &
+                                 &c_fsnow_orog must be non-negative, c_fsnow positive."
+            write(io_unit_err,*) "swe_crit_albedo, c_fsnow, c_fsnow_orog = ", &
+                                 c%swe_crit_albedo, c%c_fsnow, c%c_fsnow_orog
+            stop "Program stopped."
+        end if
+
+        if (.not. (c%alpha_land .ge. 0.0_wp .and. c%alpha_land .le. 1.0_wp)) then
+            write(io_unit_err,*) "chion_const_validate:: Error: alpha_land must be in [0,1]."
+            write(io_unit_err,*) "alpha_land = ", c%alpha_land
+            stop "Program stopped."
+        end if
+
+        if (c%albedo_scheme .eq. CHION_ALBEDO_AGING) then
+            if (c%alpha_wet .lt. 0.0_wp .or. c%alpha_wet .gt. c%alpha_dry &
+                                         .or. c%alpha_dry .gt. 1.0_wp) then
+                write(io_unit_err,*) "chion_const_validate:: Error: albedo_scheme = 'aging' &
+                                     &requires 0 <= alpha_wet <= alpha_dry <= 1."
+                write(io_unit_err,*) "alpha_wet, alpha_dry = ", c%alpha_wet, c%alpha_dry
+                stop "Program stopped."
+            end if
+        end if
+
+        return
+
+    end subroutine chion_const_validate
 
     subroutine chion_forcing_alloc(forc,ncol)
         ! Allocate all forcing arrays and set neutral defaults: no prescribed
@@ -666,6 +1029,9 @@ contains
 
         allocate(forc%latitude_deg(ncol))
 
+        allocate(forc%toa_shortwave(ncol))
+        allocate(forc%has_toa_shortwave(ncol))
+
         allocate(forc%H_ice(ncol))
         allocate(forc%PDDs(ncol))
 
@@ -706,9 +1072,13 @@ contains
 
         forc%latitude_deg = 0.0_wp
 
-        ! ITM-only. H_ice = 0 selects calc_albedo_surface's land branch, and
-        ! PDDs = 0 selects the "desert" critical snow depth. Both are neutral
-        ! starting points; a host running model="itm" must set them.
+        forc%toa_shortwave     = 0.0_wp
+        forc%has_toa_shortwave = .FALSE.
+
+        ! H_ice = 0 selects ITM's land albedo branch and gives BESSI no ice
+        ! substrate; PDDs = 0 selects ITM's "desert" critical snow depth. A
+        ! host running model="itm", or BESSI with ice_substrate_layers > 0,
+        ! must set H_ice.
         forc%H_ice = 0.0_wp
         forc%PDDs  = 0.0_wp
 
@@ -755,6 +1125,8 @@ contains
         if (allocated(forc%alb_ice_host))          deallocate(forc%alb_ice_host)
         if (allocated(forc%has_alb_ice_host))      deallocate(forc%has_alb_ice_host)
         if (allocated(forc%latitude_deg))          deallocate(forc%latitude_deg)
+        if (allocated(forc%toa_shortwave))         deallocate(forc%toa_shortwave)
+        if (allocated(forc%has_toa_shortwave))     deallocate(forc%has_toa_shortwave)
         if (allocated(forc%H_ice))                 deallocate(forc%H_ice)
         if (allocated(forc%PDDs))                  deallocate(forc%PDDs)
 
@@ -912,14 +1284,13 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("ww","warren","warren_wiscombe")
+            case("warren_wiscombe")
                 flag = SEMIX_SNOW_ALBEDO_WW
             case("dang")
                 flag = SEMIX_SNOW_ALBEDO_DANG
             case DEFAULT
                 write(io_unit_err,*) "chion_semix_snow_albedo_flag:: Error: scheme not recognized."
-                write(io_unit_err,*) "semix_snow_albedo should be one of: ['ww','dang'] &
-                                     &(aliases: 'warren','warren_wiscombe' -> 'ww')"
+                write(io_unit_err,*) "semix_snow_albedo should be one of: ['warren_wiscombe','dang']"
                 write(io_unit_err,*) "semix_snow_albedo = ", trim(name)
                 stop "Program stopped."
         end select
@@ -952,7 +1323,59 @@ contains
 
     end function chion_seb_scheme_flag
 
-    function chion_semix_qsat_flag(name) result(flag)
+    function chion_longwave_scheme_flag(name) result(flag)
+        ! Map a namelist string onto a downwelling-longwave scheme flag.
+
+        implicit none
+
+        character(len=*), intent(IN) :: name
+        integer :: flag
+
+        select case(trim(adjustl(name)))
+            case("graybody")
+                flag = CHION_LONGWAVE_GRAYBODY
+            case("cloud_proxy")
+                flag = CHION_LONGWAVE_CLOUD_PROXY
+            case DEFAULT
+                write(io_unit_err,*) "chion_longwave_scheme_flag:: Error: longwave scheme not recognized."
+                write(io_unit_err,*) "longwave_scheme should be one of: ['graybody','cloud_proxy']"
+                write(io_unit_err,*) "longwave_scheme = ", trim(name)
+                stop "Program stopped."
+        end select
+
+        return
+
+    end function chion_longwave_scheme_flag
+
+    function chion_turbulent_flux_scheme_flag(name) result(flag)
+        ! Map a namelist string onto a turbulent-flux scheme flag.
+
+        implicit none
+
+        character(len=*), intent(IN) :: name
+        integer :: flag
+
+        select case(trim(adjustl(name)))
+            case("bessi")
+                flag = CHION_TURB_BESSI
+            case("semix")
+                flag = CHION_TURB_SEMIX
+            case("climberx")
+                flag = CHION_TURB_CLIMBERX
+            case DEFAULT
+                write(io_unit_err,*) "chion_turbulent_flux_scheme_flag:: Error: &
+                                     &turbulent flux scheme not recognized."
+                write(io_unit_err,*) "turbulent_flux_scheme should be one of: &
+                                     &['bessi','semix','climberx']"
+                write(io_unit_err,*) "turbulent_flux_scheme = ", trim(name)
+                stop "Program stopped."
+        end select
+
+        return
+
+    end function chion_turbulent_flux_scheme_flag
+
+    function chion_climberx_qsat_flag(name) result(flag)
         ! Map a namelist string onto a saturation-humidity parameterization.
 
         implicit none
@@ -961,26 +1384,24 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("semix","climberx")
-                flag = SEMIX_QSAT_SEMIX
-            case("bessi","chion")
-                flag = SEMIX_QSAT_BESSI
+            case("climberx")
+                flag = CLIMBERX_QSAT_CLIMBERX
+            case("bessi")
+                flag = CLIMBERX_QSAT_BESSI
             case DEFAULT
-                write(io_unit_err,*) "chion_semix_qsat_flag:: Error: scheme not recognized."
-                write(io_unit_err,*) "semix_qsat should be one of: ['semix','bessi'] &
-                                     &(aliases: 'climberx' -> 'semix', 'chion' -> 'bessi')"
-                write(io_unit_err,*) "semix_qsat = ", trim(name)
+                write(io_unit_err,*) "chion_climberx_qsat_flag:: Error: scheme not recognized."
+                write(io_unit_err,*) "climberx_qsat should be one of: ['climberx','bessi']"
+                write(io_unit_err,*) "climberx_qsat = ", trim(name)
                 stop "Program stopped."
         end select
 
         return
 
-    end function chion_semix_qsat_flag
+    end function chion_climberx_qsat_flag
 
     function chion_albedo_scheme_flag(name) result(flag)
-        ! Map a namelist string onto an albedo scheme flag.
-        ! Chion.jl aliases :bessi and :legacy to :constant
-        ! (src/constants.jl:151-165); those aliases are preserved.
+        ! Map a namelist string onto an albedo scheme flag. Canonical names
+        ! only: Chion.jl 03bb445 dropped the aliases :bessi and :legacy.
 
         implicit none
 
@@ -988,7 +1409,7 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("constant","bessi","legacy")
+            case("constant")
                 flag = CHION_ALBEDO_CONSTANT
             case("dynamic")
                 flag = CHION_ALBEDO_DYNAMIC
@@ -996,11 +1417,12 @@ contains
                 flag = CHION_ALBEDO_PRESCRIBED
             case("semix")
                 flag = CHION_ALBEDO_SEMIX
+            case("aging")
+                flag = CHION_ALBEDO_AGING
             case DEFAULT
                 write(io_unit_err,*) "chion_albedo_scheme_flag:: Error: albedo scheme not recognized."
                 write(io_unit_err,*) "albedo_scheme should be one of: &
-                                     &['constant','dynamic','prescribed','semix'] &
-                                     &(aliases: 'bessi','legacy' -> 'constant')"
+                                     &['constant','dynamic','prescribed','semix','aging']"
                 write(io_unit_err,*) "albedo_scheme = ", trim(name)
                 stop "Program stopped."
         end select
@@ -1010,8 +1432,8 @@ contains
     end function chion_albedo_scheme_flag
 
     function chion_fresh_snow_density_scheme_flag(name) result(flag)
-        ! Chion.jl aliases :bessi -> :constant and :htessel -> :parameterized
-        ! (src/constants.jl:131-147).
+        ! Canonical names only: Chion.jl 03bb445 dropped the aliases
+        ! :bessi -> :constant and :htessel -> :parameterized.
 
         implicit none
 
@@ -1019,16 +1441,15 @@ contains
         integer :: flag
 
         select case(trim(adjustl(name)))
-            case("constant","bessi")
+            case("constant")
                 flag = CHION_FRESH_SNOW_DENSITY_CONSTANT
-            case("parameterized","htessel")
+            case("parameterized")
                 flag = CHION_FRESH_SNOW_DENSITY_PARAMETERIZED
             case DEFAULT
                 write(io_unit_err,*) "chion_fresh_snow_density_scheme_flag:: Error: &
                                      &fresh snow density scheme not recognized."
                 write(io_unit_err,*) "fresh_snow_density_scheme should be one of: &
-                                     &['constant','parameterized'] &
-                                     &(aliases: 'bessi','htessel')"
+                                     &['constant','parameterized']"
                 write(io_unit_err,*) "fresh_snow_density_scheme = ", trim(name)
                 stop "Program stopped."
         end select

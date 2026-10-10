@@ -46,21 +46,19 @@ program test_bessi
     ! with P the cumulative precipitation mass actually accepted by the
     ! column. Note mass_base does NOT appear: it is already inside smb_ice.
     !
-    ! Two upstream defects would break this identity, and the test is set up
-    ! to avoid both rather than to hide them:
+    ! Two upstream defects would break this identity; chion fixes the first
+    ! and the test avoids the second rather than hiding it:
     !
-    !   * defect 11 -- rain falling on a column with mass(1) <= 0 is silently
-    !     dropped, and rain is ignored entirely on the bare-ice path. The
-    !     driver therefore withholds rain on any step that begins with
-    !     mass(1) <= 0, so every kilogram offered is a kilogram accepted.
-    !   * defect  1 -- apply_snow_surface_vapor_mass_flux returns the
+    !   * defect 11 -- rain falling on a column with mass(1) <= 0 was silently
+    !     dropped upstream. chion now routes it to runoff (D29), so every
+    !     kilogram offered is accepted and no rain is withheld.
+    !   * defect  1 -- apply_snow_surface_vapor_mass_flux returned the
     !     unclipped vapor_mass while applying a clipped one, so when
-    !     sublimation demand exceeds the surface layer the diagnostic
-    !     overstates the mass removed. The closure runs therefore leave the
-    !     humidity forcing off (has_relative_humidity = .FALSE., has_q_lh =
-    !     .FALSE.), which makes the latent flux identically zero. A separate
-    !     non-asserting probe reports the residual WITH humidity on, which is
-    !     a direct measurement of defect 1.
+    !     sublimation demand exceeded the surface layer the diagnostic
+    !     overstated the mass removed. Fixed upstream in Chion.jl 03bb445 and
+    !     ported (C1): the diagnostic is the change actually applied. Test 1b
+    !     asserts the identity with humidity on where nothing is clipped,
+    !     test 1c where the surface layer is exhausted every step.
     !
     ! Measured behaviour of the residual (gfortran -O2, wp = sp): the RELATIVE
     ! residual saturates rather than growing with run length --
@@ -76,6 +74,8 @@ program test_bessi
     use snow_column_utils,  only : total_snow_water_mass, surface_has_snow
     use snow_diurnal,       only : diurnal_substep_bounds
     use snow_bessi
+    use snow_albedo,        only : snow_cover_fraction, thin_snow_albedo
+    use snow_albedo_semix,  only : semix_snow_cover_fraction
     use phys_constants, only : sec_day
 
     implicit none
@@ -93,13 +93,22 @@ program test_bessi
     write(*,*)
 
     call test_mass_closure(nfail)
+    call test_mass_closure_humid(nfail)
+    call test_mass_closure_exhausted(nfail)
     call test_cold_dry_column(nfail)
     call test_bare_and_recover(nfail)
     call test_capacity(nfail)
     call test_bare_ice_skips_water(nfail)
+    call test_bare_rain_routed_once(nfail)
+    call test_fresh_snow_split_on_bare(nfail)
     call test_diurnal(nfail)
     call test_scheme_matrix(nfail)
-    call probe_defect_1(nfail)
+    call test_substrate_cold_content(nfail)
+    call test_substrate_column(nfail)
+    call test_fine_layers_column(nfail)
+    call test_fine_layers_firn(nfail)
+    call test_thin_snow_albedo(nfail)
+    call test_bare_land(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -200,6 +209,10 @@ contains
         forc%day_of_year         = 1.0_wp
         forc%solar_longitude_deg = 0.0_wp
 
+        ! A glacier column: ice under the snow. Land (H_ice = 0) has no ice
+        ! to ablate (D41) and no substrate (D34); the land tests set it.
+        forc%H_ice = 1000.0_wp
+
         return
 
     end subroutine neutral_forcing
@@ -208,14 +221,12 @@ contains
     ! Drivers
     ! =====================================================================
 
-    subroutine run_annual_cycle(bsi,c,nyears,icol,precip)
+    subroutine run_annual_cycle(bsi,c,nyears,icol,precip,h_ice)
         ! Drive one column through nyears of the synthetic annual cycle,
-        ! accumulating the precipitation mass the column actually accepted.
-        !
-        ! Rain is withheld on any step that begins with mass(1) <= 0, because
-        ! apply_accumulation would drop it (upstream defect 11) and the
-        ! closure identity would then be measuring that defect rather than
-        ! the assembly.
+        ! accumulating the precipitation mass offered. All of it is accepted:
+        ! rain with no layer to hold it runs off (D29). h_ice is the host ice
+        ! thickness (default neutral_forcing's glacier; 0 = land: no ice
+        ! substrate, no ice ablation).
 
         implicit none
 
@@ -224,23 +235,18 @@ contains
         integer,                 intent(IN)    :: nyears
         integer,                 intent(IN)    :: icol
         real(wp_acc),            intent(INOUT) :: precip
+        real(wp), optional,      intent(IN)    :: h_ice
 
         ! Local variables
         integer  :: iyr, iday
         real(wp) :: dt_seconds
-        logical  :: rain_would_land
         type(chion_step_forcing_class) :: forc
 
         do iyr = 1, nyears
             do iday = 1, NDAY_YEAR
 
                 call annual_forcing(iday,c,forc)
-
-                rain_would_land = .FALSE.
-                if (bsi%now%n_lay(icol) .gt. 0) then
-                    if (bsi%now%mass(1,icol) .gt. 0.0_wp) rain_would_land = .TRUE.
-                end if
-                if (.not. rain_would_land) forc%rainfall_rate = 0.0_wp
+                if (present(h_ice)) forc%H_ice = h_ice
 
                 dt_seconds = forc%dt_days*real(sec_day,wp)
 
@@ -366,6 +372,89 @@ contains
     end subroutine test_mass_closure
 
     ! =====================================================================
+    ! Test 1b -- mass closure with humidity on (parameterized vapour mass)
+    ! =====================================================================
+
+    subroutine test_mass_closure_humid(nfail)
+        ! The vapour mass of the parameterized BESSI turbulence is the
+        ! humidity-gradient mass flux E*dt (Chion.jl d0146e1), applied to the
+        ! surface layer and accumulated in vapor_mass. On a column that stays
+        ! below T0 and keeps a surface layer far heavier than a day's
+        ! sublimation, nothing is clipped (defect 1 cannot fire) and the
+        ! closure identity holds to round-off.
+        !
+        ! The tolerance is that round-off, not the 1e-6 of test 1: the pack
+        ! never melts, so every step rounds the surface layer (up to
+        ! mass_max) at least twice -- snowfall and vapour -- and the storage
+        ! sum and accumulators add as many again. Bound: 4 roundings of
+        ! half an ulp of mass_max per step, relative to the precipitation;
+        ! 2.4e-5 at sp (measured 2.7e-6), 4.4e-14 at dp (measured 2.7e-14).
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)              :: bsi
+        type(chion_const_class)        :: c
+        type(chion_step_forcing_class) :: forc
+        integer      :: iyr, iday
+        real(wp)     :: dt_seconds, doy
+        real(wp_acc) :: precip, reltol
+        integer      :: nstep
+
+        write(*,"(a)") "--- 1b. mass closure with humidity on (cold, no clipping) ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+
+        precip = 0.0_wp_acc
+        do iyr = 1, 3
+            do iday = 1, NDAY_YEAR
+                doy = real(iday,wp)
+                call neutral_forcing(forc)
+                forc%air_temperature = 255.0_wp - 8.0_wp*cos(2.0_wp*PI_WP*(doy - 15.0_wp) &
+                                                             /real(NDAY_YEAR,wp))
+                forc%dt_days         = 1.0_wp
+                forc%snowfall_rate   = 3.0e-5_wp
+                forc%shortwave_down  = max(200.0_wp*cos(2.0_wp*PI_WP*(doy - 197.0_wp) &
+                                                        /real(NDAY_YEAR,wp)),0.0_wp)
+                forc%wind_speed      = 5.0_wp
+                forc%relative_humidity     = 0.5_wp
+                forc%has_relative_humidity = .TRUE.
+
+                dt_seconds = forc%dt_days*real(sec_day,wp)
+                precip = precip + real(forc%snowfall_rate*dt_seconds,wp_acc)
+
+                call bessi_column_step(bsi,1,forc,c)
+            end do
+        end do
+
+        write(*,"(a,g16.8)") "         precip accepted [kg m-2] = ", precip
+        write(*,"(a,g16.8)") "         vapor_mass      [kg m-2] = ", bsi%now%vapor_mass(1)
+        write(*,"(a,g16.8)") "         sublimation     [kg m-2] = ", bsi%now%sublimation(1)
+
+        call check("vapour exchange is exercised (sublimation > 1 kg m-2)", &
+                   bsi%now%sublimation(1) .gt. 1.0_wp_acc, nfail)
+        call check("column never melted (solid exchange only)", &
+                   bsi%now%melt(1) .eq. 0.0_wp_acc, nfail)
+        nstep  = 3*NDAY_YEAR
+        reltol = 4.0_wp_acc*real(nstep,wp_acc)*0.5_wp_acc &
+                 *real(spacing(bsi%par%mass_max),wp_acc)/precip
+        call check_close("closure with humidity on (round-off bound)", &
+                         closure_lhs(bsi,1),precip,reltol,nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_mass_closure_humid
+
+    ! =====================================================================
     ! Test 2 -- cold dry column
     ! =====================================================================
 
@@ -452,8 +541,11 @@ contains
 
         write(*,"(a)") "--- 3. melting column goes bare, then recovers ---"
 
+        ! BESSI's mass-based layering (no fine near-surface layers, the
+        ! default since C11): one snowy step must give exactly one layer.
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
         call bessi_alloc(bsi,1)
         call bessi_init_state(bsi,c)
 
@@ -547,6 +639,400 @@ contains
     end subroutine test_bare_and_recover
 
     ! =====================================================================
+    ! Test 12 -- bare ice over a cold substrate: cold content delays melt
+    ! =====================================================================
+
+    subroutine test_substrate_cold_content(nfail)
+        ! A bare column (n = 0) over a 5-layer substrate at 263 K, under a
+        ! constant prescribed surface flux Q and nothing else (no emission, no
+        ! turbulence, no precipitation), so the surface balance is exactly Q.
+        ! Without a substrate the bare ice is held at T0 and melts Q*dt/Lm
+        ! every step. With one (Chion.jl 03bb445) the ice must first be warmed:
+        !
+        !   * the first steps do not melt at all -- the cold ice takes
+        !     everything (Q = 20 W m-2 warms the top ~0.3 m by a few K a day);
+        !   * melt only starts after the top layer has warmed;
+        !   * energy closes: Lm*melt + sum_k m_k ci (T_k - 263) == Q*t, the
+        !     insulated base keeping every joule in the substrate;
+        !   * so the melt deficit against the no-substrate column is exactly the
+        !     cold content taken up, (melt_0 - melt)*Lm == sum m ci dT.
+        ! Bare ice is impermeable and solid: runoff = melt, smb_ice = -melt.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        integer,  parameter :: NSTEP = 40
+        real(wp), parameter :: Q = 20.0_wp, T_ICE = 263.0_wp
+
+        type(bessi_class)       :: bsi, bsi0
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        integer      :: istep, k, first_melt
+        real(wp)     :: t1_at_first_melt
+        real(wp_acc) :: cold_taken, total_in
+
+        write(*,"(a)") "--- 12. bare ice over a cold substrate: cold content delays melt ---"
+
+        ! BESSI's longwave (eps_snow on every surface, here 0: no emission)
+        ! and daily steps, so the closed forms below hold.
+        call chion_const_init(c)
+        c%eps_snow   = 0.0_wp
+        c%seb_scheme = CHION_SEB_BESSI
+
+        call bessi_par_init(bsi%par)
+        bsi%par%ice_substrate_layers = 5
+        bsi%par%diurnal_shortwave_substeps = .FALSE.
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+        bsi%now%ice_temperature = T_ICE
+        bsi%now%t_srf           = T_ICE
+
+        call bessi_par_init(bsi0%par)
+        bsi0%par%ice_substrate_layers = 0
+        bsi0%par%diurnal_shortwave_substeps = .FALSE.
+        call bessi_alloc(bsi0,1)
+        call bessi_init_state(bsi0,c)
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 275.0_wp
+        forc%has_q_sw_net    = .TRUE.
+        forc%q_sw_net        = Q
+        forc%has_q_lw_down   = .TRUE.
+        forc%has_q_sh        = .TRUE.
+        forc%has_q_lh        = .TRUE.
+        forc%H_ice           = 1000.0_wp
+
+        first_melt       = 0
+        t1_at_first_melt = 0.0_wp
+
+        do istep = 1, NSTEP
+            call bessi_column_step(bsi, 1,forc,c)
+            call bessi_column_step(bsi0,1,forc,c)
+            if (first_melt .eq. 0) then
+                if (bsi%now%melt(1) .gt. 0.0_wp_acc) then
+                    first_melt       = istep
+                    t1_at_first_melt = bsi%now%ice_temperature(1,1)
+                end if
+            end if
+        end do
+
+        cold_taken = 0.0_wp_acc
+        do k = 1, 5
+            cold_taken = cold_taken + real(c%rho_i*bsi%par%ice_substrate_top_thickness &
+                                           *2.0_wp**(k-1),wp_acc)*real(c%ci,wp_acc) &
+                                    *(real(bsi%now%ice_temperature(k,1),wp_acc) - real(T_ICE,wp_acc))
+        end do
+        total_in = real(Q,wp_acc)*real(NSTEP,wp_acc)*real(sec_day,wp_acc)
+
+        write(*,"(a,i0)")    "         first melting step         = ", first_melt
+        write(*,"(a,g14.6)") "         top ice T at first melt    = ", t1_at_first_melt
+        write(*,"(a,g16.8)") "         melt, substrate  [kg m-2]  = ", bsi%now%melt(1)
+        write(*,"(a,g16.8)") "         melt, none       [kg m-2]  = ", bsi0%now%melt(1)
+        write(*,"(a,g16.8)") "         cold content taken [J m-2] = ", cold_taken
+
+        call check("still bare (no layers)", bsi%now%n_lay(1) .eq. 0, nfail)
+        call check("no substrate: melts from the first step", bsi0%now%melt(1) .gt. 0.0_wp_acc, nfail)
+        call check("substrate: no melt in the first step (cold ice takes Q)", first_melt .gt. 1, nfail)
+        call check("substrate: top ice warmed to near T0 before melting", &
+                   t1_at_first_melt .gt. T_ICE + 5.0_wp, nfail)
+        call check("substrate: melts eventually", first_melt .gt. 0 .and. first_melt .le. NSTEP, nfail)
+        call check("substrate stays at or below T0", &
+                   all(bsi%now%ice_temperature(:,1) .le. c%T0), nfail)
+        call check_close("no substrate: melt == Q t/Lm", bsi0%now%melt(1), &
+                         total_in/real(c%Lm,wp_acc), 1.0e-6_wp_acc, nfail)
+        call check_close("substrate: Lm*melt + cold content taken == Q t", &
+                         real(c%Lm,wp_acc)*bsi%now%melt(1) + cold_taken, total_in, &
+                         1.0e-5_wp_acc, nfail)
+        call check_close("melt deficit == cold content taken", &
+                         real(c%Lm,wp_acc)*(bsi0%now%melt(1) - bsi%now%melt(1)), cold_taken, &
+                         1.0e-3_wp_acc, nfail)
+        call check_close("substrate: runoff == melt", bsi%now%runoff(1), bsi%now%melt(1), &
+                         1.0e-12_wp_acc, nfail)
+        call check_close("substrate: smb_ice == -melt", bsi%now%smb_ice(1), -bsi%now%melt(1), &
+                         1.0e-12_wp_acc, nfail)
+
+        call bessi_dealloc(bsi)
+        call bessi_dealloc(bsi0)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_substrate_cold_content
+
+    ! =====================================================================
+    ! Test 13 -- the substrate in a full column; land; reset
+    ! =====================================================================
+
+    subroutine test_substrate_column(nfail)
+        ! (a) Mass closure over a 5-yr annual cycle with the substrate on: the
+        !     substrate carries no mass, so the identity is unchanged, while
+        !     the run itself must differ from the no-substrate one.
+        ! (b) A land column (H_ice = 0) with the substrate configured is
+        !     bit-identical to a no-substrate land run, and its substrate
+        !     untouched (D34).
+        ! (c) A column reset restores the substrate to temperature_init (D34).
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi, bsi0
+        type(chion_const_class) :: c
+        real(wp_acc)            :: precip, precip0
+        real(wp)                :: tmin
+
+        write(*,"(a)") "--- 13. ice substrate in a full column; land; reset ---"
+
+        call chion_const_init(c)
+
+        call bessi_par_init(bsi%par)
+        bsi%par%ice_substrate_layers = 5
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,2)
+        call bessi_init_state(bsi,c)
+
+        call bessi_par_init(bsi0%par)
+        bsi0%par%ice_substrate_layers = 0
+        call bessi_alloc(bsi0,2)
+        call bessi_init_state(bsi0,c)
+
+        ! (a) column 1 on ice
+        precip = 0.0_wp_acc
+        call run_annual_cycle(bsi,c,5,1,precip,h_ice=1000.0_wp)
+        precip0 = 0.0_wp_acc
+        call run_annual_cycle(bsi0,c,5,1,precip0,h_ice=1000.0_wp)
+
+        tmin = minval(bsi%now%ice_temperature(:,1))
+        write(*,"(a,g16.8,a,g16.8)") "         melt with / without substrate = ", &
+                                     bsi%now%melt(1), " / ", bsi0%now%melt(1)
+        write(*,"(a,g14.6)")         "         coldest substrate layer [K]  = ", tmin
+
+        call check("substrate cooled below T0 over the cycle", tmin .lt. c%T0 - 1.0_wp, nfail)
+        call check("substrate changes the melt", bsi%now%melt(1) .ne. bsi0%now%melt(1), nfail)
+        call check_close("closure with the substrate on", closure_lhs(bsi,1),precip, &
+                         1.0e-6_wp_acc,nfail)
+
+        ! (b) column 2 on land, same configuration, against no substrate on land
+        precip = 0.0_wp_acc
+        call run_annual_cycle(bsi,c,5,2,precip,h_ice=0.0_wp)
+        precip0 = 0.0_wp_acc
+        call run_annual_cycle(bsi0,c,5,2,precip0,h_ice=0.0_wp)
+
+        call check("land: identical to no substrate (n_lay, mass, temperature)", &
+                   bsi%now%n_lay(2) .eq. bsi0%now%n_lay(2) .and. &
+                   all(bsi%now%mass(:,2) .eq. bsi0%now%mass(:,2)) .and. &
+                   all(bsi%now%temperature(:,2) .eq. bsi0%now%temperature(:,2)), nfail)
+        call check("land: identical to no substrate (melt, runoff, smb_ice, t_srf)", &
+                   bsi%now%melt(2) .eq. bsi0%now%melt(2) .and. &
+                   bsi%now%runoff(2) .eq. bsi0%now%runoff(2) .and. &
+                   bsi%now%smb_ice(2) .eq. bsi0%now%smb_ice(2) .and. &
+                   bsi%now%t_srf(2) .eq. bsi0%now%t_srf(2), nfail)
+        call check("land: substrate untouched", &
+                   all(bsi%now%ice_temperature(:,2) .eq. bsi%par%temperature_init), nfail)
+
+        ! (c) reset
+        call bessi_reset_columns(bsi,c,[1])
+        call check("reset: substrate back to temperature_init", &
+                   all(bsi%now%ice_temperature(:,1) .eq. bsi%par%temperature_init), nfail)
+
+        call bessi_dealloc(bsi)
+        call bessi_dealloc(bsi0)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_substrate_column
+
+    subroutine test_fine_layers_column(nfail)
+        ! Fine near-surface layers (Chion.jl 03bb445, plan C4) over a 5-yr
+        ! annual cycle that melts the column bare every summer: mass closure
+        ! (the remesh moves mass, never creates or exports it), the limited
+        ! layers back at their target thickness after every step that ends
+        ! with snow and a layer below them (both remesh halves: snowfall caps
+        ! down, melt fills up), and a run different from the default column.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi, bsi0
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp_acc) :: precip, precip0
+        real(wp)     :: h(NEAR_SURFACE_LAYERS), dz
+        integer      :: iyr, iday, k, n, n_max, n_checked, n_off
+        logical      :: off
+
+        write(*,"(a)") "--- 14. fine near-surface layers in a full column ---"
+
+        h = [0.02_wp, 0.05_wp, 0.10_wp, 0.30_wp]
+
+        call chion_const_init(c)
+
+        call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = h
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+
+        call bessi_par_init(bsi0%par)
+        bsi0%par%near_surface_layer_max_thicknesses = 0.0_wp
+        call bessi_alloc(bsi0,1)
+        call bessi_init_state(bsi0,c)
+
+        precip    = 0.0_wp_acc
+        n_max     = 0
+        n_checked = 0
+        n_off     = 0
+
+        do iyr = 1, 5
+            do iday = 1, NDAY_YEAR
+
+                call annual_forcing(iday,c,forc)
+                precip = precip + real(forc%snowfall_rate*forc%dt_days*real(sec_day,wp),wp_acc) &
+                                + real(forc%rainfall_rate*forc%dt_days*real(sec_day,wp),wp_acc)
+                call bessi_column_step(bsi,1,forc,c)
+
+                n     = bsi%now%n_lay(1)
+                n_max = max(n_max,n)
+                if (.not. surface_has_snow(bsi%now%mass(:,1),n)) cycle
+
+                off = .FALSE.
+                do k = 1, min(NEAR_SURFACE_LAYERS,n-1)
+                    dz  = bsi%now%mass(k,1)/bsi%now%density(k,1)
+                    off = off .or. abs(dz - h(k)) .gt. 1.0e-5_wp*h(k)
+                end do
+                if (n .gt. 1) n_checked = n_checked + 1
+                if (off) n_off = n_off + 1
+
+            end do
+        end do
+
+        precip0 = 0.0_wp_acc
+        call run_annual_cycle(bsi0,c,5,1,precip0)
+
+        write(*,"(a,i0,a,i0)")       "         steps checked / off target   = ", n_checked, " / ", n_off
+        write(*,"(a,i0)")            "         max layer count              = ", n_max
+        write(*,"(a,g16.8,a,g16.8)") "         melt with / without          = ", &
+                                     bsi%now%melt(1), " / ", bsi0%now%melt(1)
+
+        call check("fine layers: geometry checked on many steps", n_checked .gt. 300, nfail)
+        call check("fine layers: limited layers at target after every step", n_off .eq. 0, nfail)
+        call check("fine layers: the cycle still melts the column bare", &
+                   bsi%now%melt(1) .gt. precip, nfail)
+        call check("fine layers change the result", bsi%now%melt(1) .ne. bsi0%now%melt(1), nfail)
+        call check_close("closure with fine layers", closure_lhs(bsi,1),precip, &
+                         1.0e-6_wp_acc,nfail)
+
+        call bessi_dealloc(bsi)
+        call bessi_dealloc(bsi0)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_fine_layers_column
+
+    subroutine test_fine_layers_firn(nfail)
+        ! A firn column under sustained cold accumulation with fine
+        ! near-surface layers, 4 years at 8.6 kg m-2 d-1: Ntot capacity,
+        ! bottom merges and the depth cap all act. chion (C4b, D32) splits
+        ! and merges the first layer below the fine ones by mass, so the
+        ! column keeps several layers there, each interior one (5 .. n-1;
+        ! the bottom one collects bottom merges, as in BESSI without fine
+        ! layers) within [mass_min, mass_max] after every step. Chion.jl,
+        ! and legacy_chion builds, keep everything below the fine layers in
+        ! layer 5. Mass closure in both.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp_acc) :: precip
+        integer      :: istep, k, n, n_max, n_min_late, n_out
+        real(wp)     :: m5_max
+
+        write(*,"(a)") "--- 15. fine layers over a firn column under sustained accumulation ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = [0.02_wp, 0.05_wp, 0.10_wp, 0.30_wp]
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 250.0_wp
+        forc%dt_days         = 1.0_wp
+        forc%snowfall_rate   = 1.0e-4_wp          ! 8.64 kg m-2 d-1
+        forc%shortwave_down  = 50.0_wp
+        forc%wind_speed      = 4.0_wp
+
+        precip     = 0.0_wp_acc
+        n_max      = 0
+        n_min_late = huge(1)
+        n_out      = 0
+        m5_max     = 0.0_wp
+
+        do istep = 1, 4*NDAY_YEAR
+
+            precip = precip + real(forc%snowfall_rate*forc%dt_days*real(sec_day,wp),wp_acc)
+            call bessi_column_step(bsi,1,forc,c)
+
+            n     = bsi%now%n_lay(1)
+            n_max = max(n_max,n)
+            if (istep .gt. NDAY_YEAR) n_min_late = min(n_min_late,n)
+            if (n .ge. 5) m5_max = max(m5_max,bsi%now%mass(5,1))
+
+            do k = 5, n-1
+                if (bsi%now%mass(k,1) .lt. bsi%par%mass_min .or. &
+                    bsi%now%mass(k,1) .gt. bsi%par%mass_max) n_out = n_out + 1
+            end do
+
+        end do
+
+        write(*,"(a,i0,a,i0)")  "         layer count: max / min after year 1 = ", n_max, " / ", n_min_late
+        write(*,"(a,g14.6)")    "         largest layer-5 mass                = ", m5_max
+        write(*,"(a,i0)")       "         interior sub-fine layers out of bounds = ", n_out
+        write(*,"(a,g16.8)")    "         mass_base                           = ", bsi%now%mass_base(1)
+
+        if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
+            call check("C4b: several layers below the fine ones after year 1 (n >= 8)", &
+                       n_min_late .ge. 8, nfail)
+            call check("C4b: column reaches Ntot and never exceeds it", &
+                       n_max .eq. bsi%par%Ntot, nfail)
+            call check("C4b: interior sub-fine layers within [mass_min, mass_max]", &
+                       n_out .eq. 0, nfail)
+        else
+            call check("legacy: everything below the fine layers in layer 5 (n <= 5)", &
+                       n_max .le. 5, nfail)
+            call check("legacy: layer 5 outgrows mass_max", m5_max .gt. bsi%par%mass_max, nfail)
+        end if
+        call check("bottom export occurred (depth cap / bottom merge)", &
+                   bsi%now%mass_base(1) .gt. 0.0_wp_acc, nfail)
+        call check_close("closure, firn column with fine layers", closure_lhs(bsi,1),precip, &
+                         1.0e-6_wp_acc,nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_fine_layers_firn
+
+    ! =====================================================================
     ! Test 4 -- drive the column to Ntot capacity
     ! =====================================================================
 
@@ -569,8 +1055,12 @@ contains
 
         write(*,"(a)") "--- 4. column driven to Ntot capacity ---"
 
+        ! BESSI's mass-based layering: under legacy_chion the fine
+        ! near-surface layers (the default since C11) leave the layer below
+        ! them unsplit (D32), so the column would never reach Ntot.
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
         call bessi_alloc(bsi,1)
         call bessi_init_state(bsi,c)
 
@@ -606,9 +1096,7 @@ contains
         call check("bottom export occurred (merge and/or depth cap)", &
                    bsi%now%mass_base(1) .gt. 0.0_wp_acc, nfail)
         call check("depth cap bounded the column", &
-                   thickness .lt. 2.0_wp_acc*real(BESSI_REFERENCE_LAYER_COUNT,wp_acc) &
-                                  *real(bsi%par%mass_split,wp_acc) &
-                                  /real(BESSI_REFERENCE_DEPTH_DENSITY,wp_acc), nfail)
+                   thickness .lt. 2.0_wp_acc*real(BESSI_REFERENCE_SNOW_DEPTH_M,wp_acc), nfail)
         call check_close("closure holds at capacity", &
                          closure_lhs(bsi,1),precip,1.0e-6_wp_acc,nfail)
 
@@ -654,9 +1142,15 @@ contains
 
         write(*,"(a)") "--- 5. bare-ice branch skips percolation and refreezing ---"
 
+        ! No fine near-surface layers (the default since C11): their remesh
+        ! would fill the sliver surface layer from below. No ice substrate:
+        ! its energy solve would take the sliver and the layer below with it
+        ! (test 5b covers the bare branch over the substrate).
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
         bsi%par%mass_min = 1.0e-12_wp
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
+        bsi%par%ice_substrate_layers = 0
         call bessi_par_validate(bsi%par)
         call bessi_alloc(bsi,2)
         call bessi_init_state(bsi,c)
@@ -730,6 +1224,143 @@ contains
 
     end subroutine test_bare_ice_skips_water
 
+    subroutine test_bare_rain_routed_once(nfail)
+        ! Rain on a bare column runs off exactly once (D29). Two bare columns
+        ! with only rain falling:
+        !
+        !   1. n = 0: nothing can hold the rain, so it must reach runoff.
+        !   2. a surface layer below TOL_EMPTY_LAYER: bare by surface_has_snow,
+        !      but mass(1) > 0, so the rain lands in mass_w(1) and must NOT
+        !      also reach runoff. Chion.jl dev_nils 8fff530 counts it twice.
+        !
+        ! The bare-ice branch adds its own ice melt to runoff, so the rain's
+        ! share is runoff - melt.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp_acc) :: rain_mass
+
+        integer :: n_ice
+
+        do n_ice = 0, 5, 5
+
+        write(*,"(a,i0,a)") "--- 5b. rain on a bare column is routed exactly once (ice substrate ", &
+                            n_ice, ") ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        bsi%par%mass_min = 1.0e-12_wp
+        bsi%par%ice_substrate_layers = n_ice
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp   ! keep the sliver (test 5)
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,2)
+        call bessi_init_state(bsi,c)
+
+        ! Column 1: no layers.
+        bsi%now%n_lay(1) = 0
+
+        ! Column 2: a sliver of a surface layer over a dry layer.
+        bsi%now%n_lay(2)         = 2
+        bsi%now%mass(1,2)        = 1.0e-11_wp
+        bsi%now%mass(2,2)        = 100.0_wp
+        bsi%now%mass_w(:,2)      = 0.0_wp
+        bsi%now%density(1:2,2)   = 400.0_wp
+        bsi%now%temperature(1:2,2) = 263.0_wp
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 275.0_wp
+        forc%dt_days         = 1.0_wp
+        forc%rainfall_rate   = 2.0e-5_wp
+        forc%shortwave_down  = 200.0_wp
+        forc%wind_speed      = 2.0_wp
+        forc%H_ice           = 1000.0_wp
+
+        rain_mass = real(forc%rainfall_rate,wp_acc)*real(forc%dt_days,wp_acc) &
+                   *real(sec_day,wp_acc)
+
+        call bessi_column_step(bsi,1,forc,c)
+        call bessi_column_step(bsi,2,forc,c)
+
+        call check("n = 0: still bare", bsi%now%n_lay(1) .eq. 0, nfail)
+        call check_close("n = 0: rain reaches runoff once", &
+                         bsi%now%runoff(1) - bsi%now%melt(1), &
+                         rain_mass, 1.0e-6_wp_acc, nfail)
+
+        call check("sliver: still bare", &
+                   .not. surface_has_snow(bsi%now%mass(:,2),bsi%now%n_lay(2)), nfail)
+        call check_close("sliver: rain held in mass_w(1)", &
+                         real(bsi%now%mass_w(1,2),wp_acc), rain_mass, 1.0e-6_wp_acc, nfail)
+        call check("sliver: rain not also in runoff", &
+                   abs(bsi%now%runoff(2) - bsi%now%melt(2)) .le. 1.0e-9_wp_acc, nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        end do
+
+        return
+
+    end subroutine test_bare_rain_routed_once
+
+    ! =====================================================================
+    ! Test 5c -- fresh snow on a bare column, split in the same step
+    ! =====================================================================
+
+    subroutine test_fresh_snow_split_on_bare(nfail)
+        ! Chion.jl 03bb445: snow falling on a bare column takes the air
+        ! temperature in EVERY new layer. A snowfall above mass_max splits in
+        ! accumulation; before the fix the split copied the reset slot
+        ! temperature (temperature_init = 273 K) into layer 2.
+        !
+        ! Cold air, no sunlight: nothing can warm the new layers above T_a
+        ! within the step beyond the small conductive/longwave exchange.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        integer :: n
+
+        write(*,"(a)") "--- 5c. fresh snow split on a bare column takes T_a in every layer ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+        bsi%now%n_lay(1) = 0
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 250.0_wp
+        forc%dt_days         = 1.0_wp
+        forc%snowfall_rate   = 1.5_wp*bsi%par%mass_max/real(sec_day,wp)
+        forc%wind_speed      = 2.0_wp
+
+        call bessi_column_step(bsi,1,forc,c)
+
+        n = bsi%now%n_lay(1)
+        call check("snowfall above mass_max split into >= 2 layers", n .ge. 2, nfail)
+        call check("every new layer is near the air temperature, none at temperature_init", &
+                   all(abs(bsi%now%temperature(1:n,1) - forc%air_temperature) .lt. 2.0_wp), nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_fresh_snow_split_on_bare
+
     ! =====================================================================
     ! Test 6 -- diurnal substepping
     ! =====================================================================
@@ -776,6 +1407,7 @@ contains
         call chion_const_init(c)
 
         call bessi_par_init(bsi_off%par)
+        bsi_off%par%diurnal_shortwave_substeps = .FALSE.
         call bessi_alloc(bsi_off,1)
         call bessi_init_state(bsi_off,c)
 
@@ -783,6 +1415,7 @@ contains
         bsi_on%par%diurnal_shortwave_substeps     = .TRUE.
         bsi_on%par%diurnal_shortwave_max_substeps = 8
         bsi_on%par%diurnal_shortwave_threshold    = 0.0_wp
+        bsi_on%par%diurnal_temperature_cycle      = .FALSE.
         call bessi_par_validate(bsi_on%par)
         call bessi_alloc(bsi_on,1)
         call bessi_init_state(bsi_on,c)
@@ -833,6 +1466,7 @@ contains
         call chion_const_init(c)
 
         call bessi_par_init(bsi_off%par)
+        bsi_off%par%diurnal_shortwave_substeps = .FALSE.
         call bessi_alloc(bsi_off,1)
         call bessi_init_state(bsi_off,c)
 
@@ -840,6 +1474,7 @@ contains
         bsi_on%par%diurnal_shortwave_substeps     = .TRUE.
         bsi_on%par%diurnal_shortwave_max_substeps = 8
         bsi_on%par%diurnal_shortwave_threshold    = 0.0_wp
+        bsi_on%par%diurnal_temperature_cycle      = .FALSE.
         call bessi_par_validate(bsi_on%par)
         call bessi_alloc(bsi_on,1)
         call bessi_init_state(bsi_on,c)
@@ -883,6 +1518,61 @@ contains
         call check("warm case: substepping changed the melt", melt_on .ne. melt_off, nfail)
         call check("warm case: substepping increased the melt (rectification)", &
                    melt_on .gt. melt_off, nfail)
+
+        call bessi_dealloc(bsi_off)
+        call bessi_dealloc(bsi_on)
+
+        ! --- 6c: an unsplit day keeps its forcing (D39) --------------------
+        ! Polar night (80 N, solar longitude 270) with shortwave in the
+        ! forcing: the criterion does not split the day. chion steps it with
+        ! the forcing as given, i.e. exactly as with substepping off;
+        ! legacy_chion (Chion.jl) averages it over [-pi, pi], which zeroes the
+        ! shortwave, i.e. exactly as substepping off with no shortwave.
+        call bessi_par_init(bsi_off%par)
+        bsi_off%par%diurnal_shortwave_substeps = .FALSE.
+        call bessi_alloc(bsi_off,1)
+        call bessi_init_state(bsi_off,c)
+
+        call bessi_par_init(bsi_on%par)
+        bsi_on%par%diurnal_shortwave_substeps     = .TRUE.
+        bsi_on%par%diurnal_shortwave_max_substeps = 8
+        bsi_on%par%diurnal_temperature_cycle      = .TRUE.
+        bsi_on%par%diurnal_temperature_amplitude  = 1.0_wp
+        call bessi_par_validate(bsi_on%par)
+        call bessi_alloc(bsi_on,1)
+        call bessi_init_state(bsi_on,c)
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 260.0_wp
+        forc%snowfall_rate   = 3.0e-4_wp
+        forc%wind_speed      = 2.0_wp
+        do istep = 1, 30
+            call bessi_column_step(bsi_off,1,forc,c)
+            call bessi_column_step(bsi_on,1,forc,c)
+        end do
+
+        forc%air_temperature     = 266.0_wp
+        forc%snowfall_rate       = 0.0_wp
+        forc%shortwave_down      = 100.0_wp
+        forc%latitude_deg        = 80.0_wp
+        forc%solar_longitude_deg = 270.0_wp
+        forc%day_of_year         = 356.0_wp
+        do istep = 1, 10
+            call bessi_column_step(bsi_on,1,forc,c)
+            if (DIURNAL_SINGLE_INTERVAL_AVERAGED) forc%shortwave_down = 0.0_wp
+            call bessi_column_step(bsi_off,1,forc,c)
+            forc%shortwave_down = 100.0_wp
+        end do
+
+        if (DIURNAL_SINGLE_INTERVAL_AVERAGED) then
+            call check("unsplit polar-night day: shortwave zeroed (legacy_chion, Chion.jl)", &
+                       bsi_on%now%t_srf(1) .eq. bsi_off%now%t_srf(1) .and. &
+                       all(bsi_on%now%temperature(:,1) .eq. bsi_off%now%temperature(:,1)), nfail)
+        else
+            call check("unsplit polar-night day: forcing kept (D39), = substeps off", &
+                       bsi_on%now%t_srf(1) .eq. bsi_off%now%t_srf(1) .and. &
+                       all(bsi_on%now%temperature(:,1) .eq. bsi_off%now%temperature(:,1)), nfail)
+        end if
 
         call bessi_dealloc(bsi_off)
         call bessi_dealloc(bsi_on)
@@ -997,12 +1687,6 @@ contains
                     forc%prescribed_albedo     = 0.65_wp
                 end if
 
-                rain_would_land = .FALSE.
-                if (bsi%now%n_lay(icol) .gt. 0) then
-                    if (bsi%now%mass(1,icol) .gt. 0.0_wp) rain_would_land = .TRUE.
-                end if
-                if (.not. rain_would_land) forc%rainfall_rate = 0.0_wp
-
                 dt_seconds = forc%dt_days*real(sec_day,wp)
 
                 precip = precip + real(forc%snowfall_rate*dt_seconds,wp_acc) &
@@ -1018,16 +1702,19 @@ contains
     end subroutine run_annual_cycle_albedo
 
     ! =====================================================================
-    ! Probe -- upstream defect 1, measured rather than asserted
+    ! Test 1c -- mass closure when sublimation exhausts the surface layer
     ! =====================================================================
 
-    subroutine probe_defect_1(nfail)
-        ! With humidity forcing on, apply_snow_surface_vapor_mass_flux clips
-        ! the mass it removes but reports the unclipped demand, so the closure
-        ! identity acquires a residual exactly equal to the over-reported
-        ! sublimation. This is an upstream defect, not a port bug, so it is
-        ! measured and printed rather than asserted. The check that DOES run
-        ! is a sign check: the residual can only ever go one way.
+    subroutine test_mass_closure_exhausted(nfail)
+        ! Very dry air and barely any snowfall: every step's sublimation
+        ! demand exceeds the surface layer, so the solid exchange is clipped
+        ! at zero mass. Upstream defect 1 reported the unclipped demand and
+        ! left a closure residual equal to the over-reported sublimation;
+        ! since Chion.jl 03bb445 (ported in C1) the diagnostic is the change
+        ! actually applied, and the identity holds to round-off.
+        !
+        ! Tolerance: 4 roundings of half an ulp of the precipitation total
+        ! per step, as in test 1b (the layer masses here are far smaller).
 
         implicit none
 
@@ -1038,9 +1725,9 @@ contains
         type(chion_const_class) :: c
         type(chion_step_forcing_class) :: forc
         integer      :: istep
-        real(wp_acc) :: precip, residual
+        real(wp_acc) :: precip, demand, reltol
 
-        write(*,"(a)") "--- probe. defect 1 (vapor-mass diagnostics not mass-closed) ---"
+        write(*,"(a)") "--- 1c. mass closure, sublimation exhausts the surface layer ---"
 
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
@@ -1062,17 +1749,21 @@ contains
             call bessi_column_step(bsi,1,forc,c)
         end do
 
-        residual = closure_lhs(bsi,1) - precip
+        ! The unclipped demand of one step on the initial T, for the coverage
+        ! check below: sublimation must have been limited by the mass available.
+        demand = real(forc%snowfall_rate*forc%dt_days*real(sec_day,wp),wp_acc)
 
         write(*,"(a,g16.8)") "         precip            = ", precip
         write(*,"(a,g16.8)") "         sublimation       = ", bsi%now%sublimation(1)
-        write(*,"(a,g16.8)") "         closure residual  = ", residual
+        write(*,"(a,g16.8)") "         closure residual  = ", closure_lhs(bsi,1) - precip
 
-        call check("residual is non-negative (over-reported sublimation only)", &
-                   residual .ge. -1.0e-6_wp_acc*max(precip,1.0_wp_acc), nfail)
-        call check("residual is bounded by the reported sublimation", &
-                   residual .le. bsi%now%sublimation(1) &
-                                 + 1.0e-6_wp_acc*max(precip,1.0_wp_acc), nfail)
+        call check("the column is stripped bare (sublimation clipped)", &
+                   bsi%now%n_lay(1) .eq. 0 .or. bsi%now%mass(1,1) .lt. demand, nfail)
+        call check("sublimation removed (nearly) all the snowfall", &
+                   bsi%now%sublimation(1) .gt. 0.9_wp_acc*precip, nfail)
+        reltol = 4.0_wp_acc*500.0_wp_acc*0.5_wp_acc*real(spacing(real(precip,wp)),wp_acc)/precip
+        call check_close("closure with an exhausted surface layer (defect 1 fixed)", &
+                         closure_lhs(bsi,1),precip,reltol,nfail)
 
         call bessi_dealloc(bsi)
 
@@ -1080,11 +1771,229 @@ contains
 
         return
 
-    end subroutine probe_defect_1
+    end subroutine test_mass_closure_exhausted
 
     ! =====================================================================
     ! Check helpers (style follows tests/test_column_utils.f90)
     ! =====================================================================
+
+    ! =====================================================================
+    ! Test 16 -- thin-snow albedo (D40)
+    ! =====================================================================
+
+    subroutine test_thin_snow_albedo(nfail)
+        ! The snow-cover fraction and the blend in isolation, then on a column:
+        ! a thin snow cover on bare ice shows mostly the ice albedo, the
+        ! albedo is continuous as the cover melts out, the blend switches off
+        ! at swe_crit_albedo = 0 and under legacy_chion (f = 1, the albedo
+        ! then the snow albedo bit for bit), SEMIX uses CLIMBER-X's f_snow,
+        ! and a prescribed albedo is never blended.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp) :: f, h, expected, swe
+        integer  :: icol
+
+        write(*,"(a)") "--- 16. thin-snow albedo (D40) ---"
+
+        ! --- the fraction and the blend --------------------------------------
+        call check_val("f(SWE = 0) = 0",               snow_cover_fraction(0.0_wp,10.0_wp),  0.0_wp, nfail)
+        call check_val("f linear: f(5) = 0.5",         snow_cover_fraction(5.0_wp,10.0_wp),  0.5_wp, nfail)
+        call check_val("f(SWE = swe_crit) = 1",        snow_cover_fraction(10.0_wp,10.0_wp), 1.0_wp, nfail)
+        call check_val("f = 1 above swe_crit",         snow_cover_fraction(250.0_wp,10.0_wp),1.0_wp, nfail)
+        call check_val("swe_crit = 0: blend off, f = 1", snow_cover_fraction(0.3_wp,0.0_wp), 1.0_wp, nfail)
+        call check("blend at f = 1 is the snow albedo exactly", &
+                   thin_snow_albedo(1.0_wp,0.77_wp,0.4_wp) .eq. 0.77_wp, nfail)
+        call check("blend at f = 0 is the background exactly", &
+                   thin_snow_albedo(0.0_wp,0.77_wp,0.4_wp) .eq. 0.4_wp, nfail)
+
+        ! CLIMBER-X smb_surface_par.f90:108-116 with its smb_par defaults
+        ! (c_fsnow = 10, c_fsnow_orog = 2e-4, z0m_ice = 0.002 m).
+        call chion_const_init(c)
+        h = 0.01_wp
+        expected = tanh(h/(10.0_wp*0.002_wp))*h/(h + 2.0e-4_wp*150.0_wp + 1.0e-10_wp)
+        call check_val("SEMIX f_snow = CLIMBER-X's, with orography", &
+                       semix_snow_cover_fraction(h,150.0_wp,.TRUE.,c), expected, nfail)
+        call check_val("SEMIX f_snow = CLIMBER-X's, no orography", &
+                       semix_snow_cover_fraction(h,150.0_wp,.FALSE.,c), tanh(0.5_wp), nfail)
+        call check_val("SEMIX f_snow(0) = 0", semix_snow_cover_fraction(0.0_wp,0.0_wp,.TRUE.,c), &
+                       0.0_wp, nfail)
+
+        ! --- on a column: five columns of 2 kg m-2 of cold snow on ice --------
+        ! 1 default; 2 the blend off (swe_crit_albedo = 0); 3 SEMIX; 4
+        ! prescribed; 5 a sliver (0.01 kg m-2) that goes on to melt out.
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,5)
+        call bessi_init_state(bsi,c)
+
+        do icol = 1, 5
+            bsi%now%n_lay(icol)         = 1
+            bsi%now%mass(1,icol)        = 2.0_wp
+            bsi%now%density(1,icol)     = 300.0_wp
+            bsi%now%temperature(1,icol) = 263.0_wp
+            bsi%now%albedo_snow(icol)   = 0.78_wp
+        end do
+        bsi%now%mass(1,5) = 0.01_wp
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 263.0_wp
+        forc%wind_speed      = 2.0_wp
+
+        call bessi_column_step(bsi,1,forc,c)
+        call bessi_column_step(bsi,5,forc,c)
+
+        swe = bsi%now%mass(1,1) + bsi%now%mass_w(1,1)
+        f   = 1.0_wp
+        if (ALBEDO_THIN_SNOW_BLEND) f = min(1.0_wp,swe/c%swe_crit_albedo)
+        write(*,"(a,3g14.6)") "         2 kg m-2: albedo_snow, albedo, f = ", &
+                              bsi%now%albedo_snow(1), bsi%now%albedo(1), f
+        call check("2 kg m-2 on ice: albedo = f*albedo_snow + (1-f)*alpha_ice", &
+                   bsi%now%albedo(1) .eq. thin_snow_albedo(f,bsi%now%albedo_snow(1),c%alpha_ice), nfail)
+        if (ALBEDO_THIN_SNOW_BLEND) then
+            call check("2 kg m-2 on ice: closer to the ice than to the snow", &
+                       bsi%now%albedo(1) - c%alpha_ice .lt. 0.5_wp*(bsi%now%albedo_snow(1) - c%alpha_ice), nfail)
+            call check("sliver: albedo within 1e-3 of alpha_ice (continuous)", &
+                       abs(bsi%now%albedo(5) - c%alpha_ice) .lt. 1.0e-3_wp, nfail)
+        else
+            call check("legacy: the albedo is the snow albedo bit for bit", &
+                       bsi%now%albedo(1) .eq. bsi%now%albedo_snow(1), nfail)
+        end if
+
+        ! The sliver melts out: the albedo ends at alpha_ice, the snow albedo
+        ! holds the background as Chion.jl's single albedo would.
+        forc%air_temperature = 275.0_wp
+        forc%shortwave_down  = 200.0_wp
+        call bessi_column_step(bsi,5,forc,c)
+        call check("sliver melted out", .not. surface_has_snow(bsi%now%mass(:,5),bsi%now%n_lay(5)), nfail)
+        call check_val("melted out: albedo = alpha_ice", bsi%now%albedo(5), c%alpha_ice, nfail)
+        call check_val("melted out: albedo_snow = alpha_ice", bsi%now%albedo_snow(5), c%alpha_ice, nfail)
+
+        ! Blend off.
+        c%swe_crit_albedo = 0.0_wp
+        forc%air_temperature = 263.0_wp
+        forc%shortwave_down  = 0.0_wp
+        call bessi_column_step(bsi,2,forc,c)
+        call check("swe_crit_albedo = 0: albedo = albedo_snow", &
+                   bsi%now%albedo(2) .eq. bsi%now%albedo_snow(2), nfail)
+        c%swe_crit_albedo = 10.0_wp
+
+        ! SEMIX: CLIMBER-X's f_snow on the snow depth.
+        c%albedo_scheme = CHION_ALBEDO_SEMIX
+        call bessi_column_step(bsi,3,forc,c)
+        h = bsi%now%mass(1,3)/bsi%now%density(1,3)
+        f = 1.0_wp
+        if (ALBEDO_THIN_SNOW_BLEND) f = semix_snow_cover_fraction(h,0.0_wp,.FALSE.,c)
+        call check("SEMIX: albedo = f_snow*albedo_snow + (1-f_snow)*alpha_ice", &
+                   bsi%now%albedo(3) .eq. thin_snow_albedo(f,bsi%now%albedo_snow(3),c%alpha_ice), nfail)
+
+        ! Prescribed: never blended.
+        c%albedo_scheme = CHION_ALBEDO_PRESCRIBED
+        forc%prescribed_albedo     = 0.66_wp
+        forc%has_prescribed_albedo = .TRUE.
+        call bessi_column_step(bsi,4,forc,c)
+        call check_val("prescribed: albedo = the prescribed one", bsi%now%albedo(4), 0.66_wp, nfail)
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_thin_snow_albedo
+
+    ! =====================================================================
+    ! Test 17 -- bare land (D41)
+    ! =====================================================================
+
+    subroutine test_bare_land(nfail)
+        ! A land column (H_ice = 0) has no ice under its snow. Snow-free, it
+        ! neither melts nor sublimates, carries alpha_land, and its Tsrf is
+        ! the air temperature; a thin cover melting out does not charge the
+        ! melt shortfall to ice (melt = the snow melted); mass still closes.
+        ! The same columns on ice: bare-ice ablation and the shortfall charged.
+        ! legacy_chion: land behaves as ice (Chion.jl).
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp_acc) :: swe0
+
+        write(*,"(a)") "--- 17. bare land columns (D41) ---"
+
+        call chion_const_init(c)
+        call bessi_par_init(bsi%par)
+        bsi%par%diurnal_shortwave_substeps = .FALSE.   ! Tsrf = this step's T_air
+        call bessi_alloc(bsi,4)
+        call bessi_init_state(bsi,c)
+
+        ! Columns 1 (land) and 2 (ice): bare. Columns 3 (land) and 4 (ice):
+        ! 5 kg m-2 of snow, far less than a warm sunny day melts.
+        bsi%now%n_lay(1:2) = 0
+        bsi%now%n_lay(3:4)         = 1
+        bsi%now%mass(1,3:4)        = 5.0_wp
+        bsi%now%density(1,3:4)     = 300.0_wp
+        bsi%now%temperature(1,3:4) = 273.0_wp
+        swe0 = 5.0_wp_acc
+
+        call neutral_forcing(forc)
+        forc%air_temperature = 280.0_wp
+        forc%shortwave_down  = 300.0_wp
+        forc%wind_speed      = 2.0_wp
+
+        forc%H_ice = 0.0_wp
+        call bessi_column_step(bsi,1,forc,c)
+        call bessi_column_step(bsi,3,forc,c)
+        forc%H_ice = 1000.0_wp
+        call bessi_column_step(bsi,2,forc,c)
+        call bessi_column_step(bsi,4,forc,c)
+
+        write(*,"(a,2g16.8)") "         bare land / ice melt  = ", bsi%now%melt(1), bsi%now%melt(2)
+        write(*,"(a,2g16.8)") "         thin land / ice melt  = ", bsi%now%melt(3), bsi%now%melt(4)
+
+        call check("bare ice melts", bsi%now%melt(2) .gt. 0.0_wp_acc, nfail)
+        call check("thin snow on ice: shortfall charged to the ice", &
+                   bsi%now%smb_ice(4) .lt. 0.0_wp_acc, nfail)
+
+        if (LAND_COLUMNS_WITHOUT_ICE) then
+            call check("bare land: no melt, runoff, smb_ice, vapour", &
+                       bsi%now%melt(1) .eq. 0.0_wp_acc .and. bsi%now%runoff(1) .eq. 0.0_wp_acc &
+                       .and. bsi%now%smb_ice(1) .eq. 0.0_wp_acc &
+                       .and. bsi%now%vapor_mass(1) .eq. 0.0_wp_acc, nfail)
+            call check_val("bare land: Tsrf = air temperature", bsi%now%t_srf(1), 280.0_wp, nfail)
+            call check_val("bare land: albedo = alpha_land", bsi%now%albedo(1), c%alpha_land, nfail)
+            call check("thin snow on land melted out", bsi%now%n_lay(3) .eq. 0, nfail)
+            call check("thin snow on land: no ice charged (smb_ice = 0)", &
+                       bsi%now%smb_ice(3) .eq. 0.0_wp_acc, nfail)
+            call check_close("thin snow on land: melt = the snow melted (no humidity)", &
+                             bsi%now%melt(3), swe0, 1.0e-5_wp_acc, nfail)
+            call check_close("thin snow on land: mass closes", closure_lhs(bsi,3), swe0, &
+                             1.0e-6_wp_acc, nfail)
+            call check_val("thin snow on land, melted out: albedo = alpha_land", &
+                           bsi%now%albedo(3), c%alpha_land, nfail)
+        else
+            call check("legacy: land is bare ice (melts, smb_ice < 0)", &
+                       bsi%now%melt(1) .gt. 0.0_wp_acc .and. bsi%now%smb_ice(1) .lt. 0.0_wp_acc, nfail)
+            call check_val("legacy: land albedo = alpha_ice", bsi%now%albedo(1), c%alpha_ice, nfail)
+        end if
+
+        call bessi_dealloc(bsi)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_bare_land
 
     subroutine check(label,condition,nfail)
 

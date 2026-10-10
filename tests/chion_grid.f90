@@ -60,7 +60,9 @@ program chion_grid
     !       file_forcing   = "forcing.nc"
     !       name_x  = "x"   name_y = "y"   name_time = "time"
     !       name_t2m = "TT" name_sf = "SF" name_rf = "RF" name_swd = "SWD"
+    !                                      ! SWD: TOA insolation for ITM, surface for BESSI/PDD
     !       name_mask = "mask"  name_lat = "LAT"  name_zs = "SH"
+    !       name_hice = "None"  name_pdds = "None" ! ITM: ice thickness [m], annual PDDs [K d]
     !       t2m_in_celsius     = .FALSE.   ! convert TT by +273.15
     !       precip_in_mmwe_day = .FALSE.   ! convert SF/RF by /86400
     !       dt             = -1.0          ! [d] <=0 -> infer from the time axis
@@ -73,10 +75,11 @@ program chion_grid
     !       path_racmo     = "/path/to/racmo"  ! antarctica only (RACMO climatology root)
     !       n_years        = 50            ! annual cycles to repeat
     !       swd_source     = "file"        ! "file" | "transmissivity" | "transmissivity_seasonal"
+    !                                      ! (BESSI, PDD; ITM always takes the TOA insolation)
     !       trans_a        = 0.46          ! tau = trans_a + trans_b*z_srf (+ trans_c*tcc)
-    !       trans_b        = 6.0e-5        ! [m-1]
-    !       trans_c        = 0.0           ! [1] cloud term, used by transmissivity_seasonal
-    !       H_ice_default  = 1000.0        ! [m] ice thickness set on every column (ITM)
+    !       trans_b        = 6.0e-5        ! [m-1]   trans_a/b: transmissivity* only
+    !       trans_c        = 0.0           ! [1] cloud term, transmissivity_seasonal only
+    !       H_ice_default  = 1000.0        ! [m] ice thickness set on every column (ITM; BESSI ice substrate)
     !   /
 
     use chion
@@ -99,12 +102,12 @@ program chion_grid
     character(len=512) :: file_forcing
     character(len=56)  :: name_x, name_y, name_time
     character(len=56)  :: name_t2m, name_sf, name_rf, name_swd
-    character(len=56)  :: name_mask, name_lat, name_zs
+    character(len=56)  :: name_mask, name_lat, name_zs, name_hice, name_pdds
     real(wp) :: dt
     logical  :: t2m_in_celsius, precip_in_mmwe_day
 
     ! --- &ctrl : domain source --------------------------------------------
-    character(len=56)  :: domain, grid_name, swd_source
+    character(len=56)  :: domain, grid_name, swd_source, swd_use
     character(len=512) :: path_ice_data, path_insol, path_racmo
     integer  :: n_years
     real(wp) :: trans_a, trans_b, trans_c, H_ice_default
@@ -125,6 +128,7 @@ program chion_grid
 
     real(wp), allocatable :: xc(:), yc(:), times(:)
     real(wp), allocatable :: mask2D(:,:), lat2D(:,:), zs2D(:,:)
+    real(wp), allocatable :: hice2D(:,:), pdds2D(:,:)
     real(wp), allocatable :: t2m(:,:), sf(:,:), rf(:,:), swd(:,:)
     integer,  allocatable :: col_is(:), col_js(:)
     real(wp), allocatable :: maskT(:,:)
@@ -175,11 +179,31 @@ program chion_grid
         path_racmo = ""
         if (trim(domain) .eq. "antarctica") &
             call nml_read(path_par,"ctrl","path_racmo", path_racmo)
-        call nml_read(path_par,"ctrl","swd_source",    swd_source)
-        call nml_read(path_par,"ctrl","trans_a",       trans_a)
-        call nml_read(path_par,"ctrl","trans_b",       trans_b)
-        call nml_read(path_par,"ctrl","trans_c",       trans_c)
         call nml_read(path_par,"ctrl","H_ice_default", H_ice_default)
+
+        ! The transmissivity coefficients are read only by the shortwave
+        ! sources that use them, so a par file with swd_source = "file" need
+        ! not carry them.
+        call nml_read(path_par,"ctrl","swd_source",    swd_source)
+        trans_a = 0.0_wp
+        trans_b = 0.0_wp
+        trans_c = 0.0_wp
+        select case(trim(swd_source))
+            case("file")
+                ! ERA5 / RACMO shortwave from the domain loader.
+            case("transmissivity")
+                call nml_read(path_par,"ctrl","trans_a", trans_a)
+                call nml_read(path_par,"ctrl","trans_b", trans_b)
+            case("transmissivity_seasonal")
+                call nml_read(path_par,"ctrl","trans_a", trans_a)
+                call nml_read(path_par,"ctrl","trans_b", trans_b)
+                call nml_read(path_par,"ctrl","trans_c", trans_c)
+            case DEFAULT
+                write(io_unit_err,*) "chion_grid:: Error: swd_source must be 'file', "// &
+                    "'transmissivity' or 'transmissivity_seasonal', got '"// &
+                    trim(swd_source)//"'."
+                stop "Program stopped."
+        end select
     else
         call nml_read(path_par,"ctrl","file_forcing",      file_forcing)
         call nml_read(path_par,"ctrl","name_x",            name_x)
@@ -192,6 +216,8 @@ program chion_grid
         call nml_read(path_par,"ctrl","name_mask",         name_mask)
         call nml_read(path_par,"ctrl","name_lat",          name_lat)
         call nml_read(path_par,"ctrl","name_zs",           name_zs)
+        call nml_read(path_par,"ctrl","name_hice",         name_hice)
+        call nml_read(path_par,"ctrl","name_pdds",         name_pdds)
         call nml_read(path_par,"ctrl","t2m_in_celsius",    t2m_in_celsius)
         call nml_read(path_par,"ctrl","precip_in_mmwe_day",precip_in_mmwe_day)
         call nml_read(path_par,"ctrl","dt",                dt)
@@ -273,6 +299,14 @@ program chion_grid
         zs2D = 0.0_wp
         if (trim(name_zs) .ne. "None") call nc_read(file_forcing,trim(name_zs),zs2D)
 
+        ! ITM's static inputs (BESSI and PDD ignore them). "None" keeps
+        ! chion's neutral 0 (land background, desert critical depth).
+        allocate(hice2D(nx,ny), pdds2D(nx,ny))
+        hice2D = 0.0_wp
+        if (trim(name_hice) .ne. "None") call nc_read(file_forcing,trim(name_hice),hice2D)
+        pdds2D = 0.0_wp
+        if (trim(name_pdds) .ne. "None") call nc_read(file_forcing,trim(name_pdds),pdds2D)
+
     end if
 
     ! =====================================================================
@@ -311,6 +345,16 @@ program chion_grid
     call chion_init(chn,path_par,ncol)
     call chion_init_state(chn)
 
+    ! The shortwave the model is driven with (domain source). ITM takes the
+    ! top-of-atmosphere insolation in shortwave_down and applies its own
+    ! transmissivity (snow_itm.f90, as smbpal; yelmox feeds it the same), so
+    ! it gets S_toa: every swd_source is a surface shortwave, which ITM would
+    ! attenuate a second time.
+    if (is_domain) then
+        swd_use = swd_source
+        if (trim(chn%par%model) .eq. "itm") swd_use = "toa"
+    end if
+
     ! chion_grid_class carries the mask as (ny,nx), the Chion.jl orientation;
     ! everything above is (nx,ny). Transposed once, here.
     allocate(maskT(ny,nx))
@@ -322,6 +366,15 @@ program chion_grid
         chn%forc%latitude_deg(i)   = lat2D(col_is(i),col_js(i))
         chn%forc%surface_height(i) = zs2D(col_is(i),col_js(i))
     end do
+    ! Ice thickness (ITM; BESSI's ice substrate) and annual PDDs (ITM):
+    ! from the file here (name_hice = "None" gives 0, land); the domain
+    ! source sets them below (H_ice_default, PDDs from the climatology).
+    if (.not. is_domain) then
+        do i = 1, ncol
+            chn%forc%H_ice(i) = hice2D(col_is(i),col_js(i))
+            chn%forc%PDDs(i)  = pdds2D(col_is(i),col_js(i))
+        end do
+    end if
     chn%forc%wind_speed = wind_default
 
     ! Uniform dust deposition, for SEMIX-albedo dust sensitivity experiments.
@@ -333,17 +386,17 @@ program chion_grid
 
     ! Uniform relative humidity. No domain loader carries a humidity field yet,
     ! so without this knob has_relative_humidity is false everywhere and the
-    ! turbulent latent flux is identically zero -- under BOTH surface schemes.
-    ! That is the standing state of every GRL benchmark to date, and it is why
-    ! the seb_scheme comparison in docs/semix_port_scope.md is a
+    ! turbulent latent flux is identically zero -- under every turbulence
+    ! scheme. That is the standing state of every GRL benchmark to date, and it
+    ! is why the SEMIX-vs-BESSI comparison in docs/semix_port_scope.md is a
     ! sensible-heat-only result.
     !
     ! Left flagged OFF at zero so existing par files are unaffected. Note the
-    ! two schemes read the same number differently: BESSI takes it relative to
-    ! saturation over WATER (energy_flux.jl:57-60), SEMIX over ICE
-    ! (semi.f90:201). Both are their own source's reading, so a run that varies
-    ! rh_default across seb_scheme is not a controlled comparison of the
-    ! turbulent exchange alone.
+    ! schemes read the same number differently: BESSI takes it relative to
+    ! saturation over WATER (energy_flux.jl:57-60), CLIMBER-X and Chion.jl's
+    ! semix over ICE (semi.f90:201). Each is its own source's reading, so a run
+    ! that varies rh_default across turbulent_flux_scheme is not a controlled
+    ! comparison of the turbulent exchange alone.
     chn%forc%relative_humidity     = rh_default
     chn%forc%has_relative_humidity = (rh_default .gt. 0.0_wp)
 
@@ -388,7 +441,7 @@ program chion_grid
         export_year = 0.0_wp
         mass_prev   = chion_column_mass(chn)     ! cold start: 0
 
-        ! ITM ice thickness (BESSI and PDD ignore it). Annual PDDs is set once,
+        ! Ice thickness (ITM; BESSI's ice substrate; PDD ignores it). Annual PDDs is set once,
         ! from the repeating climatology, below.
         chn%forc%H_ice = H_ice_default
         call domain_set_annual_pdds(chn, md, t2m_c, chn%c%T0, dt_use)
@@ -408,7 +461,7 @@ program chion_grid
     write(*,"(a,a)")      " forcing source: ", trim(forcing_source)
     if (is_domain) then
         write(*,"(a,a,a,a)") " domain / grid : ", trim(domain), " / ", trim(grid_name)
-        write(*,"(a,a)")     " swd source    : ", trim(swd_source)
+        write(*,"(a,a)")     " swd source    : ", trim(swd_use)
         write(*,"(a,i0)")    " years         : ", n_years
     else
         write(*,"(a,a)")     " forcing file  : ", trim(file_forcing)
@@ -452,7 +505,9 @@ program chion_grid
             call interp_monthly_to_day(md, rf_c,  doy, fday)
             chn%forc%rainfall_rate   = fday
 
-            select case(trim(swd_source))
+            select case(trim(swd_use))
+                case("toa")
+                    chn%forc%shortwave_down = S_toa_c(:,doy)
                 case("file")
                     call interp_monthly_to_day(md, swd_c, doy, fday)
                     chn%forc%shortwave_down = fday
@@ -473,15 +528,13 @@ program chion_grid
                     chn%forc%shortwave_down = max(0.0_wp, min(1.0_wp, &
                         trans_a + trans_b*chn%forc%surface_height + trans_c*fday)) &
                         * S_toa_c(:,doy)
-                case DEFAULT
-                    write(io_unit_err,*) "chion_grid:: Error: swd_source must be 'file', "// &
-                        "'transmissivity' or 'transmissivity_seasonal', got '"// &
-                        trim(swd_source)//"'."
-                    stop "Program stopped."
             end select
 
+            ! Solar longitude from Chion.jl's calendar-day formula, with the
+            ! climatology's year stretched onto a 365-day calendar.
             chn%forc%day_of_year         = real(doy,wp)
-            chn%forc%solar_longitude_deg = 360.0_wp*(real(doy,wp) - 1.0_wp)/year_length
+            chn%forc%solar_longitude_deg = calendar_solar_longitude_deg( &
+                                    1.0_wp + (real(doy,wp) - 1.0_wp)*365.0_wp/year_length)
 
         else
 
@@ -505,8 +558,12 @@ program chion_grid
                 chn%forc%shortwave_down(i)  = swd(col_is(i),col_js(i))
             end do
 
+            ! Day of year on the file's 365-day axis and, from it, the solar
+            ! longitude with Chion.jl's calendar-day formula -- what Chion.jl
+            ! derives from the same time axis within a year starting 1 January
+            ! (validation/: identical for the harness forcing).
             chn%forc%day_of_year         = modulo(time,year_length) + 1.0_wp
-            chn%forc%solar_longitude_deg = 360.0_wp*(chn%forc%day_of_year - 1.0_wp)/year_length
+            chn%forc%solar_longitude_deg = calendar_solar_longitude_deg(chn%forc%day_of_year)
 
         end if
 

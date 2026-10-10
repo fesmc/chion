@@ -134,11 +134,12 @@ contains
         write(io,"(a)") "    mass_min   = 80.0"
         write(io,"(a)") "    diurnal_shortwave_substeps     = True"
         write(io,"(a)") "    diurnal_shortwave_max_substeps = 8"
+        write(io,"(a)") "    near_surface_layer_max_thicknesses = 0.02, 0.05, 0.10, 0.30"
         write(io,"(a)") "/"
         write(io,"(a)") "&pdd"
         write(io,"(a)") "    ddf_snow   = 4.5"
         write(io,"(a)") "    ddf_ice    = 9.5"
-        write(io,"(a)") "    pdd_method = 'simple'"
+        write(io,"(a)") "    pdd_method = 'pism'"
         write(io,"(a)") "/"
         write(io,"(a)") "&itm"
         write(io,"(a)") "    itm_c              = -55.0"
@@ -147,6 +148,7 @@ contains
         write(io,"(a)") "&chion_const"
         write(io,"(a)") "    alpha_dry          = 0.85"
         write(io,"(a)") "    seb_scheme         = 'semix'"
+        write(io,"(a)") "    turbulent_flux_scheme = 'climberx'"
         write(io,"(a)") "/"
         close(io)
 
@@ -176,6 +178,10 @@ contains
         call check_val("const: alpha_dry overridden",c%alpha_dry,0.85_wp,nfail)
         call check("const: seb_scheme overridden -> semix flag", &
                    c%seb_scheme .eq. CHION_SEB_SEMIX, nfail)
+        call check("const: turbulent_flux_scheme overridden -> climberx flag", &
+                   c%turbulent_flux_scheme .eq. CHION_TURB_CLIMBERX, nfail)
+        call check("const: longwave_scheme from defaults -> cloud_proxy", &
+                   c%longwave_scheme .eq. CHION_LONGWAVE_CLOUD_PROXY, nfail)
         call check_val("const: alpha_wet from defaults",c%alpha_wet,0.70_wp,nfail)
         call check_val("const: sigma_sb from defaults",c%sigma_sb,5.670373e-8_wp,nfail)
         call check("const: shared fields not read from &chion_const", &
@@ -231,9 +237,21 @@ contains
         call check_val("bessi: diurnal_shortwave_min_air_temperature from defaults", &
                        bpar%diurnal_shortwave_min_air_temperature, 265.15_wp, nfail)
         call check("bessi: diurnal_temperature_cycle from defaults", &
-                   .not. bpar%diurnal_temperature_cycle, nfail)
+                   bpar%diurnal_temperature_cycle, nfail)
         call check_val("bessi: diurnal_temperature_amplitude from defaults", &
-                       bpar%diurnal_temperature_amplitude, 5.0_wp, nfail)
+                       bpar%diurnal_temperature_amplitude, 1.0_wp, nfail)
+        call check_val("bessi: diurnal_temperature_amplitude_gradient from defaults", &
+                       bpar%diurnal_temperature_amplitude_gradient, 0.0_wp, nfail)
+        call check_val("bessi: diurnal_temperature_amplitude_max from defaults", &
+                       bpar%diurnal_temperature_amplitude_max, 1.0_wp, nfail)
+        call check("bessi: ice_substrate_layers = 5 from defaults", &
+                   bpar%ice_substrate_layers .eq. 5, nfail)
+        call check_val("bessi: ice_substrate_top_thickness from defaults", &
+                       bpar%ice_substrate_top_thickness, 0.05_wp, nfail)
+        call check_val("bessi: near_surface_layer_max_thicknesses(1) read", &
+                       bpar%near_surface_layer_max_thicknesses(1), 0.02_wp, nfail)
+        call check_val("bessi: near_surface_layer_max_thicknesses(4) read", &
+                       bpar%near_surface_layer_max_thicknesses(4), 0.30_wp, nfail)
 
         ! --- &pdd -----------------------------------------------------
         call pdd_par_init(ppar)
@@ -245,17 +263,17 @@ contains
                        ppar%refreezing_fraction, 0.6_wp, nfail)
         call check_val("pdd: temperature_sigma from defaults", &
                        ppar%temperature_sigma, 5.0_wp, nfail)
-        call check("pdd: pdd_method overridden to simple", &
-                   ppar%pdd_method .eq. CHION_PDD_SIMPLE, nfail)
+        call check("pdd: pdd_method overridden to pism", &
+                   ppar%pdd_method .eq. CHION_PDD_PISM, nfail)
 
-        ! The schema default is "pism", NOT Chion.jl's daily behaviour.
-        ! docs/PLAN.md section 3.1b item 5. Guard it explicitly, because a
-        ! silent revert to "simple" would only show up as an SMB bias at the
-        ! equilibrium line.
+        ! The schema default is "simple", Chion.jl's PDDModel default, so a
+        ! namelist without pdd_method runs the physics validation/ gates.
+        ! Guard it explicitly: a silent switch would only show up as an SMB
+        ! difference at the equilibrium line.
         call pdd_par_init(ppar)
         call pdd_par_load(ppar,"input/chion_defaults.nml","pdd",init=.TRUE.)
-        call check("pdd: SCHEMA DEFAULT is pism, not simple", &
-                   ppar%pdd_method .eq. CHION_PDD_PISM, nfail)
+        call check("pdd: SCHEMA DEFAULT is simple (Chion.jl's)", &
+                   ppar%pdd_method .eq. CHION_PDD_SIMPLE, nfail)
 
         ! --- &itm -----------------------------------------------------
         call chion_itm_par_load(ipar,PAR_TMP,"itm")

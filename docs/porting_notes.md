@@ -3,6 +3,12 @@
 Every intentional deviation from `Chion.jl` (branch `main`), and every Julia quirk
 deliberately preserved. Required reading before changing any physics module.
 
+Reference: Chion.jl `main` `9ec6cc7` (= `03bb445`), synced in `docs/PLAN_dev_nils.md`
+(D29-D42). The port base was `a9ec154` (D1-D28 were written against it; their text is
+updated where the sync changed them). Physics deviations are reverted under `legacy_chion=1`
+(D24) where they would otherwise fail the validation gate; each entry says whether it is.
+Issues for Chion.jl: `docs/upstream_chionjl_issues.md`.
+
 Policy for what may and may not be cleaned up: `docs/PLAN.md` section 4.1.
 The full list of traps: `docs/PLAN.md` section 5.
 
@@ -72,8 +78,10 @@ routines for no behavioural gain.
 `integer` parameters (`CHION_ALBEDO_*` etc.) and converts from namelist strings via
 `chion_albedo_scheme_flag` and friends.
 **Why:** Integer branching in inner loops; readable, validatable namelist input.
-**Impact:** None. The Chion.jl aliases are preserved: albedo `bessi`/`legacy` -> `constant`;
-fresh-snow-density `bessi` -> `constant`, `htessel` -> `parameterized`.
+**Impact:** None. Canonical names only, as in Chion.jl since `03bb445` (chion C1): the former
+aliases (albedo `bessi`/`legacy`, fresh-snow density `bessi`/`htessel`, SEMIX snow albedo
+`ww`/`warren` -> `warren_wiscombe`, PDD `calov_greve`/`calov-greve`, and chion's own
+`semix_qsat` `climberx`/`chion`) are rejected with the list of valid names.
 
 ### D5. Unrecognized densification scheme is an error, not a silent fallback
 **What:** Chion.jl dispatches densification with `if _uses_htessel_densification(c) ... else`
@@ -169,8 +177,9 @@ These are listed in full in `docs/PLAN.md` section 5. Restated here as they are 
 - **Three distinct empty-layer thresholds** (`> 0`, `> TOL_TINY`, `> TOL_EMPTY_LAYER`) gate
   different physics and are not interchangeable. `chion_defs` defines both tolerances and
   comments the hazard at the declaration.
-- **`BESSI_REFERENCE_LAYER_COUNT = 15`** is used by the depth cap regardless of the configured
-  `Ntot`. Preserved and flagged at the declaration.
+- **The depth cap ignores the configured `Ntot`.** Since Chion.jl `03bb445` (chion C1) it is the
+  constant `BESSI_REFERENCE_SNOW_DEPTH_M = 22.5` m, no longer `15*mass_split*1.5/300`
+  (`BESSI_REFERENCE_LAYER_COUNT` and `_DEPTH_DENSITY` removed).
 
 ---
 
@@ -216,13 +225,13 @@ the test. Two consequences worth knowing before WP19:
 
 ## WP14/WP15 — IO and drivers
 
-### D14. Output dimension order differs from Chion.jl, of necessity
-**What:** Chion.jl declares `("t","x","y")`, landing in the file as `var(y,x,t)`. chion writes
-`var(time,yc,xc)`.
-**Why:** `time` is the unlimited dimension, and netCDF requires the unlimited dimension to be
-slowest-varying. This is also CF-standard and yelmo's convention.
-**Impact:** **WP16's comparison harness must permute axes.** Variable names, units and
-`long_name` are unaffected and match exactly for all 20 shared variables.
+### D14. Output dimension names differ from Chion.jl
+**What:** Chion.jl (9ec6cc7) declares `("x","y","t")` with an unlimited `t`, landing in the
+file as `var(t,y,x)`; chion writes `var(time,yc,xc)`. Same order, different names.
+(Before 9ec6cc7 Chion.jl wrote `var(y,x,t)`, so the order differed too.)
+**Why:** `time`/`xc`/`yc` are yelmo's names, which the stack's tools read.
+**Impact:** the harness looks dimensions up by either name (`read_canonical`). Variable names,
+units and `long_name` match for every shared variable except ITM's three rates (D42).
 
 ### D15. Unmapped grid cells use `MV = -9999`, not NaN
 **What:** Chion.jl fills cells with no column at NaN; chion uses `chion_defs`' `MV`, written as
@@ -264,229 +273,6 @@ and never split.
 ---
 
 ## WP16 — validation harness
-
-### D22. `8.13` in the densification Arrhenius denominators is a typo; corrected
-**What:** `DENSIFY_R_GAS` is the universal gas constant, not Chion.jl's `8.13`.
-Reported upstream as Chion.jl issue #18.
-
-**Why:** provenance. The low-density branch is **Herron & Langway (1980)**,
-*Firn densification: an empirical model*, J. Glaciol. 25(93), stage 1:
-`k0 = 11*exp(-10160/(R*T))` with `R = 8.314 J K-1 mol-1`. The activation energy
-`10160 J mol-1` matches this module exactly and is H&L's published value for
-rho < 550; Chion.jl's leading `0.011` is their `k0 = 11` with the kg/Mg
-conversion; `Ea/(R*T)` is dimensionless and equals 4.70 at 260 K. The expression
-is only dimensionally coherent with `R`. The mid/high branches carry
-`Ea = 60000 J mol-1`, the standard ice-creep value, which expects the same `R`.
-
-PLAN.md §4.1 previously listed this as NOT reconcilable without a modelling
-decision, because the substitution was measured at "a factor of ~2.6" at 260 K
-and "~1400" on the mid/high branches. **Those figures were wrong.** Recomputed:
-
-| branch | at | factor |
-|---|---|---|
-| low-density (`-10160`) | 260 K | **1.11** |
-| mid/high (`-60000`) | 263 K | **1.86** |
-
-Both branches move in the same direction and by a similar order, which is what a
-single shared constant should do. The earlier asymmetry was an artefact of the
-arithmetic error, and it was itself the main argument for treating `8.13` as
-calibrated rather than mistyped.
-
-**Impact:** the *integrated* effect is small, because densification self-limits
-against the `(rho_i - rho)` gap and the `rho_i` cap. Over a 10-year single-column
-percolation-zone run (the §4.1 measurement requirement, now discharged):
-
-| | `8.13` | gas constant | change |
-|---|---|---|---|
-| final bulk density | 651 kg m-3 | 657.0 | +0.9% |
-| cumulative refreezing | 2437 | 2456.3 | +0.8% |
-| cumulative runoff | 4109 | 4114.8 | +0.14% |
-| cumulative melt | 5532 | 5531.4 | -0.01% |
-| peak layer count | 12 | 12 | — |
-
-So it is a correction, not a recalibration. Against Chion.jl it is a 1-9%
-divergence in the density-driven fields, which is why D24 exists.
-
-### D23. PDD adopts BESSI's ice-facing `smb_ice` convention and a capped reservoir
-**What:** chion's PDD no longer reproduces Chion.jl's snowpack budget. `smb_ice`
-is ice-facing (`snow_to_ice - ice_melt`); refreezing is capacity-limited by the
-snow remaining after melt (`min(f*H_snow, snow_melt)`); refrozen mass becomes
-superimposed ice and leaves the melt-able reservoir; and the reservoir is capped
-at the new `H_snow_max` parameter (default 5000 kg m-2, matching smbpal/ITM),
-with the excess converted to ice. Reported upstream as Chion.jl issue #19.
-
-**Why:** Chion.jl's PDD credits `smb_ice` with `d(snowpack_swe)`, making it a
-whole-column mass change despite its own metadata calling it "Net mass forcing
-to the ice sheet". That double-counts against a host ice-sheet model. PDD has no
-firn representation, so a whole-column `smb_ice` implies a reservoir the model
-does not have. BESSI and ITM are both ice-facing; PDD was the odd one out. The
-capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
-
-**Impact:**
-- **The full three-reservoir closure now holds:**
-  `snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)`.
-  Correction C2 below records that this identity *cannot* hold — that was true
-  of Chion.jl's convention and is no longer true of chion's. It is now the WP16
-  gate for PDD, measured at 2.3e-15 relative in dp and 3.8e-07 in sp.
-- `chion_get_smb`'s PDD special case (D13, `smb_ice - snowpack_swe`) is deleted.
-  All three models now share one definition of the ice-facing flux, and the
-  sp round-off that case carried is gone with it.
-- **PDD can now report a positive ice-facing flux.** D13 recorded that it was
-  structurally never positive; the cap's snow-to-ice export is what fixes that.
-- `snowpack_swe` is bounded, so `wp` is safe for it. Uncapped it was not.
-- Three test assertions were inverted, because they had pinned the upstream
-  defects in place — most starkly a "D6 guard" asserting that the snowpack is
-  *never exhausted* under sustained melt.
-- `pdd_column_apply` / `pdd_column_step` gained optional `snow_melt_out`,
-  `ice_melt_out`, `refrozen_out`, `snow_to_ice_out` diagnostics. The test used
-  to infer ice melt as `d(snowpack_swe) - d(smb_ice)`, an identity of the old
-  convention that became silently wrong when the convention changed.
-
-### D24. `legacy_chion=1` build variant
-**What:** `make ... legacy_chion=1` defines `CHION_LEGACY`, which reverts the
-deliberate physics corrections (currently D22) to Chion.jl's values. Builds land
-in `libchion/{include,bin}[-dp]-legacy`.
-
-**Why:** "is the port faithful?" and "is the reference correct?" are different
-questions. Without this, every upstream bug chion fixes turns into a WP16 gate
-failure, and the only way to keep the gate green is to stop testing those fields
-— so the harness gets weaker exactly as the port gets better. D22 alone would
-have ungated 15 of BESSI's 18 fields.
-
-**Impact:** WP16 gates BESSI port fidelity with the dp+legacy build, and reports
-the correction's effect separately as chion-dp vs chion-dp-legacy. **Not a
-production setting** — it selects physics believed to be wrong.
-
-D23 is deliberately NOT covered by the switch: reproducing Chion.jl's PDD
-convention would mean maintaining a second copy of the PDD core, which is
-upstream defect 13 (three diverged copies) reintroduced on purpose. PDD is
-gated on its own mass closure instead, which is a stronger property than
-agreement with a reference that cannot satisfy it.
-
-### D25. Gravity is unified onto standard gravity
-**What:** `DENSIFY_GRAVITY` is `DEF_GRAVITY = 9.80665 m s-2`. Chion.jl carries `9.81` in
-densification and `9.80665` everywhere else. Reverted under `legacy_chion=1`.
-
-**Why:** there is one gravitational acceleration. `9.80665` is standard gravity, **exact by
-definition** (CGPM 1901) rather than a rounded measurement, so it is both the more precise
-value and the one chion already used elsewhere. Two values for one constant in one model is
-a latent inconsistency, not a modelling choice.
-
-**Impact:** 3.6e-4 relative on the overburden, entering the mid/high branches cubed for
-~1.1e-3 on those tendencies — an order of magnitude below the gas-constant correction (D22)
-in the same expression. Chion.jl still has `9.81`, so this is covered by the legacy switch to
-keep WP16's BESSI gate meaningful.
-
-### D26. ITM's physical constants come from `chion_const_class`
-**What:** `snow_itm` no longer defines `ITM_SEC_DAY`, `ITM_RHO_W` or `ITM_L_M`, and no longer
-hard-codes `273.15`. `itm_step`, `itm_init_state`, `calc_itm` and `calc_temp_surf` take
-`chion_const_class` (named `cn`, because ITM's own `c` is the offset coefficient) and read
-`seconds_per_day`, `rho_w`, `Lm` and `T0` from it.
-
-**Why:** three of the four merely duplicated a value chion already had. The fourth actually
-disagreed: smbpal's `L_m = 3.35e5` against `chion_const_class%Lm = 3.34e5`. The latent heat of
-fusion of ice is 3.337e5 J kg-1, so **3.34e5 is the more accurate of the two**. `docs/PLAN.md`
-§4.1 had ruled this out on the grounds that a host retuning `T0` would silently retune ITM's
-melt — but that argument cuts the other way once stated plainly: with two sets of constants,
-a host retuning `T0` or `Lm` leaves ITM silently running different physics from BESSI, which
-is the failure mode worth preventing.
-
-**Impact:**
-- `1/L_m` rises by 0.30%, so ITM's potential melt rises by the same fraction. Measured
-  end-to-end in `tests/test_itm.f90`: the `smb` field scale moves from 56.469 to 56.640,
-  i.e. +0.30% exactly as predicted. §4.1 notes `itm_c`/`itm_t` are calibrated against the
-  smbpal values, so treat this as within their tuning uncertainty rather than a free change.
-- ITM has no Chion.jl counterpart, so this needs no `legacy_chion` coverage.
-- `test_itm`'s reference now takes the same constants. It asserts **algebraic** equivalence
-  (D20), so feeding the two sides different constants would silently turn it into a constants
-  comparison and leave the algebra untested.
-- One assertion there was re-derived rather than re-tuned. `alb_s` is not independent: it is
-  `alb_bg + depth*(as_snow - alb_bg)` with `depth = H_snow/H_snow_crit`, so an absolute error
-  in `H_snow` is amplified by `1/H_snow_crit` (worst case 10 mm w.e.) and scaled by the albedo
-  contrast. The flat "4 ulp" bound that stood there was passing at 3.3 ulp — on luck, not on
-  a stated error path.
-
-### D27. ITM's per-step `tsrf` scales `melt_net` to an annual rate
-**What:** `itm_step` passes `melt_net*days_year_firn` to `calc_temp_surf`, with
-`days_year_firn = sec_year_360d/sec_day` (fesm-utils `phys_constants`). `firn_fac` is now
-documented as `[K (mm w.e. yr-1)-1]`.
-
-**Why:** smbpal applies `calc_temp_surf` once per year to the annual net melt in
-`[mm w.e. yr-1]` (360-day year), and `firn_fac` is calibrated against that. chion applied it
-per step to the daily rate `[mm w.e. d-1]`, so the firn warming was ~360x too small. The year
-length is a property of the calibration, not of the host's calendar, hence the named 360-day
-convention rather than a parameter.
-
-**Impact:** firn warming on refreezing columns is restored to smbpal's magnitude. `tsrf`
-remains a per-step value: `max(0,.)` and the `min(T0,.)` cap act per step, so its annual mean
-still differs from smbpal's annual-mean `tsrf` where either is active. `test_itm`'s reference
-scales the same way; `tsrf` stays bit-identical.
-
-### D28. Shared physical constants come from fesm-utils `phys_const_class`
-**What:** `chion_init(chn,filename,ncol,group,cnst)` takes an optional
-`phys_const_class` (fesm-utils `phys_constants`). `chion_const_from_phys` fills the seven
-shared fields of `chion_const_class` from it:
-
-| chion | `phys_const_class` |
-|---|---|
-| `rho_i` | `rho_ice` |
-| `rho_w` | `rho_w` |
-| `ci` | `cp_ice` |
-| `cw` | `cp_w` |
-| `Lm` | `L_ice` |
-| `grav` (SEMIX SEB) | `g` |
-| `T0` | `T0` |
-
-Without `cnst`, chion loads the record itself from `&chion:phys_const_file`, which is now in
-the `phys_const` schema (`input/chion_phys_const.nml`, all 12 primitives). chion's own
-constants and scheme flags moved to `&chion_const` in `input/chion_defaults.nml` (group name
-`&chion:nml_const`), read through the schema defaults, so a par file may override any subset.
-The `seconds_per_day` field is gone; the day length is the named convention
-`phys_constants:sec_day`. chion's field names stay those of Chion.jl.
-
-**Why:** a coupled host (yelmox) passes one constants record to every component. Before
-this, chion carried its own copy, so ice density, latent heat and heat capacity of water
-silently differed from the rest of the program.
-
-**Not shared, on purpose:** densification's `DENSIFY_GRAVITY` stays chion-internal (D25): it
-is part of the `legacy_chion` reference-reproduction switch. chion therefore still has two
-gravities, as before this change: 9.80665 in densification and `g` (9.81 in both shipped sets)
-in the SEMIX SEB. Universal constants with no
-`phys_const_class` counterpart (`Lv`, `cp_air`, `karman`, `R_dry`, `sigma_sb`, `Ki`) stay in
-`&chion_const`.
-
-**Impact:**
-- Standalone: none. `input/chion_phys_const.nml` keeps Chion.jl's values (`rho_ice = 917`,
-  `cp_w = 4181`, `L_ice = 3.34e5`), so validation against Chion.jl is unchanged.
-  `chion_column.x` output is identical to before for all three models (ncdump text).
-- Coupled with the fesm-utils / yelmox Earth set (`rho_ice = 910`, `cp_w = 4187`,
-  `L_ice = 3.335e5`), measured with `chion_column.x` (one column, 10 years, final values):
-  - ITM: melt +0.150%, which is exactly `3.34e5/3.335e5`. Only `L_ice` matters; `itm_c`/`itm_t`
-    were calibrated in smbpal at 3.35e5, so this stays well within their tuning uncertainty
-    (cf. D26).
-  - PDD: no change (uses only `T0`).
-  - BESSI: melt +0.17%, runoff +0.48%, refreezing −0.38%, `smb_ice` −0.78%, liquid water
-    −1.4%. By constant: `L_ice` gives melt +0.17% and `smb_ice` −0.77%; `rho_ice` gives
-    runoff +0.22%, refreezing −0.31% and liquid water −1.9% (smaller pore space); `cp_w` is
-    negligible (<0.01%).
-
-### D21. `chion_grid.x` stamps output at the end of the step, not the start
-**What:** the driver wrote the post-step state under the pre-step time, and its
-output test was seeded such that with `dt_out == dt` the after-step-1 record was
-never written at all — the first output record held the state after step *two*.
-Both are fixed: the stamp is `time + dt_use`, and the test is written on the same
-post-step time so `dt_out <= dt` emits a record after every step.
-
-**Why:** labelling a post-step state with the pre-step time shifts the whole
-output series one step earlier than the physics, which biases any comparison
-against a reference model by exactly one timestep — silently, and in a way that
-looks like a small physics disagreement rather than a bookkeeping error.
-`chion_column.x` was already correct (`time = time_init + k*dt`), so only the
-gridded driver was affected. The restart stamp was corrected to match.
-
-**Impact:** output files from `chion_grid.x` before this change have their time
-axis shifted by one step and are missing the first post-step record. Nothing
-else consumed them yet.
 
 ### D19. `wp` is selectable at compile time (`precision=sp|dp`)
 **What:** `wp` is no longer fixed at `sp`. `make ... precision=dp` defines `CHION_DP`, and
@@ -557,6 +343,599 @@ than dp: sp rounds coarsely enough that most of these differences fall below the
 bit and cancel to exactly zero, while dp resolves them instead of discarding them — more ulp
 at a far smaller absolute error.
 
+### D21. `chion_grid.x` stamps output at the end of the step, not the start
+**What:** the driver wrote the post-step state under the pre-step time, and its
+output test was seeded such that with `dt_out == dt` the after-step-1 record was
+never written at all — the first output record held the state after step *two*.
+Both are fixed: the stamp is `time + dt_use`, and the test is written on the same
+post-step time so `dt_out <= dt` emits a record after every step.
+
+**Why:** labelling a post-step state with the pre-step time shifts the whole
+output series one step earlier than the physics, which biases any comparison
+against a reference model by exactly one timestep — silently, and in a way that
+looks like a small physics disagreement rather than a bookkeeping error.
+`chion_column.x` was already correct (`time = time_init + k*dt`), so only the
+gridded driver was affected. The restart stamp was corrected to match.
+
+**Impact:** output files from `chion_grid.x` before this change have their time
+axis shifted by one step and are missing the first post-step record. Nothing
+else consumed them yet.
+
+### D22. `8.13` in the densification Arrhenius denominators is a typo; corrected
+**What:** `DENSIFY_R_GAS` is the universal gas constant, not Chion.jl's `8.13`.
+Reported upstream as Chion.jl issue #18.
+
+**Update (dev_nils `408e91c`):** Chion.jl now uses the literal `8.314`. chion keeps the
+full-precision `8.31446261815324`; `8.314` differs by ~3e-4 in the Arrhenius term, so
+`legacy_chion` now reverts to `8.314` (not `8.13`). Nils asked to adopt the full value, after
+which R leaves the legacy switch.
+
+**Why:** provenance. The low-density branch is **Herron & Langway (1980)**,
+*Firn densification: an empirical model*, J. Glaciol. 25(93), stage 1:
+`k0 = 11*exp(-10160/(R*T))` with `R = 8.314 J K-1 mol-1`. The activation energy
+`10160 J mol-1` matches this module exactly and is H&L's published value for
+rho < 550; Chion.jl's leading `0.011` is their `k0 = 11` with the kg/Mg
+conversion; `Ea/(R*T)` is dimensionless and equals 4.70 at 260 K. The expression
+is only dimensionally coherent with `R`. The mid/high branches carry
+`Ea = 60000 J mol-1`, the standard ice-creep value, which expects the same `R`.
+
+PLAN.md §4.1 previously listed this as NOT reconcilable without a modelling
+decision, because the substitution was measured at "a factor of ~2.6" at 260 K
+and "~1400" on the mid/high branches. **Those figures were wrong.** Recomputed:
+
+| branch | at | factor |
+|---|---|---|
+| low-density (`-10160`) | 260 K | **1.11** |
+| mid/high (`-60000`) | 263 K | **1.86** |
+
+Both branches move in the same direction and by a similar order, which is what a
+single shared constant should do. The earlier asymmetry was an artefact of the
+arithmetic error, and it was itself the main argument for treating `8.13` as
+calibrated rather than mistyped.
+
+**Impact:** the *integrated* effect is small, because densification self-limits
+against the `(rho_i - rho)` gap and the `rho_i` cap. Over a 10-year single-column
+percolation-zone run (the §4.1 measurement requirement, now discharged):
+
+| | `8.13` | gas constant | change |
+|---|---|---|---|
+| final bulk density | 651 kg m-3 | 657.0 | +0.9% |
+| cumulative refreezing | 2437 | 2456.3 | +0.8% |
+| cumulative runoff | 4109 | 4114.8 | +0.14% |
+| cumulative melt | 5532 | 5531.4 | -0.01% |
+| peak layer count | 12 | 12 | — |
+
+So it is a correction, not a recalibration. Against Chion.jl it is a 1-9%
+divergence in the density-driven fields, which is why D24 exists.
+
+### D23. PDD adopts BESSI's ice-facing `smb_ice` convention and a capped reservoir
+**What:** chion's PDD no longer reproduces Chion.jl's snowpack budget. `smb_ice`
+is ice-facing (`snow_to_ice - ice_melt`); refreezing is capacity-limited by the
+snow remaining after melt (`min(f*H_snow, snow_melt)`); refrozen mass becomes
+superimposed ice and leaves the melt-able reservoir; and the reservoir is capped
+at the new `H_snow_max` parameter (default 5000 kg m-2, matching smbpal/ITM),
+with the excess converted to ice. Reported upstream as Chion.jl issue #19;
+**adopted upstream** in Chion.jl `ce6a68d` (same budget, `H_snow_max`,
+`pdd_method`, `erfc`), so PDD is again gated against Chion.jl (WP3).
+
+**Why:** Chion.jl's PDD credits `smb_ice` with `d(snowpack_swe)`, making it a
+whole-column mass change despite its own metadata calling it "Net mass forcing
+to the ice sheet". That double-counts against a host ice-sheet model. PDD has no
+firn representation, so a whole-column `smb_ice` implies a reservoir the model
+does not have. BESSI and ITM are both ice-facing; PDD was the odd one out. The
+capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
+
+**Impact:**
+- **The full three-reservoir closure now holds:**
+  `snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)`.
+  Correction C2 below records that this identity *cannot* hold — that was true
+  of Chion.jl's old convention and is no longer true of either. WP16 gates it
+  alongside the Chion.jl comparison, measured at 2.3e-15 relative in dp and
+  3.8e-07 in sp.
+- `chion_get_smb`'s PDD special case (D13, `smb_ice - snowpack_swe`) is deleted.
+  All three models now share one definition of the ice-facing flux, and the
+  sp round-off that case carried is gone with it.
+- **PDD can now report a positive ice-facing flux.** D13 recorded that it was
+  structurally never positive; the cap's snow-to-ice export is what fixes that.
+- `snowpack_swe` is bounded, so `wp` is safe for it. Uncapped it was not.
+- Three test assertions were inverted, because they had pinned the upstream
+  defects in place — most starkly a "D6 guard" asserting that the snowpack is
+  *never exhausted* under sustained melt.
+- `pdd_column_apply` / `pdd_column_step` gained optional `snow_melt_out`,
+  `ice_melt_out`, `refrozen_out`, `snow_to_ice_out` diagnostics. The test used
+  to infer ice melt as `d(snowpack_swe) - d(smb_ice)`, an identity of the old
+  convention that became silently wrong when the convention changed.
+
+### D24. `legacy_chion=1` build variant
+**What:** `make ... legacy_chion=1` defines `CHION_LEGACY`, which reverts the
+deliberate physics corrections to Chion.jl's values (D22's R = 8.314, D25's g = 9.81,
+D27's ITM `tsrf` scaling, D30's aging-albedo refresh, D32, D35, D38, D39, D40's
+thin-snow blend and D41's land columns; the list is in `chion_defs.F90`). Builds land in `libchion/{include,bin}[-dp]-legacy`
+(`-legacy-fpsafe` for validation/).
+
+**Why:** "is the port faithful?" and "is the reference correct?" are different
+questions. Without this, every upstream bug chion fixes turns into a WP16 gate
+failure, and the only way to keep the gate green is to stop testing those fields
+— so the harness gets weaker exactly as the port gets better. D22 alone would
+have ungated 15 of BESSI's 18 fields.
+
+**Impact:** WP16 gates BESSI port fidelity with the dp+legacy build, and reports
+the correction's effect separately as chion-dp vs chion-dp-legacy. **Not a
+production setting** — it selects physics believed to be wrong.
+
+D23 is not covered by the switch, and no longer needs to be: Chion.jl adopted
+the same PDD budget (`ce6a68d`), so the plain dp build is gated against it.
+
+### D25. Gravity is unified onto standard gravity
+**What:** `DENSIFY_GRAVITY` is `DEF_GRAVITY = 9.80665 m s-2`. Chion.jl carries `9.81` in
+densification and `9.80665` everywhere else. Reverted under `legacy_chion=1`.
+
+**Why:** there is one gravitational acceleration. `9.80665` is standard gravity, **exact by
+definition** (CGPM 1901) rather than a rounded measurement, so it is both the more precise
+value and the one chion already used elsewhere. Two values for one constant in one model is
+a latent inconsistency, not a modelling choice.
+
+**Impact:** 3.6e-4 relative on the overburden, entering the mid/high branches cubed for
+~1.1e-3 on those tendencies — an order of magnitude below the gas-constant correction (D22)
+in the same expression. Chion.jl still has `9.81`, so this is covered by the legacy switch to
+keep WP16's BESSI gate meaningful.
+
+### D26. ITM's physical constants come from `chion_const_class`
+**What:** `snow_itm` no longer defines `ITM_SEC_DAY`, `ITM_RHO_W` or `ITM_L_M`, and no longer
+hard-codes `273.15`. `itm_step`, `itm_init_state`, `calc_itm` and `calc_temp_surf` take
+`chion_const_class` (named `cn`, because ITM's own `c` is the offset coefficient) and read
+`seconds_per_day`, `rho_w`, `Lm` and `T0` from it.
+
+**Why:** three of the four merely duplicated a value chion already had. The fourth actually
+disagreed: smbpal's `L_m = 3.35e5` against `chion_const_class%Lm = 3.34e5`. The latent heat of
+fusion of ice is 3.337e5 J kg-1, so **3.34e5 is the more accurate of the two**. `docs/PLAN.md`
+§4.1 had ruled this out on the grounds that a host retuning `T0` would silently retune ITM's
+melt — but that argument cuts the other way once stated plainly: with two sets of constants,
+a host retuning `T0` or `Lm` leaves ITM silently running different physics from BESSI, which
+is the failure mode worth preventing.
+
+**Impact:**
+- `1/L_m` rises by 0.30%, so ITM's potential melt rises by the same fraction. Measured
+  end-to-end in `tests/test_itm.f90`: the `smb` field scale moves from 56.469 to 56.640,
+  i.e. +0.30% exactly as predicted. §4.1 notes `itm_c`/`itm_t` are calibrated against the
+  smbpal values, so treat this as within their tuning uncertainty rather than a free change.
+- ITM has no Chion.jl counterpart, so this needs no `legacy_chion` coverage.
+- `test_itm`'s reference now takes the same constants. It asserts **algebraic** equivalence
+  (D20), so feeding the two sides different constants would silently turn it into a constants
+  comparison and leave the algebra untested.
+- One assertion there was re-derived rather than re-tuned. `alb_s` is not independent: it is
+  `alb_bg + depth*(as_snow - alb_bg)` with `depth = H_snow/H_snow_crit`, so an absolute error
+  in `H_snow` is amplified by `1/H_snow_crit` (worst case 10 mm w.e.) and scaled by the albedo
+  contrast. The flat "4 ulp" bound that stood there was passing at 3.3 ulp — on luck, not on
+  a stated error path.
+
+### D27. ITM's per-step `tsrf` scales `melt_net` to an annual rate
+**What:** `itm_step` passes `melt_net*ITM_FIRN_DAYS_YEAR` to `calc_temp_surf`, with
+`ITM_FIRN_DAYS_YEAR = sec_year_360d/sec_day` (`chion_defs`, from fesm-utils `phys_constants`).
+`firn_fac` is now documented as `[K (mm w.e. yr-1)-1]`. Reverted under `legacy_chion=1`
+(`ITM_FIRN_DAYS_YEAR = 1`).
+
+**Why:** smbpal applies `calc_temp_surf` once per year to the annual net melt in
+`[mm w.e. yr-1]` (360-day year), and `firn_fac` is calibrated against that. chion applied it
+per step to the daily rate `[mm w.e. d-1]`, so the firn warming was ~360x too small. The year
+length is a property of the calibration, not of the host's calendar, hence the named 360-day
+convention rather than a parameter.
+
+**Impact:** firn warming on refreezing columns is restored to smbpal's magnitude. `tsrf`
+remains a per-step value: `max(0,.)` and the `min(T0,.)` cap act per step, so its annual mean
+still differs from smbpal's annual-mean `tsrf` where either is active. `test_itm`'s reference
+scales the same way; `tsrf` stays bit-identical.
+
+Chion.jl's `ITMModel` (`29eb867`, ported from chion before this fix) applies `firn_fac` to the
+daily rate, so its firn warming is ~360x too small (reported upstream, PLAN_dev_nils §1c.3). The
+`legacy_chion` revert lets validation/ gate all ITM fields, `tsrf` included, against it.
+
+### D28. Shared physical constants come from fesm-utils `phys_const_class`
+**What:** `chion_init(chn,filename,ncol,group,cnst)` takes an optional
+`phys_const_class` (fesm-utils `phys_constants`). `chion_const_from_phys` fills the seven
+shared fields of `chion_const_class` from it:
+
+| chion | `phys_const_class` |
+|---|---|
+| `rho_i` | `rho_ice` |
+| `rho_w` | `rho_w` |
+| `ci` | `cp_ice` |
+| `cw` | `cp_w` |
+| `Lm` | `L_ice` |
+| `grav` (CLIMBER-X turbulence) | `g` |
+| `T0` | `T0` |
+
+Without `cnst`, chion loads the record itself from `&chion:phys_const_file`, which is now in
+the `phys_const` schema (`input/chion_phys_const.nml`, all 12 primitives). chion's own
+constants and scheme flags moved to `&chion_const` in `input/chion_defaults.nml` (group name
+`&chion:nml_const`), read through the schema defaults, so a par file may override any subset.
+The `seconds_per_day` field is gone; the day length is the named convention
+`phys_constants:sec_day`. chion's field names stay those of Chion.jl.
+
+**Why:** a coupled host (yelmox) passes one constants record to every component. Before
+this, chion carried its own copy, so ice density, latent heat and heat capacity of water
+silently differed from the rest of the program.
+
+**Not shared, on purpose:** densification's `DENSIFY_GRAVITY` stays chion-internal (D25): it
+is part of the `legacy_chion` reference-reproduction switch. chion therefore still has two
+gravities, as before this change: 9.80665 in densification and `g` (9.81 in both shipped sets)
+in the CLIMBER-X turbulence (`turbulent_flux_scheme = "climberx"`, formerly `seb_scheme = "semix"`). Universal constants with no
+`phys_const_class` counterpart (`Lv`, `cp_air`, `karman`, `R_dry`, `sigma_sb`) stay in
+`&chion_const`. (`Ki` was there too until the Calonne et al. 2019 conductivity, Chion.jl
+`49990e6`, made it dead; it was removed from `chion_const_class`, the API reader and
+`input/chion_defaults.nml`. A par file that still sets `Ki` is not read for it.)
+
+**Impact:**
+- Standalone: none. `input/chion_phys_const.nml` keeps Chion.jl's values (`rho_ice = 917`,
+  `cp_w = 4181`, `L_ice = 3.34e5`), so validation against Chion.jl is unchanged.
+  `chion_column.x` output is identical to before for all three models (ncdump text).
+- Coupled with the fesm-utils / yelmox Earth set (`rho_ice = 910`, `cp_w = 4187`,
+  `L_ice = 3.335e5`), measured with `chion_column.x` (one column, 10 years, final values):
+  - ITM: melt +0.150%, which is exactly `3.34e5/3.335e5`. Only `L_ice` matters; `itm_c`/`itm_t`
+    were calibrated in smbpal at 3.35e5, so this stays well within their tuning uncertainty
+    (cf. D26).
+  - PDD: no change (uses only `T0`).
+  - BESSI: melt +0.17%, runoff +0.48%, refreezing −0.38%, `smb_ice` −0.78%, liquid water
+    −1.4%. By constant: `L_ice` gives melt +0.17% and `smb_ice` −0.77%; `rho_ice` gives
+    runoff +0.22%, refreezing −0.31% and liquid water −1.9% (smaller pore space); `cp_w` is
+    negligible (<0.01%).
+
+## PLAN_dev_nils — sync with Chion.jl `dev_nils` and `main` `9ec6cc7`
+
+### D29. Rain with no layer to hold it runs off, exactly once
+**What:** `apply_accumulation` sends rain to `runoff` when `n = 0` or `mass(1) <= 0`;
+otherwise it goes to `mass_w(1)` as before. Nothing is added in the bare-ice branch.
+
+**Why:** Chion.jl dropped that rain (defects 11 and 20). dev_nils `8fff530` fixed it by
+adding the step's rain to `runoff` in the bare-ice branch. When `0 < mass(1) <=
+TOL_EMPTY_LAYER`, though, accumulation has already put the rain in `mass_w(1)`, so it is
+counted twice. Routing it where it falls counts it once.
+
+**Impact:** `runoff` on bare-ice steps with rain; `smb_ice` and the snowpack are unchanged.
+Identical to Chion.jl except in the sliver window above (tested in `test_bessi` 5b), which
+the harness columns never enter, so not under `legacy_chion`. The BESSI closure identity no
+longer needs rain withheld. Chion.jl's substrate bare path (`03bb445`) has the same double
+count; chion adds no rain there either (C3). Reported upstream.
+
+### D30. Aging albedo: snowfall rejuvenates in proportion to its mass
+**What:** under `albedo_scheme = "aging"`, a step's snowfall `S` [kg m-2] onto aged
+snow scales the aging progress `E = -ln((a - alpha_wet)/(alpha_dry - alpha_wet))` and
+`snow_age_days` by `1 - f = exp(-S/aging_snowfall_ref)` (default 10 kg m-2, about 3 cm
+of fresh snow). In albedo space `a <- alpha_wet + (alpha_dry - alpha_wet)*x**(1-f)`.
+Snow onto a bare surface is all fresh: `alpha_dry`, age 0, however little falls. It acts
+in the accumulation step's snowfall refresh (`albedo_aging_rejuvenate`), on the snow
+albedo (`albedo_snow`, D40), before the step's aging relaxation, which then always runs.
+The dynamic scheme's refresh is unchanged.
+
+**Why:** Chion.jl (`6d06af6`) resets to `alpha_dry` and age 0 on any snowfall rate > 0,
+so a trace of snow fully rejuvenates the surface. With a host that spreads monthly
+precipitation over every day (yelmox), the ablation-zone albedo then never leaves
+`alpha_dry`. `E = sum(dt/tau)` for this scheme, so scaling `E` is exact even though `tau`
+switches between the cold and melting timescales. The exponential composes exactly,
+`exp(-S1/S_ref)*exp(-S2/S_ref) = exp(-(S1+S2)/S_ref)`, so a day's snowfall refreshes the
+same in one step as in the 8 diurnal substeps of the default (review Q14); the former
+linear `f = min(1, S/S_ref)` gave 66 % of a full refresh over 8 substeps. Snow on a bare
+surface has no aged snow to refresh (its `E` is infinite: the background clamped up to
+`alpha_wet`); fresh, it is bright, and its thinness is the snow-cover fraction's business
+(D40), not the snow albedo's.
+
+**Impact:** `S = 0`: no change; a trace: almost none; `S = S_ref`: `E` and the age scaled
+by `1/e`; never quite Chion.jl's reset on aged snow. On a bare surface Chion.jl's reset,
+except that the step's relaxation follows (end-of-step age `dt`, not 0). Reverted under
+`legacy_chion` (`ALBEDO_AGING_BINARY_REFRESH`), so the harness' aging configuration stays
+gated. To raise with Chion.jl (PLAN_dev_nils N5, N10).
+
+### D31. Mass-weighted mean of two layers is `x1 + w2*(x2 - x1)`
+**What:** `snow_layers:mass_weighted_mean` (surface and bottom merges, density and
+temperature) computes `x1 + w2*(x2 - x1)`, `w2 = m2/(m1 + m2)`, instead of Chion.jl's
+`(m1*x1 + m2*x2)/(m1 + m2)`. Not reverted under `legacy_chion`.
+
+**Why:** the sum-then-divide form does not return `x` for `x1 = x2 = x`: merging two
+melting layers at `T0` can give `T0 - 1 ulp`. The aging albedo picks its timescale with
+`T_top >= T0`, so a merge decided between 2 d and 20 d by round-off. In the harness'
+`:aging` configuration chion landed below `T0` and Chion.jl did not (the dp masses
+differ at ~1e-14), and one column diverged by up to 926 ulp. The new form is exact for
+equal values and weights only the difference, so it is also better conditioned.
+
+**Impact:** round-off only (last bits of merged density and temperature); default
+results are not bit-identical to before. Reported upstream. The fine-layer remesh (C4)
+mixes temperature with it too (review Q16); its harness configurations show no branch
+flips, so it stays out of `legacy_chion`.
+
+### D32. Fine near-surface layers: the first layer below them is split and merged by mass
+**What:** with fine near-surface layers (D36), the remesh ends with `rebalance_layer` at
+`k0` = (number of limited layers) + 1, i.e. layer 5: the split loop while `mass(k0) >
+mass_max` (`mass_split` into a new layer `k0+1`; at `Ntot`, merge the two deepest layers,
+or deplete the bottom one when at most two mass layers fit) and the merge loop while
+`mass(k0) < mass_min` (top up to `mass_split` from `k0+1`, or merge with it). These are
+Chion.jl's surface-layer split and merge, generalised to layer `k` (`split_layer`,
+`merge_layer`, `free_slot_for_split`; `k = 1` is Chion.jl's surface layer, used as
+before in accumulation, melt and vapour flux). Reverted under `legacy_chion`
+(`NEAR_SURFACE_SPLIT_MERGE_BELOW`).
+
+**Why:** in Chion.jl (`03bb445`) the surface split fires only when `mass(1) > mass_max`
+right after snowfall (> 500 kg m-2 in one step), and the surface merge is off. The remesh
+pushes every increment down the four fine layers into layer 5, which nothing caps, splits
+or merges: it grows until the 22.5 m depth cap exports its base. A firn column collapses
+to four thin layers over one cell of up to ~22 m (N <= 5, `Ntot` irrelevant), so
+densification, cold content, percolation and refreezing below 0.47 m happen in one cell.
+Upstream docs ("Without these limits the surface layer can hold up to `mass_max`")
+suggest this is not intended (review Q4; PLAN_dev_nils N7).
+
+**Impact:** only with fine layers on. The column below them is resolved as without fine
+layers (300 kg m-2 layers up to `Ntot`). Measured on the 10-year `chion_column` example
+(prod sp), Chion.jl's behaviour -> chion: mean N 4.9 -> 10.0 (max 5 -> 15); runoff +7.7 %,
+refreezing -6.0 %, melt +0.6 %, final thickness -12.6 %, bulk density +10.6 %, liquid water
+-40 %. Chion.jl's single cell holds and refreezes more meltwater; chion's runoff and
+refreezing are within 2.5 % of the run without fine layers. With `Ntot <= k0 + 1` the slot is freed by depleting the
+bottom layer, whose `continuous_bottom_deplete` resets `t_srf` to `temperature(1)` as it
+does in accumulation; with the default `Ntot = 15` a bottom merge frees it instead.
+Harness: the fine-layer configurations run under `legacy_chion` and stay gated.
+
+### D33. Cloud-proxy longwave: optional host TOA
+**What:** Chion.jl's cloud-proxy longwave (`03bb445`, `longwave_scheme = "cloud_proxy"`,
+the default since C11) divides the daily shortwave by a top-of-atmosphere
+shortwave it computes itself: a fixed modern orbit (`S0 = 1361 W m-2`, obliquity
+23.439291 deg, eccentricity term `1 + 0.033 cos(2 pi doy/365)`) from latitude, solar
+longitude and day of year. chion adds an optional host field, `forc%toa_shortwave` with
+`forc%has_toa_shortwave` (packed into `chion_step_forcing_class`), that replaces it. The
+night limit (TOA <= 50 W m-2) and the sub-daily fallback apply to either TOA; the host's
+needs no latitude.
+
+**Why:** the proxy reads cloudiness off the ratio `SWD/TOA`. A host whose shortwave is a
+transmissivity times its own insolation (yelmox: `0.6*S_d` from orbital tables on a
+360-day year, paleo-capable) gets a biased ratio from a different TOA: present day the
+two calendars and orbits shift the ratio seasonally, and under paleo orbits or
+`const_insol` the bias is systematic. Passing the host's own TOA makes the ratio the
+host's transmissivity (review Q5; PLAN_dev_nils N9).
+
+**Impact:** none unless a host sets the flag; the harness does not, so it gates
+Chion.jl's internal TOA (not under `legacy_chion`). The drivers set neither
+(`chion_column.x`, `chion_grid.x`).
+
+### D34. Ice substrate: none on land, reset with the column, old restarts start at `min(t_srf, T0)`
+**What:** three chion-only rules around Chion.jl's thermal ice substrate (`03bb445`,
+`ice_substrate_layers`, default 5 since C11):
+1. **Land.** A column with `H_ice <= 0` has no substrate: it runs as
+   `ice_substrate_layers = 0` (adiabatic firn base, bare surface held at `T0`), and its
+   `ice_temperature` slice is never touched. `H_ice` is packed into
+   `chion_step_forcing_class` from the host's `forc%H_ice` (the field ITM already used).
+2. **Reset.** `bessi_reset_columns` sets `ice_temperature` to `temperature_init`, as a cold
+   start does.
+3. **Restart.** `ice_temperature` is written on an `ice_layer` dimension. A restart without
+   it (written with no substrate, or before C3) loads with every substrate layer at
+   `min(t_srf, T0)` of its column, and a log line; one with a different number of substrate
+   layers is refused.
+
+**Why:** (1) Chion.jl has no ice thickness, so it would put 1.55 m of glacier ice under
+tundra: winter cold stored in ice that is not there, and a bare-ice branch that melts it
+(review Q6; plan T9). (2) Chion.jl's reset kernel leaves `ice_temperature` stale, so a
+re-activated column starts on the ice of its previous life (review Q7; N8). (3) Existing
+yelmox restarts lack the field; `t_srf` is the nearest stored estimate of the near-surface
+ice temperature, capped at melting (review Q8).
+
+**Impact:** none on the harness (its substrate configuration has `HI = 1000 m` everywhere;
+no resets or restarts), so not under `legacy_chion`. Host contract: BESSI with a substrate
+needs `forc%H_ice` filled; a host that leaves it at 0 gets no substrate anywhere. yelmox
+fills it for ITM only (`surface_chion.f90`); `chion_column.x` reads `&ctrl H_ice`,
+`chion_grid.x` `H_ice_default` (domain) or `name_hice` (file; `"None"` = 0).
+
+### D35. semix turbulence over bare ice: the latent exchange carries Lv + Lm
+**What:** under `turbulent_flux_scheme = "semix"` (Chion.jl's bulk turbulence, C7), the
+latent heat in the turbulent latent flux of a bare-ice surface -- ice held at T0 (no
+substrate) and the top layer of the thermal ice substrate -- is `Lv + Lm` at any surface
+temperature, in the energy solve's linearization and in the resolved flux
+(`turb_semix_latent_heat`). Snow keeps the phase's latent heat at `Ts` (`Lv + Lm` below T0,
+`Lv` at it), as in Julia. Reverted under `legacy_chion` (`TURB_SEMIX_ICE_SUBLIMATION`).
+
+**Why:** bare ice is solid at T0 too: Julia converts its vapour flux to mass with
+`Lv + Lm` on both bare-ice paths, and the BESSI turbulence's bare-ice flux uses `Lv + Lm`
+(`_resolved_bare_ice_surface_flux_components`), but the semix flux is built with
+`_surface_vapor_latent_heat(T0) = Lv`. Each kg sublimated from ice at T0 then costs the
+surface energy budget `Lv` but the mass budget `Lv + Lm`; the `Lm` is unaccounted (review
+Q12; PLAN_dev_nils N3).
+
+**Impact:** semix turbulence only, on bare ice at T0 (and on the substrate surface at T0):
+the latent flux there is `(Lv+Lm)/Lv = 1.13` times Julia's. The harness gates Julia's form
+under `legacy_chion`. Not changed: BESSI turbulence over the substrate, where Julia (and
+chion) also evaluate the flux with `L(Ts)` (`Lv` at T0) and the mass with `Lv + Lm`; listed
+for Nils, not fixed here.
+
+### D36. Fine near-surface layers: no limit is 0, only the top layers can be limited
+**What:** `&bessi near_surface_layer_max_thicknesses` (Chion.jl
+`near_surface_layer_max_thicknesses_m`, `03bb445`; on by default since C11):
+1. **No limit is `0`**, not `Inf`; a value must be finite and `>= 0`.
+2. **Leading block.** The limited layers must be the top ones: a `0` above a positive value
+   is refused. Julia accepts any pattern.
+3. **Fill-up exit.** `fill_near_surface_layer_thicknesses` stops filling layer `k` after a
+   transfer that leaves the donor non-empty; Julia re-tests the remaining deficit against
+   `EPS_TINY`.
+
+**Why:** (1) `Inf` is not a robust namelist value, and the `-Ofast` production build may
+assume finite arithmetic. (2) A limited layer below an unlimited one has no use, and the
+first unlimited layer must be well defined: the split/merge resumes there (D32). (3) After
+such a transfer the receiver is full by construction. In dp the re-tested deficit is
+~1e-18 m and Julia exits too; in sp it is a few ulp of the target (~1e-9 m), and the loop
+would keep moving round-off.
+
+**Impact:** none at dp (the harness' fine-layer configurations are gated); (3) only stops
+an sp round-off loop. Not under `legacy_chion`.
+
+### D37. Turbulence scheme `climberx`: chion's CLIMBER-X SEMIX exchange under its own name
+**What:** Chion.jl split its surface scheme (`d0146e1`): `seb_scheme` (`bessi` | `semix`)
+selects the longwave only, `turbulent_flux_scheme` (`bessi` | `semix`) the sensible and
+latent heat. chion follows the split (`semix` ported in C7, D35, D38) and adds a third
+turbulence option,
+`turbulent_flux_scheme = "climberx"`: its port of CLIMBER-X SEMIX's aerodynamic exchange
+(`snow_seb_semix`, `docs/semix_port_scope.md`), formerly the turbulent half of
+`seb_scheme = "semix"`. chion's old `seb_scheme = "semix"` is now `seb_scheme = "semix"` +
+`turbulent_flux_scheme = "climberx"`, bit-identical; `semix_qsat` is renamed
+`climberx_qsat` (`"climberx"` | `"bessi"`). `turbulent_flux_scheme = "semix"` is Chion.jl's
+own bulk turbulence (C7). The SEMIX spectral albedo keeps `albedo_scheme = "semix"`, as in
+Chion.jl.
+
+**Why:** in Chion.jl `:semix` turbulence is a bulk scheme of its own (neutral log-law,
+`z0h = z0m/10`, Richardson damping `1/(1 + b Ri)` on the stable side, calibrated
+exchange factors), not CLIMBER-X's resistance (snow-depth roughness blend, stable side
+undamped, `z_sfl = 100 m`). One name for two schemes would make namelists and harness
+pins mean different things on the two sides (review Q2; reverses PLAN_dev_nils §4.5).
+CLIMBER-X's longwave is exactly Chion.jl's `seb_scheme = :semix` (`eps_s (LW↓ - σTs⁴)`,
+`eps_ice` on bare ice), so it keeps that name.
+
+**Impact:** namelists: `seb_scheme = "semix"` alone now gives the semix longwave with
+BESSI's turbulence; add `turbulent_flux_scheme = "climberx"` for the former behaviour, and
+rename `semix_qsat`. The shared longwave expression keeps CLIMBER-X's evaluation order
+(`eps*LW↓ - eps*σTs⁴`, Julia `eps*(LW↓ - σTs⁴)`), so the `seb_scheme = semix` gate sees
+round-off only. A naming change, not under `legacy_chion`.
+
+### D38. semix turbulence: air density with `R_dry`
+**What:** Chion.jl's `_semix_air_density` divides by the literal `287.05 * T_a`; chion uses
+`c%R_dry` (287.058, `&chion_const`, the value CLIMBER-X's exchange already uses). Reverted
+under `legacy_chion` (`TURB_SEMIX_R_AIR_LITERAL`). The Richardson number's gravity is
+standard gravity `DEF_GRAVITY = 9.80665`, which is Julia's literal too (no deviation; not
+the host's `g`, as for densification, D25).
+
+**Why:** one gas constant for dry air in one model (review Q13; cf. D22 for the universal
+gas constant). Ask Nils to use a named constant.
+
+**Impact:** `rho_a` 2.8e-5 relative lower, and with it both turbulent fluxes, under
+`turbulent_flux_scheme = "semix"` only. Gated under `legacy_chion`.
+
+### D39. Diurnal substeps: a day that is not split keeps its forcing
+**What:** with `diurnal_shortwave_substeps` on, `bessi_column_step` steps a day that the
+substep criterion does not split (`n_substeps = 1`: below the minimum air temperature, no
+shortwave, polar night, dt outside 0.75-1.25 d, ...) with its forcing unchanged. Chion.jl
+runs it as one interval `[-pi, pi]` through the same interval averages as the substeps.
+Reverted under `legacy_chion` (`DIURNAL_SINGLE_INTERVAL_AVERAGED`).
+
+**Why:** the full-day shortwave average reconstructs the daily mean from the solar
+geometry, so it returns the forcing's value (to round-off) wherever the sun rises, but zero
+where the geometry has no daylight -- polar night, or a missing latitude -- whatever
+shortwave the forcing carries. A day that is not resolved should not lose forcing energy;
+with the switch off it simply is the daily step.
+
+**Impact:** only where the forcing has shortwave on a day without daylight in chion's
+fixed-orbit geometry: synthetic or smoothed forcing (the harness' annual cosine, a
+monthly climatology interpolated to days) and calendar mismatches at the polar-night edge.
+Real daily reanalysis shortwave is zero there. The harness' diurnal configuration has it
+on 240 column-days at 70 N (4 columns x 60 polar-night days) and gates Julia's behaviour
+under `legacy_chion`.
+
+### D40. Thin-snow albedo: the snow albedo is blended with the background by a snow-cover fraction
+**What:** the surface energy balance sees `alpha = f*alpha_snow + (1 - f)*alpha_bg`
+(`bessi_surface_albedo`), in the snow step and on the final column (written as
+`albedo`). `alpha_snow` is the snow's own albedo, a new state `albedo_snow` that the
+schemes age and refresh unblended (restart field; an older restart starts it at
+`albedo`; output `albedo_snow`). Snow-cover fraction:
+- dynamic, aging, constant: `f = min(1, SWE/swe_crit_albedo)`, `SWE` the column's snow
+  water equivalent (solid + liquid over the snow layers, not the ice substrate),
+  `swe_crit_albedo = 10 kg m-2` (`&chion_const`); `swe_crit_albedo = 0` turns the blend
+  off (`f = 1` on any surface snow);
+- `albedo_scheme = "semix"`: CLIMBER-X's `f = tanh(h_snow/(c_fsnow*z0m_ice))*f_orog`,
+  `f_orog = h_snow/(h_snow + c_fsnow_orog*z_sur_std + 1e-10)` when the host gives
+  `z_sur_std`, else 1 (`smb_surface_par.f90:106-116`; `c_fsnow = 10`,
+  `c_fsnow_orog = 2e-4`, `z0m_ice = 0.002 m`); `h_snow` is the solid thickness of the
+  snow layers (CLIMBER-X: SWE over a fixed 250 kg m-3);
+- prescribed: never blended.
+No surface snow: `f = 0`. Background `alpha_bg`: the bare-ice albedo (`alpha_ice`, or the
+host's `alb_ice_host`) where `H_ice > 0`, `alpha_land` (0.2) on a land column (D41). A
+bare column also stores `alpha_bg` in `albedo_snow`, as Chion.jl stores the bare albedo
+in its one albedo; the old bare-ice path (no substrate) absorbs shortwave with it too
+(Chion.jl: `alpha_ice` there whatever the host gives). Reverted under `legacy_chion`
+(`ALBEDO_THIN_SNOW_BLEND`: `f = 1`, so `albedo = albedo_snow` under snow, bit for bit).
+
+**Why:** BESSI treats any surface layer as full snow cover: a trace of snow on bare ice
+(a host spreading monthly precipitation over every day gives one at +2 to +5 C) jumps the
+albedo from `alpha_ice` to at least `alpha_wet`, so `alpha_ice` is almost never seen. In
+yelmox GRL-8KM an `alpha_ice` sweep 0.2/0.3/0.4 gave identical melt (PLAN_dev_nils
+WP17). ITM and CLIMBER-X SEMIX both blend. The fraction is the column's SWE, not the
+surface layer's mass (plan T2, revised by review Q15): fine near-surface layers hold
+`mass(1)` near 6 kg m-2 on any column, 3000 m of firn included.
+
+**Impact:** seasonal snow over ice and fresh snow on bare ice show the ice through a
+cover thinner than 10 kg m-2 (about 3 cm); `alpha_ice` acts in the ablation zone again.
+Firn columns: none (`f = 1`; 10-yr `chion_column` < 0.01 %). GRL-16KM, MAR-forced
+(monthly means interpolated to days: snowfall > 0 on 98 % of ablation-zone melt days,
+83 % below 1 mm d-1), 50 yr, Gt/yr: SMB 448 -> 279 (MAR 348), melt 334 -> 500 (518),
+runoff 259 -> 427 (349), R² 0.83 -> 0.77. `alpha_ice` 0.3/0.4/0.5 gives melt
+562/500/440 with the blend, 335/334/333 without it. Chion.jl's `alpha_ice = 0.40` was
+calibrated without a blend; with it 0.5 matches MAR's SMB (340, R² 0.86). The harness gates Chion.jl's switch under `legacy_chion`.
+To raise with Chion.jl (PLAN_dev_nils N5).
+
+### D41. Land columns: a land background albedo and no ice ablation
+**What:** a column with `forc%H_ice <= 0` (land) has no ice under its snow:
+- its background albedo is `alpha_land` (`&chion_const`, 0.2, ITM's `alb_land`) (D40);
+- snow-free, it does nothing: no melt, sublimation, `smb_ice` or runoff (rain has already
+  run off, D29), no latent heat flux; `Tsrf` is set to the air temperature, its albedo
+  (and `albedo_snow`) to `alpha_land`;
+- under snow, a melt demand the snow cannot meet is not charged to ice: `melt` is the snow
+  actually melted (on ice it is the demand, the shortfall melting ice, `smb_ice -=`,
+  `runoff +=`), the shortfall energy is dropped;
+- no ice substrate (D34).
+Reverted under `legacy_chion` (`LAND_COLUMNS_WITHOUT_ICE`: bare ice under every column).
+
+**Why:** Chion.jl has no ice thickness, so it melts bare ice under every column and
+credits it to `smb_ice` (plan T9). BESSI has no ground model, so snow-free land has no
+energy budget to close: the cleanest consistent state is a surface in equilibrium with
+the air (`Tsrf = T_air`, which the next snowfall takes too, step 3) and no exchange,
+rather than an energy balance over a surface of unknown heat capacity, or ice melt that
+would feed a host ice model `smb_ice` where there is no ice. The land albedo is ITM's
+(plan T8; constant, not ITM's PDD-weighted land/forest mix).
+
+**Impact:** only where a host passes `H_ice = 0`. A host must fill `forc%H_ice` for BESSI
+(yelmox: for ITM only so far): without it every column is land and nothing ablates ice.
+`chion_column.x` reads `&ctrl H_ice` (1000 m in `par/chion_column.nml`), `chion_grid.x`
+`H_ice_default` (domain) or `name_hice` (file; `"None"` = land). Mass still closes. The
+harness' configurations without `HI` are land for chion, gated under `legacy_chion`.
+
+### D42. Output names: Chion.jl's ITM names; chion's host-contract forcing names
+**What:** ITM output takes Chion.jl's `ITM_OUTPUT_VARS` names and units (WP15): `H_snow`,
+`alb_s`, the step's rates `smb`, `smbi`, `melt`, `runoff`, `refreezing`, `melt_net`
+[mmWE day-1], `Tsrf`, and the cumulative `smb_cum`, `smb_ice` (= `smbi_cum`), `melt_cum`,
+`runoff_cum`, `refreezing_cum` [mmWE]. Two deliberate differences:
+- ITM's `smb` is the TOTAL surface mass balance rate (`sf + rf - runoff`, mmWE day-1),
+  whereas BESSI's and PDD's `smb` is chion's ice-facing flux from `chion_get_smb`
+  [kg m-2 s-1]. ITM's ice-facing rate is `smbi`.
+- `melt`, `runoff`, `refreezing` carry the rate unit and long name ("ITM melt rate",
+  mmWE day-1). Chion.jl looks them up under BESSI's cumulative metadata ("Cumulative melt",
+  mmWE), which is wrong for ITM (upstream, 1c.7).
+BESSI adds `ice_temperature` (substrate, on `ice_layer`, only when configured; Chion.jl does
+not write it) and omits the monthly-only `surface_smb`/`latent_heat_flux` (no monthly writer).
+Forcing fields keep chion's names, which are the host contract (yelmox):
+
+| chion `chion_forcing_class` | Chion.jl forcing |
+|---|---|
+| `dust_dep`, `has_dust_dep` | `dust_deposition`, `has_dust_deposition` |
+| `alb_ice_host`, `has_alb_ice_host` | `prescribed_ice_albedo`, `has_prescribed_ice_albedo` |
+| `H_ice` | `ice_thickness` |
+| `PDDs` | `annual_pdd` |
+| `toa_shortwave` (chion only, D33) | — |
+
+ITM's Fortran state and restart fields keep smbpal's names (`refrz`, `tsrf`, `smbi_cum`,
+`refrz_cum`); only the output file is renamed.
+**Why:** plan decision 13 (Julia's ITM names); a renamed host interface would break yelmox
+for no gain. yelmox reads chion through the API and writes its own `chion.nc`, so no host
+code reads chion's output names.
+**Impact:** ITM output files change names (`albedo` -> `alb_s`, `smb_total` -> `smb_cum`,
+cumulative `melt`/`runoff`/`refreezing` -> `*_cum`, `smb` [kg m-2 s-1] -> `smbi` [mmWE day-1]).
+The harness compares all 14 ITM fields by name. `diagnostics/compare_*.jl` read
+`runoff_cum` when present. Output only, not under `legacy_chion`.
+
+### D43. Near-surface remesh: no transfer below the wp resolution of the limit
+**What:** `cap_near_surface_layer_thicknesses` leaves an excess within `epsilon(1.0_wp)`
+of the cap mass `rho_k h_max(k)` in place, and `fill_near_surface_layer_thicknesses`
+does not refill a deficit within `epsilon(1.0_wp) h_target(k)` (`REMESH_RESOLUTION`;
+Julia: any excess, any deficit above EPS_TINY).
+**Why:** performance (PERF, GRL-16KM 1 thread: ~3 % of the run). In sp a capped or filled
+layer stores its mass and density rounded, so the next remesh (two per substep) finds it a
+few ulp over or under its limit and moved that round-off down and back up again, with the
+full cost of a transfer, on almost every fine layer of every substep. Same reasoning as the
+early end of the fill loop (sp deficit of a few ulp of h).
+**Impact:** round-off only: a fine layer may sit up to one wp ulp off its limit instead of
+being nudged by a sub-ulp transfer. In a dp build the fill threshold stays EPS_TINY (Julia's)
+and the cap tolerance is ~1e-14 kg m-2; the harness gate is unaffected. Not under
+`legacy_chion` (no physics).
+
 ---
 
 ## WP-wide build note
@@ -614,6 +993,23 @@ equals `d(snowpack_swe)` exactly.
 Collected across batch 1. Severity: **A** = wrong results, **B** = latent/conditional,
 **C** = cosmetic or doc-only.
 
+**Status at Chion.jl `main` `9ec6cc7`** (checked against its source; the list to send is
+`docs/upstream_chionjl_issues.md`):
+
+| status | items |
+|---|---|
+| fixed upstream | 1 (vapour diagnostics, `03bb445`), 5, 6, 7, 13, 20b `273.15`/`86400` (PDD rewrite `ce6a68d`, `pdd_defects.md`), 4 (PDD active columns `6fca5d7`, kernel), 11 and 20 (bare-ice rain, `8fff530`, with a double count: D29), 19 (aging x dt, `6d077c5`), 24 (decoded time axis), 26 (`t` coordinate, `ecd4992`) |
+| still open | 3, 8, 21, 23, 25, D31 merge mean, 20b's single `sigma` (`pdd_defects.md` D11), 21b ITM long names |
+| new since `03bb445` | 27 (`Tsrf = T(1)` in the bottom deplete), 28 (substrate not reset), D29's double count in the substrate bare path, layer 5 unbounded under fine layers (D32), fixed-orbit TOA (D33), bare-ice latent heat (D35), `R_air` literal (D38), polar-night diurnal (D39), thin-snow albedo and land columns (D40, D41), aging refresh (D30) |
+| not re-checked | 2, 9, 10, 12, 14-18, 19b, 22 |
+
+### Mass-weighted mean of equal values is not exact (D31)
+
+**(B)** `_mass_weighted_mean` (`layer_structure.jl`) evaluates `(m1*x1 + m2*x2)/(m1+m2)`,
+so two layers at `T0` can merge to `T0 - 1 ulp`, and the `:aging` albedo's `T >= T0`
+timescale test then depends on round-off. Suggest `x1 + m2/(m1+m2)*(x2 - x1)`, as chion
+now does.
+
 ### The BESSI mass-closure identity (WP8)
 
 Derived by enumerating every mass mutation in `column_step_core!` and splitting runoff into
@@ -627,10 +1023,12 @@ total_snow_water_mass + runoff + smb_ice - vapor_mass  ==  cumulative accepted p
 (`smb_ice = mass_base + vapor_bare - melt_bare - melt_ice` by construction), so including it
 separately double-counts. Worth knowing before writing any conservation check in WP11 or WP16.
 
-Two conditions are required for it to close, both of which are upstream defects rather than
-port artefacts: rain must be withheld on steps beginning with `mass(1) <= 0` (defect 11), and
-humidity forcing must be off (defect 1). With dry air over a thin pack, defect 1 alone leaves
-a 105 kg m-2 residual against 192 kg m-2 of reported sublimation.
+Two conditions were required for it to close, both upstream defects rather than port
+artefacts: rain had to be withheld on steps beginning with `mass(1) <= 0` (defect 11, fixed in
+chion by D29), and humidity forcing had to be off (defect 1). With dry air over a thin pack, defect 1 alone left
+a 105 kg m-2 residual against 192 kg m-2 of reported sublimation. Defect 1 is fixed since
+Chion.jl `03bb445` (ported in Stage C1): `tests/test_bessi.f90` test 1c now asserts closure
+with the surface layer exhausted every step.
 
 Measured relative residual: 9.2e-7 (BESSI densification), 8.8e-7 (HTESSEL), 6.9e-7 to 9.0e-7
 across all twelve scheme combinations.
@@ -657,7 +1055,8 @@ tightened without moving the layer mass arrays to `dp`.**
     a 30-day forcing file Chion.jl therefore stepped 30x smaller than chion
     *and* silently used the simple PDD form instead of PISM — every PDD field
     wrong by a factor ~30. Found in WP16; the fix is to read `ds[name][:]`, or
-    to convert the numeric axis using its `units` attribute.
+    to convert the numeric axis using its `units` attribute. **Fixed upstream** by
+    `9ec6cc7` (`_read_time_values` reads the decoded `ds[name][:]`).
 
 25. **(B) NetCDF output is written in Float32 while the model computes in
     Float64.** The output buffers in `io.jl` are `Matrix{Float32}` /
@@ -670,12 +1069,14 @@ tightened without moving the layer mass arrays to `dp`.**
 
 26. **(C) Output files carry no time coordinate variable** — only a bare `t`
     dimension. A Chion.jl output file cannot be interpreted on its own; the
-    reader has to already know the forcing that produced it. Found in WP16.
+    reader has to already know the forcing that produced it. Found in WP16. **Fixed
+    upstream** in `ecd4992` (`t` in days since 1970-01-01, proleptic Gregorian).
 
 1. **(A) Vapor-mass diagnostics are not mass-closed.**
    `_apply_snow_surface_vapor_mass_flux!` returns the *unclipped* `vapor_mass` while the mass
    it applies is clipped by `max(..., 0)`. When sublimation demand exceeds the surface layer,
    the cumulative `vapor_mass`/`sublimation` diagnostics overstate what was removed.
+   **Fixed upstream in `03bb445` (both branches); chion ported the fix in Stage C1.**
 2. **(A) `free_slot_for_surface_split` reads index 0** when the column has no active layers —
    `_get_layer(mass, _n_active(...), idx)` with no guard. chion raises an explicit error.
 3. **(A) `_htessel_thermal_metamorphism` is dead above ~150 kg m-3.**
@@ -698,10 +1099,14 @@ tightened without moving the layer mass arrays to `dp`.**
     `_update_surface_albedo_arrays!` sits inside `column_step_core!`, and the aging law
     carries no `dt` (trap 5). With `max_substeps = 8` the albedo ages eight times per day.
     Bounded by the `alpha_wet` floor, but it means enabling substepping silently changes the
-    albedo scheme, not merely the shortwave resolution. Found in WP8.
+    albedo scheme, not merely the shortwave resolution. Found in WP8. **Fixed upstream** in
+    dev_nils `6d077c5` (aging scaled by `dt_days`); chion: PLAN_dev_nils WP5.
 20. **(A) The bare-ice path uses `rainfall_rate` in the energy budget but discards its mass.**
     Extends defect 11: rain is a genuine mass leak on *any* bare column, not only on
-    massless-surface columns. Found in WP8.
+    massless-surface columns. Found in WP8. **Fixed upstream** in dev_nils `8fff530`
+    (double counts when `0 < mass(1) <= EPS_EMPTY_LAYER`); chion: D29. The ice-substrate
+    bare path of `03bb445` (`_step_bare_ice_substrate!`, `runoff += rain + melt`) has the
+    same double count; chion adds no rain there either (C3).
 
 ### B — latent
 
@@ -716,7 +1121,7 @@ tightened without moving the layer mass arrays to `dp`.**
     depletion request.
 11. **(B) Rain on a bare column is silently dropped.** `_apply_accumulation_resolved!` adds
     rain only when `mass[1] > 0` strictly and creates no layer for rain-only forcing, so the
-    routine is not mass-closed on its own.
+    routine is not mass-closed on its own. **Fixed** with defect 20 (see there).
 12. **(B) `_state_dict` divides `mass ./ density` with no guard** (diagnostics.jl:32), so a
     zero-density active layer yields `Inf` in `thickness` and `total_thickness`. The kernel
     path is guarded; only the snapshot path is exposed.
@@ -738,6 +1143,14 @@ tightened without moving the layer mass arrays to `dp`.**
     (`thickness`, `wet_mass`, `bulk_density`, `liquid_water`) that
     `_initialize_bessi_state_kernel!` does, so a deactivated column carries stale diagnostics
     into output. Preserved, not fixed.
+27. **(B) `_continuous_bottom_deplete!` (run by the depth cap) still sets `Tsrf = T(1)`**
+    (`layer_structure.jl`, `03bb445`), while every other path treats `Tsrf` as the Robin interface temperature
+    (vapour flux at `Tsrf`, melt and an emptied column set `T0`). On a column at the depth
+    cap the next step's linearization point is the top cell's centre, not the interface.
+    chion ports it as is (`snow_layers.f90:continuous_bottom_deplete`). Found in Stage C2.
+28. **(B) `_reset_bessi_columns_kernel!` does not reset `ice_temperature`** (`03bb445`), so a
+    re-activated column starts on the substrate temperature of its previous life. chion
+    resets it to `temperature_init` (D34). PLAN_dev_nils N8.
 
 ### C — doc and cosmetic
 
@@ -754,6 +1167,10 @@ tightened without moving the layer mass arrays to `dp`.**
     can only return `melted < melt_mass` when the column is empty.
 20b. **(C) PDD hard-codes `273.15` and `86400.0`** rather than using a constants struct, and
     uses a single `sigma` where smbpal uses three by surface type.
+21b. **(C) ITM rates labelled cumulative (`io.jl`).** `ITM_OUTPUT_VARS` `melt`, `runoff`,
+    `refreezing` are the step's rates [mmWE day-1] but take BESSI's `NETCDF_METADATA`
+    entries ("Cumulative melt", mmWE). Suggest ITM-specific entries ("ITM melt rate",
+    "mmWE day-1"), as chion writes (D42).
 
 The full PDD analysis, with quantified impacts and recommended fixes, is in
 `docs/pdd_defects.md` (12 Chion.jl defects, 1 smbpal defect).
