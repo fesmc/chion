@@ -76,6 +76,12 @@ module snow_layers
 
     private
 
+    ! Relative resolution of a wp layer value. The near-surface remesh leaves
+    ! no excess or deficit below it (D43): in sp, cap and fill leave a layer
+    ! within a few ulp of its limit, and the next remesh (two per substep)
+    ! would move that round-off back and forth. Below TOL_TINY in a dp build.
+    real(wp_acc), parameter :: REMESH_RESOLUTION = real(epsilon(1.0_wp),wp_acc)
+
     public :: reset_layer_at_index
     public :: split_layer
     public :: merge_layer
@@ -961,7 +967,8 @@ contains
         !
         ! Precision: the excess is taken against the capped mass AS STORED,
         ! so the pair (k, k+1) is conserved up to the one rounding of
-        ! mass(k+1) (identical to Julia when wp = dp).
+        ! mass(k+1) (identical to Julia when wp = dp). An excess within the
+        ! wp resolution of the cap (REMESH_RESOLUTION) is left in place (D43).
 
         implicit none
 
@@ -988,7 +995,7 @@ contains
             layer_mass = real(mass(k),wp_acc)
             max_mass   = real(density(k),wp_acc)*real(h_max(k),wp_acc)
 
-            if (layer_mass .le. max_mass) cycle
+            if (layer_mass - max_mass .le. REMESH_RESOLUTION*max_mass) cycle
 
             if (k .eq. n) then
                 if (k .eq. Ntot) exit
@@ -1037,6 +1044,8 @@ contains
         ! exits, but in sp it is a few ulp of h (~1e-9 m) and the loop would
         ! keep moving round-off. So the loop ends there instead; it continues
         ! only after a donor is exhausted (identical to Julia when wp = dp).
+        ! For the same reason a deficit within the wp resolution of h_target
+        ! (REMESH_RESOLUTION) is not refilled (D43).
 
         implicit none
 
@@ -1066,7 +1075,8 @@ contains
                 receiver_volume = receiver_mass/safe_positive(real(density(k),wp_acc))
                 missing_volume  = real(h_target(k),wp_acc) - receiver_volume
 
-                if (missing_volume .le. TOL_TINY) exit
+                if (missing_volume .le. max(TOL_TINY, &
+                                            REMESH_RESOLUTION*real(h_target(k),wp_acc))) exit
 
                 kd = k + 1
 

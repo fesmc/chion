@@ -921,6 +921,21 @@ cumulative `melt`/`runoff`/`refreezing` -> `*_cum`, `smb` [kg m-2 s-1] -> `smbi`
 The harness compares all 14 ITM fields by name. `diagnostics/compare_*.jl` read
 `runoff_cum` when present. Output only, not under `legacy_chion`.
 
+### D43. Near-surface remesh: no transfer below the wp resolution of the limit
+**What:** `cap_near_surface_layer_thicknesses` leaves an excess within `epsilon(1.0_wp)`
+of the cap mass `rho_k h_max(k)` in place, and `fill_near_surface_layer_thicknesses`
+does not refill a deficit within `epsilon(1.0_wp) h_target(k)` (`REMESH_RESOLUTION`;
+Julia: any excess, any deficit above EPS_TINY).
+**Why:** performance (PERF, GRL-16KM 1 thread: ~3 % of the run). In sp a capped or filled
+layer stores its mass and density rounded, so the next remesh (two per substep) finds it a
+few ulp over or under its limit and moved that round-off down and back up again, with the
+full cost of a transfer, on almost every fine layer of every substep. Same reasoning as the
+early end of the fill loop (sp deficit of a few ulp of h).
+**Impact:** round-off only: a fine layer may sit up to one wp ulp off its limit instead of
+being nudged by a sub-ulp transfer. In a dp build the fill threshold stays EPS_TINY (Julia's)
+and the cap tolerance is ~1e-14 kg m-2; the harness gate is unaffected. Not under
+`legacy_chion` (no physics).
+
 ---
 
 ## WP-wide build note
