@@ -16,6 +16,8 @@ against `9ec6cc7` in twelve BESSI configurations, PDD and ITM.
 
 ### Breaking
 
+- Time in double precision: the `time` arguments of `chion_write_init`, `chion_write_step`,
+  `chion_restart_write` and `chion_restart_read` are `real(dp)` (callers pass `real(dp)`).
 - Namelists (re-sync host copies of `input/chion_defaults.nml`):
   - `Ki` removed from `&chion_const` (Calonne conductivity); a par file that sets it is
     not read for it.

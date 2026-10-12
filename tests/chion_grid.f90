@@ -124,7 +124,8 @@ program chion_grid
     integer  :: clock0, clock1, clock_rate
 
     real(wp) :: year_length
-    real(wp) :: time, time_first, time_next_out, dt_use
+    real(dp) :: time, time_first, time_next_out
+    real(wp) :: dt_use
 
     real(wp), allocatable :: xc(:), yc(:), times(:)
     real(wp), allocatable :: mask2D(:,:), lat2D(:,:), zs2D(:,:)

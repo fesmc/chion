@@ -94,7 +94,7 @@ module chion_io
     use ncio
     use variable_io, only : var_io_type, load_var_io_table
 
-    use chion_defs, only : wp, wp_acc, MV, io_unit_err, &
+    use chion_defs, only : dp, wp, wp_acc, MV, io_unit_err, &
                            chion_grid_class, chion_check_file, &
                            chion_grid_set_active
 
@@ -146,7 +146,7 @@ contains
 
         type(chion_class),          intent(IN) :: chn
         character(len=*),           intent(IN) :: filename
-        real(wp),                   intent(IN) :: time_init
+        real(dp),                   intent(IN) :: time_init
         character(len=*), optional, intent(IN) :: units
 
         ! Local variables
@@ -192,7 +192,7 @@ contains
 
         ! --- Time, unlimited ------------------------------------------
 
-        call nc_write_dim(filename,"time",x=time_init,dx=1.0_wp,nx=1, &
+        call nc_write_dim(filename,"time",x=time_init,dx=1.0_dp,nx=1, &
                           units=trim(time_units),unlimited=.TRUE.)
 
         ! --- Static fields --------------------------------------------
@@ -239,7 +239,7 @@ contains
 
         type(chion_class), intent(IN) :: chn
         character(len=*),  intent(IN) :: filename
-        real(wp),          intent(IN) :: time
+        real(dp),          intent(IN) :: time
 
         ! Local variables
         integer :: q, n, ncid, ncol
@@ -682,7 +682,7 @@ contains
 
         type(chion_class), intent(IN) :: chn
         character(len=*),  intent(IN) :: filename
-        real(wp),          intent(IN) :: time
+        real(dp),          intent(IN) :: time
 
         ! Local variables
         integer :: ncid, i, ncol
@@ -702,7 +702,7 @@ contains
                 call nc_write_dim(filename,"ice_layer",x=1,dx=1,nx=chn%bsi%now%n_ice,units="1")
         end if
 
-        call nc_write_dim(filename,"time",x=time,dx=1.0_wp,nx=1,units="days",unlimited=.TRUE.)
+        call nc_write_dim(filename,"time",x=time,dx=1.0_dp,nx=1,units="days",unlimited=.TRUE.)
 
         ! The three facts chion_restart_read refuses to guess.
         call nc_write_attr(filename,"chion_model",trim(chn%par%model))
@@ -871,7 +871,7 @@ contains
 
         type(chion_class), intent(INOUT) :: chn
         character(len=*),  intent(IN)    :: filename
-        real(wp),          intent(OUT)   :: time
+        real(dp),          intent(OUT)   :: time
 
         ! Local variables
         integer :: ncid, i, ncol, nt

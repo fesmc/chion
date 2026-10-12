@@ -71,7 +71,8 @@ program chion_column
 
     ! --- &ctrl ------------------------------------------------------------
     integer  :: ncol
-    real(wp) :: time_init, time_end, dt, dt_out
+    real(dp) :: time_init, time_end
+    real(wp) :: dt, dt_out
     real(wp) :: latitude, surface_height, H_ice
     real(wp) :: t2m_mean, t2m_amplitude, t2m_phase
     real(wp) :: pr_mean, t_snow_max
@@ -88,8 +89,9 @@ program chion_column
     real(wp), parameter :: PI          = 3.14159265358979323846_wp
 
     integer  :: k, nstep, n_out, n_year
-    real(wp) :: time, doy, t_air, sw_dn, precip, pdds_annual
-    real(wp) :: time_next_out
+    real(dp) :: time
+    real(wp) :: doy, t_air, sw_dn, precip, pdds_annual
+    real(dp) :: time_next_out
 
     real(wp), allocatable :: smb(:)
     real(wp), allocatable :: thickness(:), wet_mass(:), bulk_density(:), liquid_water(:)
@@ -318,7 +320,7 @@ contains
 
         implicit none
 
-        real(wp), intent(IN) :: t
+        real(dp), intent(IN) :: t
         real(wp) :: doy
 
         doy = modulo(t,YEAR_LENGTH) + 1.0_wp

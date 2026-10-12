@@ -138,7 +138,7 @@ contains
 
         ! Local variables
         type(chion_class) :: chn1, chn2
-        real(wp) :: time_rst
+        real(dp) :: time_rst
         real(wp) :: smb1(NCOL_TEST), smb2(NCOL_TEST)
         integer  :: k, n1
 
@@ -185,14 +185,14 @@ contains
 
         call chion_get_smb(chn1,smb1)
 
-        call chion_restart_write(chn1,file_rst,real(n1,wp)*DT_TEST)
+        call chion_restart_write(chn1,file_rst,real(n1,dp)*DT_TEST)
 
         ! --- Fresh object, restart read -------------------------------
         call chion_init(chn2,par_a,NCOL_TEST)
         call chion_init_state(chn2)
         call chion_restart_read(chn2,file_rst,time_rst)
 
-        call check_val("restart time recovered",time_rst,real(n1,wp)*DT_TEST,nfail)
+        call check_val("restart time recovered",real(time_rst,wp),real(n1,wp)*DT_TEST,nfail)
         call check("dt_last recovered exactly",chn2%dt_last .eq. chn1%dt_last,nfail)
         call check_eq_acc("smb_cum_prev",chn2%smb_cum_prev,chn1%smb_cum_prev,nfail)
         call check("active mask recovered", &
@@ -323,7 +323,7 @@ contains
 
         ! Local variables
         type(chion_class) :: chn1, chn2
-        real(wp) :: time_rst
+        real(dp) :: time_rst
         integer  :: k, i
         logical  :: ok
 
@@ -337,7 +337,7 @@ contains
             call set_forcing(chn1,k)
             call chion_update(chn1,DT_TEST)
         end do
-        call chion_restart_write(chn1,file_rst,real(NSTEP_1,wp)*DT_TEST)
+        call chion_restart_write(chn1,file_rst,real(NSTEP_1,dp)*DT_TEST)
 
         call write_par(par_b,"bessi",n_ice=5)
         call chion_init(chn2,par_b,NCOL_TEST)
@@ -404,7 +404,7 @@ contains
 
         ! Local variables
         type(chion_class) :: chn
-        real(wp) :: time_rst
+        real(dp) :: time_rst
         integer  :: k
 
         if (trim(kind) .eq. "ice") then
@@ -419,7 +419,7 @@ contains
             call set_forcing(chn,k)
             call chion_update(chn,DT_TEST)
         end do
-        call chion_restart_write(chn,file_rst,3.0_wp)
+        call chion_restart_write(chn,file_rst,3.0_dp)
         call chion_end(chn)
 
         select case(trim(kind))
@@ -507,13 +507,13 @@ contains
         call chion_init(chn,par_a,NCOL_TEST)
         call chion_init_state(chn)
 
-        call chion_write_init(chn,file_out,0.0_wp,"days")
-        call chion_write_step(chn,file_out,0.0_wp)
+        call chion_write_init(chn,file_out,0.0_dp,"days")
+        call chion_write_step(chn,file_out,0.0_dp)
 
         do k = 1, 3
             call set_forcing(chn,k)
             call chion_update(chn,DT_TEST)
-            call chion_write_step(chn,file_out,real(k,wp)*DT_TEST)
+            call chion_write_step(chn,file_out,real(k,dp)*DT_TEST)
         end do
 
         ! --- Dimensions ----------------------------------------------
@@ -754,8 +754,8 @@ contains
             call chion_update(chn,DT_TEST)
         end do
 
-        call chion_write_init(chn,file_grid,0.0_wp,"days")
-        call chion_write_step(chn,file_grid,0.0_wp)
+        call chion_write_init(chn,file_grid,0.0_dp,"days")
+        call chion_write_step(chn,file_grid,0.0_dp)
 
         call check_int("grid dim xc",nc_size(file_grid,"xc"),nx,nfail)
         call check_int("grid dim yc",nc_size(file_grid,"yc"),ny,nfail)
