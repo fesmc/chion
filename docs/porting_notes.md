@@ -509,26 +509,28 @@ is the failure mode worth preventing.
   contrast. The flat "4 ulp" bound that stood there was passing at 3.3 ulp — on luck, not on
   a stated error path.
 
-### D27. ITM's per-step `tsrf` scales `melt_net` to an annual rate
-**What:** `itm_step` passes `melt_net*ITM_FIRN_DAYS_YEAR` to `calc_temp_surf`, with
-`ITM_FIRN_DAYS_YEAR = sec_year_360d/sec_day` (`chion_defs`, from fesm-utils `phys_constants`).
-`firn_fac` is now documented as `[K (mm w.e. yr-1)-1]`. Reverted under `legacy_chion=1`
-(`ITM_FIRN_DAYS_YEAR = 1`).
+### D27. The firn correction of `tsrf` on annual means (ITM, PDD)
+**What:** `itm_step`'s per-step `tsrf` is the air temperature capped at freezing over ice,
+without smbpal's firn term; so is PDD's per-step `t_srf` (`pdd_surface_temperature`).
+`chion_tsrf_annual(chn, t_air_ann, refrz_ann, tsrf)` applies smbpal's `calc_temp_surf` to
+annual means: over ice `min(T0, t_air_ann + firn_fac*max(refrz_ann, 0))`, the annual-mean air
+temperature warmed by the annual refreezing `[mm w.e. yr-1]`, with the model's `firn_fac`
+(`&itm`, `&pdd`) `[K (mm w.e. yr-1)-1]`. The host aggregates the year. Reverted under
+`legacy_chion=1` (`ITM_FIRN_PER_STEP`): ITM applies `firn_fac` per step to the daily
+`melt_net`, as Chion.jl's `ITMModel` does.
 
-**Why:** smbpal applies `calc_temp_surf` once per year to the annual net melt in
-`[mm w.e. yr-1]` (360-day year), and `firn_fac` is calibrated against that. chion applied it
-per step to the daily rate `[mm w.e. d-1]`, so the firn warming was ~360x too small. The year
-length is a property of the calibration, not of the host's calendar, hence the named 360-day
-convention rather than a parameter.
+**Why:** smbpal applies `calc_temp_surf` once per year to annual means, and `firn_fac` is
+calibrated on that scale. The correction is only valid at the annual mean: per step,
+`max(0,.)` and the `min(T0,.)` cap act on the step values, and the per-step net melt
+`refrz - melt` is almost never positive (refreezing cannot exceed the step's melt), so a
+per-step firn term is effectively off. An earlier version scaled the daily `melt_net` to a
+360-day annual rate per step, which kept this inconsistency. The firn is warmed by the
+refreezing (smbpal's PDD path, `melt_net = refrz`), for ITM and PDD alike.
 
-**Impact:** firn warming on refreezing columns is restored to smbpal's magnitude. `tsrf`
-remains a per-step value: `max(0,.)` and the `min(T0,.)` cap act per step, so its annual mean
-still differs from smbpal's annual-mean `tsrf` where either is active. `test_itm`'s reference
-scales the same way; `tsrf` stays bit-identical.
-
-Chion.jl's `ITMModel` (`29eb867`, ported from chion before this fix) applies `firn_fac` to the
-daily rate, so its firn warming is ~360x too small (reported upstream, PLAN_dev_nils §1c.3). The
-`legacy_chion` revert lets validation/ gate all ITM fields, `tsrf` included, against it.
+**Impact:** chion's per-step ITM `tsrf` loses its firn term (in practice almost always zero).
+A host coupling ITM or PDD to an ice sheet takes `chion_tsrf_annual`, which warms the
+percolation zone by `firn_fac` per mm w.e. yr-1 of refreezing (0.0266 K: 8 K at 300). BESSI
+is unchanged (its energy balance's surface temperature).
 
 ### D28. Shared physical constants come from fesm-utils `phys_const_class`
 **What:** `chion_init(chn,filename,ncol,group,cnst)` takes an optional

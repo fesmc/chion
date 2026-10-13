@@ -28,7 +28,7 @@ module snow_pdd
     ! CALLING CONVENTION follows docs/porting_notes.md D8: the column kernel
     ! takes the four state scalars for one column, not (array, index).
 
-    use chion_defs, only : wp, wp_acc, io_unit_err, &
+    use chion_defs, only : wp, wp_acc, io_unit_err, MV, &
                            chion_const_class, chion_forcing_class, &
                            chion_step_forcing_class
     use phys_constants, only : sec_day
@@ -72,6 +72,10 @@ module snow_pdd
         real(wp) :: H_snow_max           ! [kg m-2] snowpack cap; excess -> ice
 
         integer  :: pdd_method           ! CHION_PDD_SIMPLE | CHION_PDD_CG05
+
+        ! Not in Chion.jl: the firn warming of the annual surface temperature
+        ! (chion_tsrf_annual), smbpal's firn_fac, as ITM's.
+        real(wp) :: firn_fac             ! [K (mm w.e. yr-1)-1] firn warming per annual refreezing
     end type pdd_par_class
 
     ! === State ===============================================================
@@ -98,6 +102,7 @@ module snow_pdd
         real(wp_acc), allocatable :: pdd_sum(:)        ! [K d]    cumulative
         real(wp_acc), allocatable :: melt(:)           ! [kg m-2] cumulative snow + ice melt
         real(wp_acc), allocatable :: refreezing(:)     ! [kg m-2] cumulative refreezing
+        real(wp),     allocatable :: t_srf(:)          ! [K] surface temperature of the last step (MV before)
     end type pdd_state_class
 
     type pdd_class
@@ -126,6 +131,7 @@ module snow_pdd
     public :: pdd_column_apply
     public :: pdd_column_step
     public :: pdd_step
+    public :: pdd_surface_temperature
 
 contains
 
@@ -153,6 +159,9 @@ contains
         ! Default reproduces Chion.jl for sub-monthly forcing, which is the
         ! only regime Chion.jl's daily path exercises.
         par%pdd_method          = CHION_PDD_SIMPLE
+
+        ! smbpal's firn_fac (as ITM's).
+        par%firn_fac            = 0.0266_wp
 
         call pdd_par_validate(par)
 
@@ -195,6 +204,12 @@ contains
         if (par%H_snow_max .le. 0.0_wp) then
             write(io_unit_err,*) "pdd_par_validate:: Error: H_snow_max must be positive."
             write(io_unit_err,*) "H_snow_max = ", par%H_snow_max
+            stop "Program stopped."
+        end if
+
+        if (par%firn_fac .lt. 0.0_wp) then
+            write(io_unit_err,*) "pdd_par_validate:: Error: firn_fac must be non-negative."
+            write(io_unit_err,*) "firn_fac = ", par%firn_fac
             stop "Program stopped."
         end if
 
@@ -262,6 +277,7 @@ contains
         allocate(pdd%now%pdd_sum(ncol))
         allocate(pdd%now%melt(ncol))
         allocate(pdd%now%refreezing(ncol))
+        allocate(pdd%now%t_srf(ncol))
 
         call pdd_init_state(pdd)
 
@@ -281,6 +297,7 @@ contains
         if (allocated(pdd%now%pdd_sum))      deallocate(pdd%now%pdd_sum)
         if (allocated(pdd%now%melt))         deallocate(pdd%now%melt)
         if (allocated(pdd%now%refreezing))   deallocate(pdd%now%refreezing)
+        if (allocated(pdd%now%t_srf))        deallocate(pdd%now%t_srf)
 
         pdd%now%ncol = 0
 
@@ -303,6 +320,7 @@ contains
         pdd%now%pdd_sum      = 0.0_wp_acc
         pdd%now%melt         = 0.0_wp_acc
         pdd%now%refreezing   = 0.0_wp_acc
+        pdd%now%t_srf        = MV
 
         return
 
@@ -323,6 +341,7 @@ contains
         pdd%now%pdd_sum(icol)      = 0.0_wp_acc
         pdd%now%melt(icol)         = 0.0_wp_acc
         pdd%now%refreezing(icol)   = 0.0_wp_acc
+        pdd%now%t_srf(icol)        = MV
 
         return
 
@@ -713,6 +732,8 @@ contains
 
             pdd%now%melt(icol)       = pdd%now%melt(icol)       + snow_melt + ice_melt
             pdd%now%refreezing(icol) = pdd%now%refreezing(icol) + refrozen
+            pdd%now%t_srf(icol)      = pdd_surface_temperature(forc%air_temperature(icol), &
+                                                               forc%H_ice(icol),c)
 
         end do
         !$omp end parallel do
@@ -720,5 +741,25 @@ contains
         return
 
     end subroutine pdd_step
+
+    elemental function pdd_surface_temperature(air_temperature,H_ice,c) result(t_srf)
+        ! Surface temperature of a step. PDD has no energy balance: the air
+        ! temperature, capped at freezing over ice. The firn warming of
+        ! smbpal's calc_temp_surf is calibrated on annual means and is applied
+        ! there (chion_tsrf_annual), not per step.
+
+        implicit none
+
+        real(wp),                intent(IN) :: air_temperature   ! [K]
+        real(wp),                intent(IN) :: H_ice             ! [m]
+        type(chion_const_class), intent(IN) :: c
+        real(wp) :: t_srf                                        ! [K]
+
+        t_srf = air_temperature
+        if (H_ice .gt. 0.0_wp) t_srf = min(c%T0,air_temperature)
+
+        return
+
+    end function pdd_surface_temperature
 
 end module snow_pdd

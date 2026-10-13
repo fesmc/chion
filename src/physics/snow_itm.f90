@@ -59,7 +59,7 @@ module snow_itm
     ! remains in smbpal's units and is directly comparable.
 
     use chion_defs, only : wp, wp_acc, io_unit_err, chion_step_forcing_class, &
-                           chion_const_class, ITM_FIRN_DAYS_YEAR
+                           chion_const_class, ITM_FIRN_PER_STEP
     use nml,        only : nml_read
     use phys_constants, only : sec_day
 
@@ -114,8 +114,9 @@ module snow_itm
 
         ! DEVIATION: firn_fac lives in smbpal_param_class, not itm_par_class,
         ! because smbpal applies calc_temp_surf once per year outside the ITM
-        ! module (smbpal.f90:457). chion computes tsrf inside itm_step, so
-        ! the parameter has to travel with the ITM parameters.
+        ! module (smbpal.f90:457). chion applies it to annual means too
+        ! (chion_tsrf_annual), with the model's parameters, so it travels
+        ! with the ITM parameters (per step only under legacy_chion, D27).
         real(wp) :: firn_fac              ! [K (mm w.e. yr-1)-1] firn warming per annual net refreezing
     end type itm_par_class
 
@@ -549,17 +550,17 @@ contains
         itm%now%refrz(icol)    = refrz
         itm%now%melt_net(icol) = melt_net
 
-        ! Surface temperature. smbpal applies calc_temp_surf once per year to
-        ! the ANNUAL MEAN t2m and melt_net (smbpal.f90:457); chion applies it
-        ! per step to the step values. firn_fac is calibrated against smbpal's
-        ! annual net melt [mm w.e. yr-1] on its 360-day year, so the step rate
-        ! [mm w.e. d-1] is scaled to that annual rate first (ITM_FIRN_DAYS_YEAR,
-        ! chion_defs; 1 under legacy_chion, as in Chion.jl -- D27).
-        ! Even so the two agree only where neither max(0,.) nor the min(T0,.)
-        ! cap is active: both are nonlinear, so a per-step mean is not the same
-        ! as a function of the means. Recorded as a deviation; the host can
-        ! recover smbpal's exact behaviour by averaging tsrf's inputs itself.
-        itm%now%tsrf(icol) = calc_temp_surf(cn,t2m,H_ice,melt_net*ITM_FIRN_DAYS_YEAR,itm%par%firn_fac)
+        ! Surface temperature of the step: the air temperature, capped at
+        ! freezing over ice. The firn correction (firn_fac) is calibrated on
+        ! annual means, as smbpal applies calc_temp_surf once per year
+        ! (smbpal.f90:457), so it is not applied per step: chion_tsrf_annual
+        ! applies it to the annual means (D27). Under legacy_chion it is
+        ! applied per step to the daily melt_net, as Chion.jl's ITMModel does.
+        if (ITM_FIRN_PER_STEP) then
+            itm%now%tsrf(icol) = calc_temp_surf(cn,t2m,H_ice,melt_net,itm%par%firn_fac)
+        else
+            itm%now%tsrf(icol) = calc_temp_surf(cn,t2m,H_ice,0.0_wp,itm%par%firn_fac)
+        end if
 
         ! Cumulative accumulators, in wp_acc. Rates x dt, so these are the
         ! integrated quantities in [mm w.e.].
@@ -749,7 +750,7 @@ contains
         type(chion_const_class), intent(IN) :: cn
         real(wp), intent(IN) :: tann      ! [K] air temperature
         real(wp), intent(IN) :: H_ice     ! [m]
-        real(wp), intent(IN) :: melt_net  ! [mm w.e. yr-1] refrz - melt, as an annual rate
+        real(wp), intent(IN) :: melt_net  ! [mm w.e. yr-1] refrz - melt, as an annual rate (legacy: daily)
         real(wp), intent(IN) :: fac       ! [K (mm w.e. yr-1)-1]
         real(wp) :: ts                    ! [K]
 

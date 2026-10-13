@@ -27,7 +27,7 @@ program test_itm
 
     use chion_defs, only : wp, wp_acc, chion_step_forcing_class, &
                           chion_const_class, chion_const_init, &
-                          ITM_FIRN_DAYS_YEAR, CHION_LEGACY_MODE
+                          ITM_FIRN_PER_STEP, CHION_LEGACY_MODE
     use snow_itm
 
     implicit none
@@ -173,10 +173,12 @@ program test_itm
                                                S,t2m,PDDs(i),sf_mmd+rf_mmd,sf_mmd,   &
                                                r_H_snow(i),r_alb_s,r_smbi,r_smb,     &
                                                r_melt,r_runoff,r_refrz,r_melt_net)
-            ! smbpal's calc_temp_surf takes the annual net melt [mm w.e. yr-1]
-            ! on a 360-day year; scale the daily step rate the same way
-            ! (ITM_FIRN_DAYS_YEAR, checked below to be 360; 1 under legacy_chion).
-            r_tsrf = ref_calc_temp_surf(cn,t2m,H_ice(i),r_melt_net*ITM_FIRN_DAYS_YEAR,itm%par%firn_fac)
+            ! Per step, tsrf is the capped air temperature: the firn
+            ! correction is applied to annual means (chion_tsrf_annual). Under
+            ! legacy_chion it is applied per step to the daily melt_net, as
+            ! Chion.jl does (ITM_FIRN_PER_STEP, checked below).
+            r_tsrf = ref_calc_temp_surf(cn,t2m,H_ice(i), &
+                                        merge(r_melt_net,0.0_wp,ITM_FIRN_PER_STEP),itm%par%firn_fac)
 
             call track(1,itm%now%H_snow(i),  r_H_snow(i))
             call track(2,itm%now%alb_s(i),   r_alb_s)
@@ -263,11 +265,11 @@ program test_itm
     call check("tsrf is bit-identical (no ITM arithmetic enters it)", &
                dmax(9) .eq. 0.0_wp_acc, nfail)
     if (CHION_LEGACY_MODE) then
-        call check("legacy_chion: tsrf uses the daily melt_net, as Chion.jl (D27)", &
-                   ITM_FIRN_DAYS_YEAR .eq. 1.0_wp, nfail)
+        call check("legacy_chion: tsrf uses the daily melt_net per step, as Chion.jl (D27)", &
+                   ITM_FIRN_PER_STEP, nfail)
     else
-        call check("tsrf scales melt_net to smbpal's 360-day year (D27)", &
-                   ITM_FIRN_DAYS_YEAR .eq. 360.0_wp, nfail)
+        call check("tsrf has no per-step firn correction (annual: chion_tsrf_annual, D27)", &
+                   .not. ITM_FIRN_PER_STEP, nfail)
     end if
 
     ! === Physical invariants ============================================

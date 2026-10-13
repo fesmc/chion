@@ -16,6 +16,12 @@ against `9ec6cc7` in twelve BESSI configurations, PDD and ITM.
 
 ### Breaking
 
+- Surface temperature with smbpal's firn correction on annual means (D27): new
+  `chion_tsrf_annual(chn, t_air_ann, refrz_ann, tsrf)` for ITM and PDD,
+  `min(T0, t_air_ann + firn_fac*refrz_ann)` over ice. ITM's per-step `tsrf` has no firn term
+  any more (per step on the daily `melt_net` only under `legacy_chion`, `ITM_FIRN_PER_STEP`
+  replaces `ITM_FIRN_DAYS_YEAR`); PDD has a per-step `t_srf` (air temperature capped at
+  freezing over ice, in `chion_get_surface`) and `&pdd firn_fac` (default 0.0266).
 - PDD reports melt (snow + ice) and refreezing: cumulative `melt`, `refreezing` in its state,
   output and restart, and in `chion_get_surface_flux_totals` / `chion_get_surface_fluxes`
   (were MV). PDD restart files without them can no longer be read.

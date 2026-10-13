@@ -187,6 +187,7 @@ module chion_api
     public :: chion_get_surface
     public :: chion_get_surface_fluxes
     public :: chion_get_surface_flux_totals
+    public :: chion_tsrf_annual
     public :: chion_print_summary
 
     ! Parameter loading, exposed so a host or a test can load a group without
@@ -696,9 +697,11 @@ contains
         ! output may be omitted; the work is parallel over active columns.
         !
         ! Inactive columns, and every column when the model exposes no such
-        ! field (PDD), return MV. A caller must treat MV as "not supplied" and
-        ! fall back to its own value -- the same contract PDD already imposes
-        ! on the melt physics it does not resolve.
+        ! field (PDD's albedo), return MV. A caller must treat MV as "not
+        ! supplied" and fall back to its own value. PDD's t_srf is the step's
+        ! air temperature capped at freezing over ice. The annual surface
+        ! temperature of ITM and PDD, with smbpal's firn warming, is
+        ! chion_tsrf_annual's.
         ! ===================================================================
 
         implicit none
@@ -768,8 +771,7 @@ contains
         !
         ! Differenced against the one-step-behind snapshot flux_cum_prev, the
         ! same way and for the same reason as chion_get_smb. A field the model
-        ! does not resolve (e.g. sublimation under ITM, everything but runoff
-        ! under PDD) is MV, as is every inactive column and every column before
+        ! does not resolve (e.g. sublimation under ITM and PDD) is MV, as is every inactive column and every column before
         ! the first chion_update. Optional arguments: request only what is
         ! needed.
         ! ===================================================================
@@ -877,6 +879,61 @@ contains
         return
 
     end subroutine chion_get_surface_flux_totals
+
+    subroutine chion_tsrf_annual(chn,t_air_ann,refrz_ann,tsrf)
+        ! Annual surface temperature of ITM and PDD, smbpal's calc_temp_surf
+        ! (smbpal.f90:644-661) on ANNUAL means, the scale firn_fac is
+        ! calibrated on: over ice (forc%H_ice > 0) the annual-mean air
+        ! temperature warmed by the annual refreezing, capped at freezing,
+        !     tsrf = min(T0, t_air_ann + firn_fac*max(refrz_ann,0)),
+        ! elsewhere t_air_ann. firn_fac is the model's (&itm or &pdd). The
+        ! host aggregates the year (refrz_ann from the difference of
+        ! chion_get_surface_flux_totals over it). MV in either input gives MV.
+        ! Not defined for BESSI, whose surface temperature is its energy
+        ! balance's (chion_get_surface).
+
+        implicit none
+
+        type(chion_class), intent(IN)  :: chn
+        real(wp),          intent(IN)  :: t_air_ann(:)   ! (ncol) [K] annual-mean air temperature
+        real(wp),          intent(IN)  :: refrz_ann(:)   ! (ncol) [mm w.e. yr-1] annual refreezing
+        real(wp),          intent(OUT) :: tsrf(:)        ! (ncol) [K]
+
+        ! Local variables
+        integer  :: icol
+        real(wp) :: firn_fac
+
+        select case(trim(chn%par%model))
+            case("itm")
+                firn_fac = chn%itm%par%firn_fac
+            case("pdd")
+                firn_fac = chn%pdd%par%firn_fac
+            case DEFAULT
+                write(io_unit_err,*) "chion_tsrf_annual:: Error: defined for itm and pdd, not ", &
+                                     trim(chn%par%model)
+                stop "Program stopped."
+        end select
+
+        if (size(t_air_ann) .ne. chn%grd%ncol .or. size(refrz_ann) .ne. chn%grd%ncol .or. &
+            size(tsrf) .ne. chn%grd%ncol) then
+            write(io_unit_err,*) "chion_tsrf_annual:: Error: arrays must have ncol entries."
+            write(io_unit_err,*) "ncol, sizes = ", chn%grd%ncol, size(t_air_ann), size(refrz_ann), size(tsrf)
+            stop "Program stopped."
+        end if
+
+        do icol = 1, chn%grd%ncol
+            if (t_air_ann(icol) .eq. MV .or. refrz_ann(icol) .eq. MV) then
+                tsrf(icol) = MV
+            else if (chn%forc%H_ice(icol) .gt. 0.0_wp) then
+                tsrf(icol) = min(chn%c%T0, t_air_ann(icol) + firn_fac*max(refrz_ann(icol),0.0_wp))
+            else
+                tsrf(icol) = t_air_ann(icol)
+            end if
+        end do
+
+        return
+
+    end subroutine chion_tsrf_annual
 
     subroutine check_total_arg(name,arr,ncol)
         ! Length guard for the optional chion_get_surface_flux_totals outputs.
@@ -1271,6 +1328,7 @@ contains
         call nml_read(filename,group,"temperature_sigma",  par%temperature_sigma,  init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
         call nml_read(filename,group,"H_snow_max",         par%H_snow_max,         init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
         call nml_read(filename,group,"pdd_method",         pdd_method,             init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
+        call nml_read(filename,group,"firn_fac",           par%firn_fac,           init=init_pars,defaults_file=def_file,defaults_group=def_pdd)
 
         call chion_check_enum(group,"pdd_method",pdd_method,CHION_PDD_CHOICES)
         par%pdd_method = pdd_method_flag(pdd_method)

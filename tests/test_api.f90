@@ -76,6 +76,7 @@ program test_api
     call test_active_mask(nfail)
     call test_get_smb(nfail)
     call test_flux_totals(nfail)
+    call test_tsrf_annual(nfail)
 
     ! The scratch parameter file is written into the working directory, so
     ! remove it rather than leaving it in a git status.
@@ -265,6 +266,7 @@ contains
                        ppar%temperature_sigma, 5.0_wp, nfail)
         call check("pdd: pdd_method overridden to cg05", &
                    ppar%pdd_method .eq. CHION_PDD_CG05, nfail)
+        call check_val("pdd: firn_fac from defaults", ppar%firn_fac, 0.0266_wp, nfail)
 
         ! The schema default is "simple", Chion.jl's PDDModel default, so a
         ! namelist without pdd_method runs the physics validation/ gates.
@@ -924,6 +926,58 @@ contains
         return
 
     end subroutine test_get_smb
+
+    subroutine test_tsrf_annual(nfail)
+        ! chion_tsrf_annual (ITM, PDD): smbpal's calc_temp_surf on annual
+        ! means. Ice column: the annual-mean air temperature warmed by
+        ! firn_fac times the annual refreezing, capped at freezing; land
+        ! column: the air temperature; MV input: MV.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_class) :: chn
+        integer  :: im
+        real(wp) :: t_air(4), refrz(4), tsrf(4), fac, T0
+        character(len=8) :: models(2)
+
+        write(*,"(a)") "--- 9. chion_tsrf_annual ---"
+
+        models(1) = "pdd"
+        models(2) = "itm"
+
+        do im = 1, 2
+
+            call write_model_par(PAR_TMP,trim(models(im)))
+            call chion_init(chn,PAR_TMP,4)
+            call chion_init_state(chn)
+
+            fac = 0.0266_wp
+            T0  = chn%c%T0
+
+            ! Columns: ice with refreezing (below the cap), ice capped at T0,
+            ! land, ice with MV refreezing.
+            chn%forc%H_ice = [1000.0_wp, 1000.0_wp, 0.0_wp, 1000.0_wp]
+            t_air = [T0 - 20.0_wp, T0 - 1.0_wp, T0 + 5.0_wp, T0 - 10.0_wp]
+            refrz = [300.0_wp, 300.0_wp, 300.0_wp, MV]
+
+            call chion_tsrf_annual(chn,t_air,refrz,tsrf)
+
+            call check(trim(models(im))//": ice: t_air + firn_fac*refrz", &
+                       abs(tsrf(1) - (t_air(1) + fac*refrz(1))) .le. 1e-4_wp, nfail)
+            call check(trim(models(im))//": ice: capped at T0", tsrf(2) .eq. T0, nfail)
+            call check(trim(models(im))//": land: t_air", tsrf(3) .eq. t_air(3), nfail)
+            call check(trim(models(im))//": MV input: MV", tsrf(4) .eq. MV, nfail)
+
+            call chion_end(chn)
+
+        end do
+
+        return
+
+    end subroutine test_tsrf_annual
 
     subroutine test_flux_totals(nfail)
         ! chion_get_surface_flux_totals must be the running total of what

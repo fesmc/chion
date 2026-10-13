@@ -76,7 +76,7 @@ module chion_model
                            bessi_column_step
     use snow_pdd,   only : pdd_class, pdd_alloc, pdd_dealloc, &
                            pdd_init_state, pdd_reset_column, &
-                           pdd_column_step
+                           pdd_column_step, pdd_surface_temperature
     use snow_itm,   only : itm_class, itm_alloc, itm_dealloc, &
                            itm_init_state, itm_step
     use snow_diurnal, only : solar_declination_class, solar_declination
@@ -430,6 +430,7 @@ contains
                                          refrozen_out=refrozen)
                     pdd%now%melt(icol)       = pdd%now%melt(icol)       + snow_melt + ice_melt
                     pdd%now%refreezing(icol) = pdd%now%refreezing(icol) + refrozen
+                    pdd%now%t_srf(icol)      = pdd_surface_temperature(fc%air_temperature,fc%H_ice,c)
                 end do
                 !$omp end parallel do
 
@@ -675,10 +676,9 @@ contains
         ! BESSI -- t_srf, albedo used unchanged (bsi%now%t_srf / %albedo).
         ! ITM   -- tsrf, alb_s used unchanged (itm%now%tsrf / %alb_s).
         ! PDD   -- a bulk degree-day model with no surface energy balance and no
-        !          albedo (see snow_pdd.f90 header). It has neither field, so
-        !          both are returned as MV: a host coupling to PDD must supply
-        !          its own surface albedo / temperature, exactly as it already
-        !          supplies the melt physics PDD lacks.
+        !          albedo (see snow_pdd.f90 header): t_srf is the step's air
+        !          temperature capped at freezing over ice (pdd%now%t_srf);
+        !          albedo is MV, a host coupling to PDD supplies its own.
 
         implicit none
 
@@ -702,7 +702,8 @@ contains
                 albedo = itm%now%alb_s
 
             case("pdd")
-                t_srf  = MV
+                if (size(t_srf) .ne. pdd%now%ncol) call chion_size_error(size(t_srf),pdd%now%ncol)
+                t_srf  = pdd%now%t_srf
                 albedo = MV
 
             case DEFAULT
@@ -718,7 +719,7 @@ contains
         ! chion_model_surface for the ACTIVE columns only, parallel over
         ! columns, writing straight into the caller's (ncol) arrays; other
         ! columns are left untouched. Either output may be omitted. PDD
-        ! resolves neither field and writes MV.
+        ! resolves no albedo and writes MV for it.
 
         implicit none
 
@@ -756,7 +757,7 @@ contains
                 !$omp parallel do default(shared) private(i,icol)
                 do i = 1, grd%n_active
                     icol = grd%active_idx(i)
-                    if (present(t_srf))  t_srf(icol)  = MV
+                    if (present(t_srf))  t_srf(icol)  = pdd%now%t_srf(icol)
                     if (present(albedo)) albedo(icol) = MV
                 end do
                 !$omp end parallel do
