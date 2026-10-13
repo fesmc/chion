@@ -376,7 +376,7 @@
     refreezing_fraction = 0.6               ! [1] Fraction of SNOW melt that refreezes
     temperature_sigma   = 5.0               ! [K] Std dev of unresolved temperature variability
     H_snow_max          = 5000.0            ! [kg m-2] Snowpack cap; the excess is converted to ice
-    pdd_method          = "simple"          ! PDD integral: "simple" | "pism"
+    pdd_method          = "simple"          ! PDD integral: "simple" | "cg05"
 /
 
 ! Notes on &pdd
@@ -385,13 +385,13 @@
 !   "simple"  max(T-T0,0)*dt. Ignores sub-step temperature variability
 !             entirely, so it produces no melt at all below freezing.
 !             Appropriate when dt resolves the temperature cycle (daily).
-!   "pism"    the Calov–Greve expectation integral
+!   "cg05"    the Calov and Greve (2005) expectation integral (Chion.jl's :pism)
 !             dt*(sigma*phi(z) + Tbar*Phi(z)), z = Tbar/sigma.
 !             Use it for monthly steps, or wherever sub-step variability
 !             matters: at daily dt the simple form loses 1.25 kg m-2 d-1
 !             of melt at -5 C and 5.98 at 0 C, concentrated at the
 !             equilibrium line. smbpal always uses the integral, so a host
-!             replacing smbpal sets pdd_method = "pism" explicitly.
+!             replacing smbpal sets pdd_method = "cg05" explicitly.
 !
 !   The choice is explicit in both models; Chion.jl formerly selected it
 !   implicitly from the timestep length (docs/pdd_defects.md D4).

@@ -5,7 +5,7 @@ program test_pdd
     !   1. mass-balance closure to 1e-10 (all terms wp_acc, so a dp check),
     !      including an explicit regression guard on defect D2 -- the reason
     !      the three-reservoir identity does NOT close.
-    !   2. the PISM / Calov-Greve expectation integral against its three limits
+    !   2. the CG05 (Calov and Greve, 2005) expectation integral against its three limits
     !      and against the Abramowitz-Stegun polynomial it replaces.
     !   3. snowpack_swe never goes negative under extreme melt.
     !   4. ice melt occurs only once the snow reservoir is exhausted within a
@@ -37,7 +37,7 @@ program test_pdd
     write(*,*)
 
     call test_parameters(par,nfail)
-    call test_pism_limits(par,c,nfail)
+    call test_cg05_limits(par,c,nfail)
     call test_normal_cdf(nfail)
     call test_mass_balance(par,c,nfail)
     call test_no_negative_snowpack(par,c,nfail)
@@ -79,8 +79,8 @@ contains
 
         call check("pdd_method_flag('simple')", &
                    pdd_method_flag("simple") .eq. CHION_PDD_SIMPLE, nfail)
-        call check("pdd_method_flag('pism')", &
-                   pdd_method_flag("pism") .eq. CHION_PDD_PISM, nfail)
+        call check("pdd_method_flag('cg05')", &
+                   pdd_method_flag("cg05") .eq. CHION_PDD_CG05, nfail)
 
         return
 
@@ -88,7 +88,7 @@ contains
 
     ! =====================================================================
 
-    subroutine test_pism_limits(par,c,nfail)
+    subroutine test_cg05_limits(par,c,nfail)
         ! The three limits of E[T+] = sigma*phi(z) + Tbar*Phi(z).
 
         implicit none
@@ -104,7 +104,7 @@ contains
         real(wp)     :: dt
 
         write(*,*)
-        write(*,"(a)") "--- PISM / Calov-Greve expectation integral ---"
+        write(*,"(a)") "--- CG05 (Calov and Greve, 2005) expectation integral ---"
 
         sigma = real(par%temperature_sigma,wp_acc)
 
@@ -138,7 +138,7 @@ contains
         ! And the same limits carried through pdd_degree_days, which is where
         ! the dt_days factor enters. Monthly step, as Chion.jl would use.
         p    = par
-        p%pdd_method = CHION_PDD_PISM
+        p%pdd_method = CHION_PDD_CG05
         dt   = 30.0_wp
 
         pdd    = pdd_degree_days(c%T0,dt,p,c)
@@ -147,7 +147,7 @@ contains
 
         return
 
-    end subroutine test_pism_limits
+    end subroutine test_cg05_limits
 
     ! =====================================================================
 
@@ -245,8 +245,8 @@ contains
                 p%pdd_method = CHION_PDD_SIMPLE
                 mname = "simple"
             else
-                p%pdd_method = CHION_PDD_PISM
-                mname = "pism"
+                p%pdd_method = CHION_PDD_CG05
+                mname = "cg05"
             end if
 
             call step_forcing_init(forc)
@@ -585,7 +585,7 @@ contains
 
         ! Local variables
         type(chion_step_forcing_class) :: forc
-        type(pdd_par_class) :: p_simple, p_pism
+        type(pdd_par_class) :: p_simple, p_cg05
         real(wp)     :: swe_s, swe_p
         real(wp_acc) :: smb_s, runoff_s, pdd_s
         real(wp_acc) :: smb_p, runoff_p, pdd_p
@@ -594,7 +594,7 @@ contains
         write(*,"(a)") "--- pdd_method branches ---"
 
         p_simple = par ; p_simple%pdd_method = CHION_PDD_SIMPLE
-        p_pism   = par ; p_pism%pdd_method   = CHION_PDD_PISM
+        p_cg05   = par ; p_cg05%pdd_method   = CHION_PDD_CG05
 
         call step_forcing_init(forc)
         forc%dt_days         = 1.0_wp
@@ -606,19 +606,19 @@ contains
         swe_p = 100.0_wp ; smb_p = 0.0_wp_acc ; runoff_p = 0.0_wp_acc ; pdd_p = 0.0_wp_acc
 
         call pdd_column_step(swe_s,smb_s,runoff_s,pdd_s,forc,p_simple,c)
-        call pdd_column_step(swe_p,smb_p,runoff_p,pdd_p,forc,p_pism,c)
+        call pdd_column_step(swe_p,smb_p,runoff_p,pdd_p,forc,p_cg05,c)
 
         write(*,"(a,g16.8)") "         T = T0-5, simple pdd [K d] = ", pdd_s
-        write(*,"(a,g16.8)") "         T = T0-5, pism   pdd [K d] = ", pdd_p
+        write(*,"(a,g16.8)") "         T = T0-5, cg05   pdd [K d] = ", pdd_p
 
         call check("simple: no melt below freezing", pdd_s .eq. 0.0_wp_acc, nfail)
         call check("simple: snowpack unchanged", swe_s .eq. 100.0_wp, nfail)
-        call check("pism: sub-freezing mean still melts", pdd_p .gt. 0.0_wp_acc, nfail)
-        call check("pism: snowpack decreases", swe_p .lt. 100.0_wp, nfail)
+        call check("cg05: sub-freezing mean still melts", pdd_p .gt. 0.0_wp_acc, nfail)
+        call check("cg05: snowpack decreases", swe_p .lt. 100.0_wp, nfail)
 
         ! sigma = 5, Tbar = -5 -> z = -1: E[T+] = 5*phi(-1) - 5*Phi(-1)
         !                                = 1.209854 - 0.793274 = 0.416580
-        call check_close("pism pdd at Tbar = -5, sigma = 5", pdd_p, &
+        call check_close("cg05 pdd at Tbar = -5, sigma = 5", pdd_p, &
                          0.41658_wp_acc, 1.0e-4_wp_acc, nfail)
 
         ! Well above freezing the two converge: E[T+] -> Tbar.
@@ -627,7 +627,7 @@ contains
         swe_p = 0.0_wp ; smb_p = 0.0_wp_acc ; runoff_p = 0.0_wp_acc ; pdd_p = 0.0_wp_acc
 
         call pdd_column_step(swe_s,smb_s,runoff_s,pdd_s,forc,p_simple,c)
-        call pdd_column_step(swe_p,smb_p,runoff_p,pdd_p,forc,p_pism,c)
+        call pdd_column_step(swe_p,smb_p,runoff_p,pdd_p,forc,p_cg05,c)
 
         call check_close("the two methods converge far above freezing", &
                          pdd_p, pdd_s, 1.0e-6_wp_acc, nfail)

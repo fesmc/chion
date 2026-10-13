@@ -81,7 +81,7 @@
 ! ============================================================
 
 &pdd
-    pdd_method          = "pism"            ! "pism" | "simple"
+    pdd_method          = "cg05"            ! "cg05" | "simple"
     ddf_snow            = 3.0               ! [kg m-2 K-1 d-1] Snow degree-day factor
     ddf_ice             = 8.0               ! [kg m-2 K-1 d-1] Ice degree-day factor
     refreezing_fraction = 0.6               ! [1] Fraction of snow melt that refreezes

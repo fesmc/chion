@@ -123,7 +123,7 @@ module chion_api
     character(len=*), parameter :: CHION_CLIMBERX_QSAT_CHOICES = "climberx|bessi"
     character(len=*), parameter :: CHION_RHOS_CHOICES    = "constant|parameterized"
     character(len=*), parameter :: CHION_DENSIFY_CHOICES = "bessi|htessel"
-    character(len=*), parameter :: CHION_PDD_CHOICES     = "simple|pism"
+    character(len=*), parameter :: CHION_PDD_CHOICES     = "simple|cg05"
 
     ! =====================================================================
     ! The object

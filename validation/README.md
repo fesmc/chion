@@ -82,7 +82,7 @@ fix alone (D22) would have ungated 15 of BESSI's 18 fields.
 
 PDD needs no switch: Chion.jl `ce6a68d` adopted chion's budget (D23), so the
 plain dp build is gated against Chion.jl, once per `pdd_method` (`simple`,
-`pism`), with every `&pdd` parameter, including `H_snow_max`, set explicitly on
+`cg05`, Chion.jl's `:pism`), with every `&pdd` parameter, including `H_snow_max`, set explicitly on
 both sides. chion's output is also gated on the full closure
 
     snowfall + rainfall == d(snowpack_swe) + d(smb_ice) + d(runoff)
@@ -136,7 +136,7 @@ Worst field, port-fidelity gate (dp+legacy vs Chion.jl): **0.47 ulp**
 layers at `T0` gave `T0 - 1 ulp` in chion, flipping the `T >= T0` timescale test. `N` is exactly 0 — the layer counts agree at every
 step of every column. ITM agrees with smbpal to 1.1e-07 relative at sp and
 5.1e-15 at dp. PDD vs Chion.jl (dp, 60 monthly steps): worst 0.37 ulp
-(`simple`) and 0.41 ulp (`pism`). ITM vs Chion.jl (dp+legacy, 1095 daily steps):
+(`simple`) and 0.41 ulp (`cg05`). ITM vs Chion.jl (dp+legacy, 1095 daily steps):
 worst 0.44 ulp (`Tsrf`). PDD mass closure: 2.3e-15 at dp, 3.8e-07 at
 sp.
 
@@ -233,7 +233,7 @@ configuration green and unchanged: D30, D40 and D41 are reverted under
 acceptance tests pass (15 per `fpsafe` build: sp, dp, dp+legacy); every gated
 field passes. Worst per BESSI configuration 0.47 ulp (`Tsrf`; `melt` in semix
 turbulence + substrate), 0.48 ulp with fine layers (`bulk_density`) and the
-cloud proxy (`refreezing`); PDD 0.37 (`simple`) and 0.41 ulp (`pism`,
+cloud proxy (`refreezing`); PDD 0.37 (`simple`) and 0.41 ulp (`cg05`,
 `snowpack_swe`); ITM, all 14 fields by name, 0.48 ulp (`runoff`). PDD closure
 1.4e-15 / 2.3e-15 at dp, 9.8e-08 / 3.8e-07 at sp.
 
@@ -265,7 +265,7 @@ column actually reached and asserts it:
 | ice substrate `bare_ice` | dry bare ice over the substrate: below T0 without melt, melts only once re-warmed | asserted |
 | fine near-surface layers | layers 1-4 at target thickness; cap-down (`cold_dry`) and fill-up (`melting`) fire; layer 5 unsplit (N ≤ 5) | asserted |
 | BESSI `:aging` | snow ages; relaxes below `alpha_dry`; ages on a melting surface (`tau_melt`) | asserted |
-| PDD monthly | `simple` and `pism` (Calov–Greve) integrals | 60 steps at dt=30 d each |
+| PDD monthly | `simple` and `cg05` (Calov and Greve, 2005; Chion.jl `:pism`) integrals | 60 steps at dt=30 d each |
 | ITM `ice_ablation` | ice background; melts out, then bare-ice melt; rain refreezing | asserted |
 | ITM `ice_accum_cap` | `H_snow_max` cap, excess to ice | asserted |
 | ITM `land_seasonal`, `ocean` | land (tundra PDDs) and ocean backgrounds | asserted |

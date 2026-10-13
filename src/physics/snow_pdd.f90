@@ -46,7 +46,7 @@ module snow_pdd
     ! docs/pdd_defects.md D4. The default reproduces Julia for daily forcing.
 
     integer, parameter, public :: CHION_PDD_SIMPLE = 1   ! max(T-T0,0)*dt
-    integer, parameter, public :: CHION_PDD_PISM   = 2   ! Calov-Greve integral
+    integer, parameter, public :: CHION_PDD_CG05   = 2   ! Calov and Greve (2005) integral
 
     ! === Numerical constants =================================================
     !
@@ -71,7 +71,7 @@ module snow_pdd
         real(wp) :: temperature_sigma    ! [K] std dev of unresolved T variability
         real(wp) :: H_snow_max           ! [kg m-2] snowpack cap; excess -> ice
 
-        integer  :: pdd_method           ! CHION_PDD_SIMPLE | CHION_PDD_PISM
+        integer  :: pdd_method           ! CHION_PDD_SIMPLE | CHION_PDD_CG05
     end type pdd_par_class
 
     ! === State ===============================================================
@@ -195,9 +195,9 @@ contains
         end if
 
         if (par%pdd_method .ne. CHION_PDD_SIMPLE .and. &
-            par%pdd_method .ne. CHION_PDD_PISM) then
+            par%pdd_method .ne. CHION_PDD_CG05) then
             write(io_unit_err,*) "pdd_par_validate:: Error: pdd_method not recognized."
-            write(io_unit_err,*) "pdd_method should be one of: ['simple','pism']"
+            write(io_unit_err,*) "pdd_method should be one of: ['simple','cg05']"
             write(io_unit_err,*) "pdd_method = ", par%pdd_method
             stop "Program stopped."
         end if
@@ -218,11 +218,11 @@ contains
         select case(trim(adjustl(name)))
             case("simple")
                 flag = CHION_PDD_SIMPLE
-            case("pism")
-                flag = CHION_PDD_PISM
+            case("cg05")
+                flag = CHION_PDD_CG05
             case DEFAULT
                 write(io_unit_err,*) "pdd_method_flag:: Error: pdd method not recognized."
-                write(io_unit_err,*) "pdd_method should be one of: ['simple','pism']"
+                write(io_unit_err,*) "pdd_method should be one of: ['simple','cg05']"
                 write(io_unit_err,*) "pdd_method = ", trim(name)
                 stop "Program stopped."
         end select
@@ -385,10 +385,10 @@ contains
         ! Positive degree days accumulated over one step [K d].
         !
         ! simple : max(T - T0, 0) * dt_days                (Chion.jl pdd.jl:8)
-        ! pism   : dt_days * E[T+]                         (Chion.jl pdd.jl:28)
+        ! cg05   : dt_days * E[T+], Calov and Greve (2005) (Chion.jl pdd.jl:28, its :pism)
         !
         ! DEVIATION: Chion.jl chooses between these on dt_days alone
-        ! (27 <= dt <= 32 -> pism). chion uses par%pdd_method. Defect D4.
+        ! (27 <= dt <= 32 -> its :pism). chion uses par%pdd_method. Defect D4.
         !
         ! DEVIATION: T0 comes from the constants struct, not the hard-coded
         ! 273.15 of pdd.jl:9 and :29.
@@ -415,7 +415,7 @@ contains
             case(CHION_PDD_SIMPLE)
                 pdd = max(temp_c,0.0_wp_acc)*dt
 
-            case(CHION_PDD_PISM)
+            case(CHION_PDD_CG05)
                 pdd = dt*pdd_expected_positive_temperature(temp_c, &
                                         real(par%temperature_sigma,wp_acc))
 

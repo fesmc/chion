@@ -832,7 +832,7 @@ function main()
             ch = run_chion(; precision=prec, forcing=fpdd,
                            outfile="chion_pdd_$(method)_$(prec).nc", workdir=WORKDIR,
                            model="pdd", dt_out=30.0, dt=30.0,
-                           pdd_method=string(method))
+                           pdd_method=(method === :pism ? "cg05" : string(method)))
             d = compare_files(ch, jl_pdd, PDD_VARS; eps_wp=eps_of(prec))
             if prec === :dp
                 report(d, "PDD port fidelity ($method): chion dp vs Chion.jl")

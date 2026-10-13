@@ -139,7 +139,7 @@ contains
         write(io,"(a)") "&pdd"
         write(io,"(a)") "    ddf_snow   = 4.5"
         write(io,"(a)") "    ddf_ice    = 9.5"
-        write(io,"(a)") "    pdd_method = 'pism'"
+        write(io,"(a)") "    pdd_method = 'cg05'"
         write(io,"(a)") "/"
         write(io,"(a)") "&itm"
         write(io,"(a)") "    itm_c              = -55.0"
@@ -263,8 +263,8 @@ contains
                        ppar%refreezing_fraction, 0.6_wp, nfail)
         call check_val("pdd: temperature_sigma from defaults", &
                        ppar%temperature_sigma, 5.0_wp, nfail)
-        call check("pdd: pdd_method overridden to pism", &
-                   ppar%pdd_method .eq. CHION_PDD_PISM, nfail)
+        call check("pdd: pdd_method overridden to cg05", &
+                   ppar%pdd_method .eq. CHION_PDD_CG05, nfail)
 
         ! The schema default is "simple", Chion.jl's PDDModel default, so a
         ! namelist without pdd_method runs the physics validation/ gates.

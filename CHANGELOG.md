@@ -16,6 +16,9 @@ against `9ec6cc7` in twelve BESSI configurations, PDD and ITM.
 
 ### Breaking
 
+- `&pdd pdd_method = "pism"` is now `"cg05"` (Calov and Greve, 2005; flag `CHION_PDD_CG05`,
+  was `CHION_PDD_PISM`): the expectation integral of the positive temperature, Chion.jl's
+  `:pism`. Namelists with `"pism"` stop.
 - Time in double precision: the `time` arguments of `chion_write_init`, `chion_write_step`,
   `chion_restart_write` and `chion_restart_read` are `real(dp)` (callers pass `real(dp)`).
 - Namelists (re-sync host copies of `input/chion_defaults.nml`):

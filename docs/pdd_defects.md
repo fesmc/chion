@@ -327,9 +327,10 @@ concentrated exactly at the equilibrium-line altitude, where it moves the ELA.
    `temperature_sigma → 0` in all but name, and should probably be deleted outright.
 
 **Port status.** chion implements (1): `pdd_par_class%pdd_method`, flags `CHION_PDD_SIMPLE` /
-`CHION_PDD_PISM`, string mapping via `pdd_method_flag`. This is an approved §4.1 cleanup and
+`CHION_PDD_CG05`, string mapping via `pdd_method_flag`; chion names the integral `cg05`
+(Calov and Greve, 2005), Chion.jl's `:pism`. This is an approved §4.1 cleanup and
 is a **deliberate divergence** from Chion.jl's dispatch. chion keeps `simple` as the default
-so that the daily path reproduces Julia bit-for-bit modulo D12; **WP13 should set `pism` as the
+so that the daily path reproduces Julia bit-for-bit modulo D12; **WP13 should set `cg05` as the
 namelist default for production**, matching smbpal, and WP16 must run both.
 
 ---
@@ -621,7 +622,7 @@ only `src/physics/snow_pdd.f90`, `tests/test_pdd.f90` and this file).
 
 | id | deviation | authority | impact |
 |---|---|---|---|
-| P1 | `pdd_method = "simple" \| "pism"` replaces the implicit `27 <= dt_days <= 32` trigger | PLAN §4.1 "fix outright bugs"; explicitly requested in the WP9 brief | Same physics for daily and 27–32-day forcing with the default `simple`; different (and better) for every other step length. chion's default is `simple`, as Chion.jl's (PLAN_dev_nils WP3); set `pism` for monthly steps. See D4. |
+| P1 | `pdd_method = "simple" \| "cg05"` (Chion.jl `:pism`) replaces the implicit `27 <= dt_days <= 32` trigger | PLAN §4.1 "fix outright bugs"; explicitly requested in the WP9 brief | Same physics for daily and 27–32-day forcing with the default `simple`; different (and better) for every other step length. chion's default is `simple`, as Chion.jl's (PLAN_dev_nils WP3); set `cg05` for monthly steps. See D4. |
 | P2 | `0.5*erfc(-z/sqrt(2))` replaces the Abramowitz–Stegun polynomial | PLAN §4.1, first bullet, names this case | ≤ 7.45e-8 absolute in Φ; below `sp` round-off. See D12. |
 | P3 | `T0` from `chion_const_class`, the day length from fesm-utils `phys_constants:sec_day` (`porting_notes.md` D28) | PLAN §4.1 "promote magic numbers"; requested in the brief | None at default constants. See D10. |
 | P4 | one kernel + one wrapper + one driver, instead of six overlapping entry points | PLAN §4.1 "remove the duplicate/inconsistent entry points that exist only for GPU dispatch" | Removes the D5/D7 ambiguity. |
