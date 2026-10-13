@@ -16,6 +16,8 @@ otherwise. `time` is appended by the writer and is always unlimited.
 |  3 | runoff               | column        | mmWE        | Cumulative runoff                                    |
 |  4 | pdd_sum              | column        | degC day    | Cumulative positive degree days                      |
 |  5 | smb                  | column        | kg m-2 s-1  | Net mass flux to the ice sheet                       |
+|  6 | melt                 | column        | mmWE        | Cumulative melt                                      |
+|  7 | refreezing           | column        | mmWE        | Cumulative refreezing                                |
 
 Notes.
 
@@ -26,3 +28,5 @@ Notes.
   (`smb_ice - snowpack_swe`, differenced over the step). For PDD this is
   identically `-ice_melt` and therefore never positive — see
   docs/porting_notes.md D13.
+* `melt` (snow + ice) and `refreezing` (ids 6, 7) are chion additions, the
+  cumulative surface flux totals as BESSI's (`chion_get_surface_flux_totals`).

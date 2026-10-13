@@ -386,6 +386,7 @@ contains
         integer :: i, icol
         type(chion_step_forcing_class) :: fc
         type(solar_declination_class)  :: decl
+        real(wp_acc) :: snow_melt, ice_melt, refrozen     ! PDD per-step budget terms
 
         if (forc%ncol .ne. grd%ncol) then
             write(io_unit_err,*) "chion_model_step:: Error: forcing and grid column counts differ."
@@ -416,7 +417,7 @@ contains
 
             case("pdd")
 
-                !$omp parallel do default(shared) private(i,icol,fc)
+                !$omp parallel do default(shared) private(i,icol,fc,snow_melt,ice_melt,refrozen)
                 do i = 1, grd%n_active
                     icol = grd%active_idx(i)
                     call chion_pack_step_forcing(forc,icol,dt_days,fc)
@@ -424,7 +425,11 @@ contains
                                          pdd%now%smb_ice(icol),      &
                                          pdd%now%runoff(icol),       &
                                          pdd%now%pdd_sum(icol),      &
-                                         fc,pdd%par,c)
+                                         fc,pdd%par,c,               &
+                                         snow_melt_out=snow_melt,ice_melt_out=ice_melt, &
+                                         refrozen_out=refrozen)
+                    pdd%now%melt(icol)       = pdd%now%melt(icol)       + snow_melt + ice_melt
+                    pdd%now%refreezing(icol) = pdd%now%refreezing(icol) + refrozen
                 end do
                 !$omp end parallel do
 
@@ -540,7 +545,7 @@ contains
         !
         !   BESSI  all four (melt, runoff, refreezing, sublimation).
         !   ITM    melt, runoff, refreezing; no sublimation (MV).
-        !   PDD    runoff only; no melt / refreezing / sublimation (MV).
+        !   PDD    melt (snow + ice), runoff, refreezing; no sublimation (MV).
 
         implicit none
 
@@ -575,8 +580,10 @@ contains
 
             case("pdd")
                 if (ncol .ne. pdd%now%ncol) call chion_size_error(ncol,pdd%now%ncol)
+                flux_cum(CHION_IMELT,:)   = pdd%now%melt
                 flux_cum(CHION_IRUNOFF,:) = pdd%now%runoff
-                ! melt / refreezing / sublimation: MV
+                flux_cum(CHION_IREFRZ,:)  = pdd%now%refreezing
+                ! sublimation: MV (PDD has no vapour pathway)
 
             case DEFAULT
                 call chion_model_error("chion_model_flux_cum",par%model)
@@ -641,9 +648,9 @@ contains
                 do i = 1, grd%n_active
                     icol = grd%active_idx(i)
                     smb_cum(icol)                = pdd%now%smb_ice(icol)
-                    flux_cum(CHION_IMELT,icol)   = real(MV,wp_acc)
+                    flux_cum(CHION_IMELT,icol)   = pdd%now%melt(icol)
                     flux_cum(CHION_IRUNOFF,icol) = pdd%now%runoff(icol)
-                    flux_cum(CHION_IREFRZ,icol)  = real(MV,wp_acc)
+                    flux_cum(CHION_IREFRZ,icol)  = pdd%now%refreezing(icol)
                     flux_cum(CHION_ISUBL,icol)   = real(MV,wp_acc)
                 end do
                 !$omp end parallel do

@@ -77,7 +77,9 @@ module snow_pdd
     ! === State ===============================================================
 
     type pdd_state_class
-        ! Chion.jl PDDState (src/state.jl:180-185): four (ncol) vectors.
+        ! Chion.jl PDDState (src/state.jl:180-185): four (ncol) vectors, plus
+        ! chion's cumulative melt and refreezing (the surface flux totals, as
+        ! BESSI and ITM report them).
         !
         ! snowpack_swe is a reservoir, so wp. The other three are cumulative
         ! and never reset, so they MUST be wp_acc -- see docs/PLAN.md 3.1.
@@ -94,6 +96,8 @@ module snow_pdd
         real(wp_acc), allocatable :: smb_ice(:)        ! [kg m-2] cumulative
         real(wp_acc), allocatable :: runoff(:)         ! [kg m-2] cumulative
         real(wp_acc), allocatable :: pdd_sum(:)        ! [K d]    cumulative
+        real(wp_acc), allocatable :: melt(:)           ! [kg m-2] cumulative snow + ice melt
+        real(wp_acc), allocatable :: refreezing(:)     ! [kg m-2] cumulative refreezing
     end type pdd_state_class
 
     type pdd_class
@@ -256,6 +260,8 @@ contains
         allocate(pdd%now%smb_ice(ncol))
         allocate(pdd%now%runoff(ncol))
         allocate(pdd%now%pdd_sum(ncol))
+        allocate(pdd%now%melt(ncol))
+        allocate(pdd%now%refreezing(ncol))
 
         call pdd_init_state(pdd)
 
@@ -273,6 +279,8 @@ contains
         if (allocated(pdd%now%smb_ice))      deallocate(pdd%now%smb_ice)
         if (allocated(pdd%now%runoff))       deallocate(pdd%now%runoff)
         if (allocated(pdd%now%pdd_sum))      deallocate(pdd%now%pdd_sum)
+        if (allocated(pdd%now%melt))         deallocate(pdd%now%melt)
+        if (allocated(pdd%now%refreezing))   deallocate(pdd%now%refreezing)
 
         pdd%now%ncol = 0
 
@@ -293,6 +301,8 @@ contains
         pdd%now%smb_ice      = 0.0_wp_acc
         pdd%now%runoff       = 0.0_wp_acc
         pdd%now%pdd_sum      = 0.0_wp_acc
+        pdd%now%melt         = 0.0_wp_acc
+        pdd%now%refreezing   = 0.0_wp_acc
 
         return
 
@@ -311,6 +321,8 @@ contains
         pdd%now%smb_ice(icol)      = 0.0_wp_acc
         pdd%now%runoff(icol)       = 0.0_wp_acc
         pdd%now%pdd_sum(icol)      = 0.0_wp_acc
+        pdd%now%melt(icol)         = 0.0_wp_acc
+        pdd%now%refreezing(icol)   = 0.0_wp_acc
 
         return
 
@@ -674,7 +686,7 @@ contains
 
         ! Local variables
         integer      :: i, icol
-        real(wp_acc) :: snowfall, rainfall, dpdd
+        real(wp_acc) :: snowfall, rainfall, dpdd, snow_melt, ice_melt, refrozen
 
         if (forc%ncol .ne. pdd%now%ncol) then
             write(io_unit_err,*) "pdd_step:: Error: forcing column count must match state."
@@ -695,7 +707,12 @@ contains
                                   pdd%now%smb_ice(icol),      &
                                   pdd%now%runoff(icol),       &
                                   pdd%now%pdd_sum(icol),      &
-                                  snowfall,rainfall,dpdd,pdd%par)
+                                  snowfall,rainfall,dpdd,pdd%par, &
+                                  snow_melt_out=snow_melt,ice_melt_out=ice_melt, &
+                                  refrozen_out=refrozen)
+
+            pdd%now%melt(icol)       = pdd%now%melt(icol)       + snow_melt + ice_melt
+            pdd%now%refreezing(icol) = pdd%now%refreezing(icol) + refrozen
 
         end do
         !$omp end parallel do

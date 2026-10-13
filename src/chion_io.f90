@@ -425,6 +425,10 @@ contains
                 call chion_write_col(filename,v,real(chn%pdd%now%runoff,wp),chn%grd,n,ncid)
             case("pdd_sum")
                 call chion_write_col(filename,v,real(chn%pdd%now%pdd_sum,wp),chn%grd,n,ncid)
+            case("melt")
+                call chion_write_col(filename,v,real(chn%pdd%now%melt,wp),chn%grd,n,ncid)
+            case("refreezing")
+                call chion_write_col(filename,v,real(chn%pdd%now%refreezing,wp),chn%grd,n,ncid)
             case("smb")
                 call chion_write_col(filename,v,smb,chn%grd,n,ncid)
 
@@ -814,6 +818,8 @@ contains
                 call chion_restart_write_acc(filename,"smb_ice",chn%pdd%now%smb_ice,"kg m-2",ncid)
                 call chion_restart_write_acc(filename,"runoff", chn%pdd%now%runoff, "kg m-2",ncid)
                 call chion_restart_write_acc(filename,"pdd_sum",chn%pdd%now%pdd_sum,"K d",   ncid)
+                call chion_restart_write_acc(filename,"melt",   chn%pdd%now%melt,   "kg m-2",ncid)
+                call chion_restart_write_acc(filename,"refreezing",chn%pdd%now%refreezing,"kg m-2",ncid)
 
             case("itm")
 
@@ -1023,6 +1029,8 @@ contains
                 call chion_restart_read_acc(filename,"smb_ice",chn%pdd%now%smb_ice,nt,ncid)
                 call chion_restart_read_acc(filename,"runoff", chn%pdd%now%runoff, nt,ncid)
                 call chion_restart_read_acc(filename,"pdd_sum",chn%pdd%now%pdd_sum,nt,ncid)
+                call chion_restart_read_acc(filename,"melt",   chn%pdd%now%melt,   nt,ncid)
+                call chion_restart_read_acc(filename,"refreezing",chn%pdd%now%refreezing,nt,ncid)
 
             case("itm")
 

@@ -694,6 +694,15 @@ contains
         call check("identical forcing gives identical columns", &
                    pdd%now%snowpack_swe(1) .eq. pdd%now%snowpack_swe(2) .and. &
                    pdd%now%smb_ice(1)      .eq. pdd%now%smb_ice(4), nfail)
+        ! No rain: runoff = melt - refreezing, so the two new totals close
+        ! against runoff to round-off.
+        call check("melt and refreezing accumulate", &
+                   pdd%now%melt(1) .gt. 0.0_wp_acc .and. pdd%now%refreezing(1) .gt. 0.0_wp_acc, nfail)
+        call check("runoff = melt - refreezing (no rain)", &
+                   abs(pdd%now%runoff(1) - (pdd%now%melt(1) - pdd%now%refreezing(1))) .le. &
+                   1e-10_wp_acc*pdd%now%melt(1), nfail)
+        call check("inactive column: no melt or refreezing", &
+                   pdd%now%melt(3) .eq. 0.0_wp_acc .and. pdd%now%refreezing(3) .eq. 0.0_wp_acc, nfail)
 
         call pdd_reset_column(pdd,1)
         call check("pdd_reset_column zeroes one column only", &

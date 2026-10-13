@@ -16,6 +16,9 @@ against `9ec6cc7` in twelve BESSI configurations, PDD and ITM.
 
 ### Breaking
 
+- PDD reports melt (snow + ice) and refreezing: cumulative `melt`, `refreezing` in its state,
+  output and restart, and in `chion_get_surface_flux_totals` / `chion_get_surface_fluxes`
+  (were MV). PDD restart files without them can no longer be read.
 - `&pdd pdd_method = "pism"` is now `"cg05"` (Calov and Greve, 2005; flag `CHION_PDD_CG05`,
   was `CHION_PDD_PISM`): the expectation integral of the positive temperature, Chion.jl's
   `:pism`. Namelists with `"pism"` stop.

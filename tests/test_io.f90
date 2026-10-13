@@ -283,6 +283,8 @@ contains
                 call check_eq_acc("smb_ice",     b%pdd%now%smb_ice,     a%pdd%now%smb_ice,     nfail)
                 call check_eq_acc("runoff",      b%pdd%now%runoff,      a%pdd%now%runoff,      nfail)
                 call check_eq_acc("pdd_sum",     b%pdd%now%pdd_sum,     a%pdd%now%pdd_sum,     nfail)
+                call check_eq_acc("melt",        b%pdd%now%melt,        a%pdd%now%melt,        nfail)
+                call check_eq_acc("refreezing",  b%pdd%now%refreezing,  a%pdd%now%refreezing,  nfail)
 
             case("itm")
 
@@ -575,6 +577,8 @@ contains
                 call check_var("runoff",      "mmWE",      "Cumulative runoff",                nfail)
                 call check_var("pdd_sum",     "degC day",  "Cumulative positive degree days",  nfail)
                 call check_var("smb",         "kg m-2 s-1","Net mass flux to the ice sheet",   nfail)
+                call check_var("melt",        "mmWE",      "Cumulative melt",                  nfail)
+                call check_var("refreezing",  "mmWE",      "Cumulative refreezing",            nfail)
 
                 call check("no layer dimension for pdd", &
                            .not. nc_exists_var(file_out,"mass"),nfail)
