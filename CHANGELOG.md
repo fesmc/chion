@@ -111,6 +111,11 @@ against `9ec6cc7` in twelve BESSI configurations, PDD and ITM.
 - `itm_par_load` takes optional `defaults_file`/`defaults_group` (sparse `&itm`).
 - `legacy_chion=1` reverts the deliberate corrections to Chion.jl's values for validation
   (D24 list; gas constant 8.314, ITM `tsrf` scaling D27).
+- Output precision: the variable tables (`input/chion-variables-*.md`) have a `prec`
+  column, and `chion_write_step` rounds each field to it (fesm-utils `var_io_write`, ncio
+  bit rounding, `precision_abs`/`precision_rel` attributes): K and m 1e-3, albedo 1e-4,
+  masses, densities, fluxes and accumulators 1e-4 relative, `N` lossless. Restart files
+  stay lossless. Needs fesm-utils with `var_io_write`.
 
 ### Fixed
 

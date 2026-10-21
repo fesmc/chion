@@ -137,6 +137,7 @@ $(nml_lines(merge(CHION_BESSI_PINS, bessi)))"""
     wind_default        = 5.0
     dt                  = $(dt)
     dt_out              = $(dt_out)
+    write_lossless      = .TRUE.
 /
 
 &chion

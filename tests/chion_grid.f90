@@ -86,7 +86,7 @@ program chion_grid
     use chion_io,     only : chion_write_init, chion_write_step, chion_restart_write
     use chion_domain, only : chion_domain_class, chion_domain_load
     use ncio
-    use nml, only : nml_read
+    use nml, only : nml_read, nml_has_param
     use phys_constants, only : sec_day
 
     implicit none
@@ -119,6 +119,7 @@ program chion_grid
     character(len=*), parameter :: file_restart = "chion_grid_restart.nc"
 
     logical  :: is_domain
+    logical  :: write_lossless
     integer  :: nx, ny, nt, ncol, nmon, nday_year
     integer  :: ix, iy, it, i, n_out, iyear, doy
     integer  :: clock0, clock1, clock_rate
@@ -160,6 +161,13 @@ program chion_grid
     call nml_read(path_par,"ctrl","dust_dep_default", dust_dep_default)
     call nml_read(path_par,"ctrl","rh_default",     rh_default)
     call nml_read(path_par,"ctrl","dt_out",         dt_out)
+
+    ! Optional: write all output lossless (ignore the table prec), e.g. for
+    ! the bit-level validation against Chion.jl
+    write_lossless = .FALSE.
+    if (nml_has_param(path_par,"ctrl","write_lossless")) &
+        call nml_read(path_par,"ctrl","write_lossless", write_lossless)
+    call nc_set_lossless(write_lossless)
 
     is_domain = (trim(forcing_source) .eq. "domain")
 

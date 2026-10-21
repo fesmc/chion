@@ -22,22 +22,26 @@ The `dimensions` column is LOGICAL: `column` becomes `xc, yc` when a spatial
 mapping is attached with `chion_set_grid`, and a bare `column` dimension
 otherwise. `time` is appended by the writer and is always unlimited.
 
-| id | variable             | dimensions    | units       | long_name                                            |
-|----|----------------------|---------------|-------------|------------------------------------------------------|
-|  1 | H_snow               | column        | mmWE        | ITM snowpack water equivalent                        |
-|  2 | alb_s                | column        | 1           | ITM surface albedo                                   |
-|  3 | smb                  | column        | mmWE day-1  | ITM total surface mass balance rate                  |
-|  4 | smbi                 | column        | mmWE day-1  | ITM ice-facing mass balance rate                     |
-|  5 | melt                 | column        | mmWE day-1  | ITM melt rate                                        |
-|  6 | runoff               | column        | mmWE day-1  | ITM runoff rate                                      |
-|  7 | refreezing           | column        | mmWE day-1  | ITM refreezing rate                                  |
-|  8 | Tsrf                 | column        | K           | Surface temperature                                  |
-|  9 | melt_net             | column        | mmWE day-1  | ITM net melt rate                                    |
-| 10 | smb_cum              | column        | mmWE        | ITM cumulative surface mass balance                  |
-| 11 | smb_ice              | column        | mmWE        | Net mass forcing to the ice sheet                    |
-| 12 | melt_cum             | column        | mmWE        | ITM cumulative melt                                  |
-| 13 | runoff_cum           | column        | mmWE        | ITM cumulative runoff                                |
-| 14 | refreezing_cum       | column        | mmWE        | ITM cumulative refreezing                            |
+The `prec` column is the precision of the values written to the output file
+(ncio bit rounding, for compression): `1e-3` absolute in the units of the
+field, `1e-4r` relative, `-` lossless. The restart file is always lossless.
+
+| id | variable             | dimensions    | units       | long_name                                            | prec       |
+|----|----------------------|---------------|-------------|------------------------------------------------------|------------|
+|  1 | H_snow               | column        | mmWE        | ITM snowpack water equivalent                        | 1e-4r      |
+|  2 | alb_s                | column        | 1           | ITM surface albedo                                   | 1e-4       |
+|  3 | smb                  | column        | mmWE day-1  | ITM total surface mass balance rate                  | 1e-4r      |
+|  4 | smbi                 | column        | mmWE day-1  | ITM ice-facing mass balance rate                     | 1e-4r      |
+|  5 | melt                 | column        | mmWE day-1  | ITM melt rate                                        | 1e-4r      |
+|  6 | runoff               | column        | mmWE day-1  | ITM runoff rate                                      | 1e-4r      |
+|  7 | refreezing           | column        | mmWE day-1  | ITM refreezing rate                                  | 1e-4r      |
+|  8 | Tsrf                 | column        | K           | Surface temperature                                  | 1e-3       |
+|  9 | melt_net             | column        | mmWE day-1  | ITM net melt rate                                    | 1e-4r      |
+| 10 | smb_cum              | column        | mmWE        | ITM cumulative surface mass balance                  | 1e-4r      |
+| 11 | smb_ice              | column        | mmWE        | Net mass forcing to the ice sheet                    | 1e-4r      |
+| 12 | melt_cum             | column        | mmWE        | ITM cumulative melt                                  | 1e-4r      |
+| 13 | runoff_cum           | column        | mmWE        | ITM cumulative runoff                                | 1e-4r      |
+| 14 | refreezing_cum       | column        | mmWE        | ITM cumulative refreezing                            | 1e-4r      |
 
 Notes.
 
