@@ -9,15 +9,19 @@ The `dimensions` column is LOGICAL: `column` becomes `xc, yc` when a spatial
 mapping is attached with `chion_set_grid`, and a bare `column` dimension
 otherwise. `time` is appended by the writer and is always unlimited.
 
-| id | variable             | dimensions    | units       | long_name                                            |
-|----|----------------------|---------------|-------------|------------------------------------------------------|
-|  1 | snowpack_swe         | column        | mmWE        | Snowpack water equivalent                            |
-|  2 | smb_ice              | column        | mmWE        | Net mass forcing to the ice sheet                    |
-|  3 | runoff               | column        | mmWE        | Cumulative runoff                                    |
-|  4 | pdd_sum              | column        | degC day    | Cumulative positive degree days                      |
-|  5 | smb                  | column        | kg m-2 s-1  | Net mass flux to the ice sheet                       |
-|  6 | melt                 | column        | mmWE        | Cumulative melt                                      |
-|  7 | refreezing           | column        | mmWE        | Cumulative refreezing                                |
+The `prec` column is the precision of the values written to the output file
+(ncio bit rounding, for compression): `1e-3` absolute in the units of the
+field, `1e-4r` relative, `-` lossless. The restart file is always lossless.
+
+| id | variable             | dimensions    | units       | long_name                                            | prec       |
+|----|----------------------|---------------|-------------|------------------------------------------------------|------------|
+|  1 | snowpack_swe         | column        | mmWE        | Snowpack water equivalent                            | 1e-4r      |
+|  2 | smb_ice              | column        | mmWE        | Net mass forcing to the ice sheet                    | 1e-4r      |
+|  3 | runoff               | column        | mmWE        | Cumulative runoff                                    | 1e-4r      |
+|  4 | pdd_sum              | column        | degC day    | Cumulative positive degree days                      | 1e-4r      |
+|  5 | smb                  | column        | kg m-2 s-1  | Net mass flux to the ice sheet                       | 1e-4r      |
+|  6 | melt                 | column        | mmWE        | Cumulative melt                                      | 1e-4r      |
+|  7 | refreezing           | column        | mmWE        | Cumulative refreezing                                | 1e-4r      |
 
 Notes.
 

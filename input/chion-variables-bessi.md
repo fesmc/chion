@@ -17,31 +17,35 @@ writer to `xc, yc` when a spatial mapping has been attached with
 `chion_set_grid`, and to a bare `column` dimension otherwise. `time` is
 appended by the writer and is always the unlimited dimension.
 
-| id | variable             | dimensions    | units       | long_name                                            |
-|----|----------------------|---------------|-------------|------------------------------------------------------|
-|  1 | thickness            | column        | m           | Snow thickness                                       |
-|  2 | wet_mass             | column        | mmWE        | Snow wet mass                                        |
-|  3 | bulk_density         | column        | kg m-3      | Bulk snow density                                    |
-|  4 | liquid_water         | column        | kg m-2      | Liquid water mass                                    |
-|  5 | mass_base            | column        | mmWE        | Firn mass exported to the ice model                  |
-|  6 | smb_ice              | column        | mmWE        | Net mass forcing to the ice sheet                    |
-|  7 | runoff               | column        | mmWE        | Cumulative runoff                                    |
-|  8 | melt                 | column        | mmWE        | Cumulative melt                                      |
-|  9 | refreezing           | column        | mmWE        | Cumulative refreezing                                |
-| 10 | sublimation          | column        | mmWE        | Cumulative sublimation                               |
-| 11 | vapor_mass           | column        | mmWE        | Cumulative surface vapour mass flux                  |
-| 12 | latent_heat_flux_sum | column        | W m-2       | Integrated turbulent latent heat flux                |
-| 13 | Tsrf                 | column        | K           | Surface temperature                                  |
-| 14 | albedo               | column        | 1           | Surface albedo                                       |
-| 15 | N                    | column        | 1           | Number of active snow layers                         |
-| 16 | smb                  | column        | kg m-2 s-1  | Net mass flux to the ice sheet                       |
-| 17 | mass                 | layer, column | kg m-2      | Layer snow mass                                      |
-| 18 | mass_w               | layer, column | kg m-2      | Layer liquid-water mass                              |
-| 19 | density              | layer, column | kg m-3      | Layer density                                        |
-| 20 | temperature          | layer, column | K           | Layer temperature                                    |
-| 21 | snow_age_days        | column        | day         | Time since the latest snowfall event                 |
-| 22 | albedo_snow          | column        | 1           | Snow albedo before the thin-snow blend               |
-| 23 | ice_temperature      | ice_layer, column | K       | Ice substrate layer temperature                      |
+The `prec` column is the precision of the values written to the output file
+(ncio bit rounding, for compression): `1e-3` absolute in the units of the
+field, `1e-4r` relative, `-` lossless. The restart file is always lossless.
+
+| id | variable             | dimensions    | units       | long_name                                            | prec       |
+|----|----------------------|---------------|-------------|------------------------------------------------------|------------|
+|  1 | thickness            | column        | m           | Snow thickness                                       | 1e-3       |
+|  2 | wet_mass             | column        | mmWE        | Snow wet mass                                        | 1e-4r      |
+|  3 | bulk_density         | column        | kg m-3      | Bulk snow density                                    | 1e-4r      |
+|  4 | liquid_water         | column        | kg m-2      | Liquid water mass                                    | 1e-4r      |
+|  5 | mass_base            | column        | mmWE        | Firn mass exported to the ice model                  | 1e-4r      |
+|  6 | smb_ice              | column        | mmWE        | Net mass forcing to the ice sheet                    | 1e-4r      |
+|  7 | runoff               | column        | mmWE        | Cumulative runoff                                    | 1e-4r      |
+|  8 | melt                 | column        | mmWE        | Cumulative melt                                      | 1e-4r      |
+|  9 | refreezing           | column        | mmWE        | Cumulative refreezing                                | 1e-4r      |
+| 10 | sublimation          | column        | mmWE        | Cumulative sublimation                               | 1e-4r      |
+| 11 | vapor_mass           | column        | mmWE        | Cumulative surface vapour mass flux                  | 1e-4r      |
+| 12 | latent_heat_flux_sum | column        | W m-2       | Integrated turbulent latent heat flux                | 1e-4r      |
+| 13 | Tsrf                 | column        | K           | Surface temperature                                  | 1e-3       |
+| 14 | albedo               | column        | 1           | Surface albedo                                       | 1e-4       |
+| 15 | N                    | column        | 1           | Number of active snow layers                         | -          |
+| 16 | smb                  | column        | kg m-2 s-1  | Net mass flux to the ice sheet                       | 1e-4r      |
+| 17 | mass                 | layer, column | kg m-2      | Layer snow mass                                      | 1e-4r      |
+| 18 | mass_w               | layer, column | kg m-2      | Layer liquid-water mass                              | 1e-4r      |
+| 19 | density              | layer, column | kg m-3      | Layer density                                        | 1e-4r      |
+| 20 | temperature          | layer, column | K           | Layer temperature                                    | 1e-3       |
+| 21 | snow_age_days        | column        | day         | Time since the latest snowfall event                 | 1e-4r      |
+| 22 | albedo_snow          | column        | 1           | Snow albedo before the thin-snow blend               | 1e-4       |
+| 23 | ice_temperature      | ice_layer, column | K       | Ice substrate layer temperature                      | 1e-3       |
 
 Notes.
 

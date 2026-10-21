@@ -18,9 +18,11 @@ module chion_io
     !     input/chion-variables-itm.md
     ! loaded once per model by load_var_io_table (fesm-utils variable_io) and
     ! cached in the module, exactly as yelmo does (yelmo/src/yelmo_io.f90).
-    ! Columns are `id | variable | dimensions | units | long_name`, and the
-    ! writer takes units and long_name from the table -- never from code -- so
-    ! that the table is the single place a name or a unit can be changed.
+    ! Columns are `id | variable | dimensions | units | long_name | prec`, and
+    ! the writer takes units, long_name and the output precision (`prec`, ncio
+    ! bit rounding) from the table -- never from code -- so that the table is
+    ! the single place a name, a unit or a precision can be changed. The
+    ! restart file is always lossless.
     !
     ! Variable names and units are Chion.jl's (src/io.jl NETCDF_METADATA), so
     ! chion and Chion.jl output files are directly comparable. See the tables
@@ -92,7 +94,7 @@ module chion_io
     ! different number of substrate layers is refused.
 
     use ncio
-    use variable_io, only : var_io_type, load_var_io_table
+    use variable_io, only : var_io_type, load_var_io_table, var_io_write
 
     use chion_defs, only : dp, wp, wp_acc, MV, io_unit_err, &
                            chion_grid_class, chion_check_file, &
@@ -520,19 +522,17 @@ contains
 
             call chion_scatter_to_grid(dat2D,dat,grd)
 
-            call nc_write(filename,trim(v%varname),dat2D, &
-                          dim1="xc",dim2="yc",dim3="time",start=[1,1,n], &
-                          units=trim(v%units),long_name=trim(v%long_name), &
-                          missing_value=MV,grid_mapping="",ncid=ncid)
+            call var_io_write(filename,v,dat2D,n,ncid=ncid, &
+                              dims=[character(len=32) :: "xc","yc","time"], &
+                              missing_value=MV,grid_mapping="")
 
             deallocate(dat2D)
 
         else
 
-            call nc_write(filename,trim(v%varname),dat, &
-                          dim1="column",dim2="time",start=[1,n], &
-                          units=trim(v%units),long_name=trim(v%long_name), &
-                          missing_value=MV,grid_mapping="",ncid=ncid)
+            call var_io_write(filename,v,dat,n,ncid=ncid, &
+                              dims=[character(len=32) :: "column","time"], &
+                              missing_value=MV,grid_mapping="")
 
         end if
 
@@ -564,8 +564,20 @@ contains
         integer :: k, nx, ny, nlay
         real(wp), allocatable :: dat3D(:,:,:)
         real(wp), allocatable :: dat2D(:,:)
+        character(len=32) :: dims_grid(4), dims_col(3)
 
         nlay = size(dat,1)
+
+        ! Dimensions incl. time, assigned element by element: an array
+        ! constructor mixing laydim (len=*) and literals is not reliably
+        ! padded to the type-spec length by gfortran
+        dims_grid(1) = "xc"
+        dims_grid(2) = "yc"
+        dims_grid(3) = laydim
+        dims_grid(4) = "time"
+        dims_col(1)  = laydim
+        dims_col(2)  = "column"
+        dims_col(3)  = "time"
 
         if (grd%has_spatial) then
 
@@ -580,19 +592,17 @@ contains
                 deallocate(dat2D)
             end do
 
-            call nc_write(filename,trim(v%varname),dat3D, &
-                          dim1="xc",dim2="yc",dim3=laydim,dim4="time",start=[1,1,1,n], &
-                          units=trim(v%units),long_name=trim(v%long_name), &
-                          missing_value=MV,grid_mapping="",ncid=ncid)
+            call var_io_write(filename,v,dat3D,n,ncid=ncid, &
+                              dims=dims_grid, &
+                              missing_value=MV,grid_mapping="")
 
             deallocate(dat3D)
 
         else
 
-            call nc_write(filename,trim(v%varname),dat, &
-                          dim1=laydim,dim2="column",dim3="time",start=[1,1,n], &
-                          units=trim(v%units),long_name=trim(v%long_name), &
-                          missing_value=MV,grid_mapping="",ncid=ncid)
+            call var_io_write(filename,v,dat,n,ncid=ncid, &
+                              dims=dims_col, &
+                              missing_value=MV,grid_mapping="")
 
         end if
 

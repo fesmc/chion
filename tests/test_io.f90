@@ -655,7 +655,8 @@ contains
 
     subroutine check_last_col(varname,expected,nfail)
         ! The last record (4) of a (column,time) output field equals `expected`
-        ! exactly: the writer copies the state, it computes nothing.
+        ! to the output precision of the table: the writer copies the state,
+        ! it computes nothing.
 
         implicit none
 
@@ -665,12 +666,19 @@ contains
 
         ! Local variables
         real(wp), allocatable :: got(:)
+        integer :: i
+        logical :: ok
 
         allocate(got(size(expected)))
         call nc_read(file_out,trim(varname),got,start=[1,4],count=[size(expected),1])
 
+        ok = .TRUE.
+        do i = 1, size(expected)
+            if (abs(got(i)-expected(i)) .gt. prec_tol(file_out,varname,expected(i))) ok = .FALSE.
+        end do
+
         call check(trim(varname)//" last record equals the state", &
-                   all(got .eq. expected),nfail)
+                   ok,nfail)
 
         return
 
@@ -703,6 +711,32 @@ contains
         return
 
     end subroutine check_shape3
+
+    function prec_tol(filename,varname,x) result(tol)
+        ! Largest error the ncio bit rounding may leave in x, from the
+        ! precision_abs / precision_rel attributes of varname (0: lossless).
+
+        implicit none
+
+        character(len=*), intent(IN) :: filename, varname
+        real(wp),         intent(IN) :: x
+        real(wp) :: tol
+
+        ! Local variables
+        double precision :: pabs, prel
+
+        pabs = 0.0d0
+        prel = 0.0d0
+        if (nc_exists_attr(filename,trim(varname),"precision_abs")) &
+            call nc_read_attr(filename,trim(varname),"precision_abs",pabs)
+        if (nc_exists_attr(filename,trim(varname),"precision_rel")) &
+            call nc_read_attr(filename,trim(varname),"precision_rel",prel)
+
+        tol = real(max(pabs,prel*abs(real(x,8))),wp)
+
+        return
+
+    end function prec_tol
 
     ! =====================================================================
     ! (e) Spatial scatter
@@ -770,7 +804,8 @@ contains
         ok_mapped  = .TRUE.
         do i = 1, NCOL_TEST
             mapped(is(i),js(i)) = .TRUE.
-            if (got(is(i),js(i)) .ne. chn%bsi%now%t_srf(i)) then
+            if (abs(got(is(i),js(i))-chn%bsi%now%t_srf(i)) .gt. &
+                prec_tol(file_grid,"Tsrf",chn%bsi%now%t_srf(i))) then
                 write(*,"(a,i0,a,i0,a,i0,a,g14.6,a,g14.6)") &
                     "  FAIL : column ", i, " at (j=", js(i), ",i=", is(i), ") = ", &
                     got(is(i),js(i)), " expected ", chn%bsi%now%t_srf(i)
@@ -831,7 +866,8 @@ contains
         ok = .TRUE.
         do i = 1, size(is)
         do k = 1, Ntot
-            if (got3(is(i),js(i),k) .ne. chn%bsi%now%mass(k,i)) ok = .FALSE.
+            if (abs(got3(is(i),js(i),k)-chn%bsi%now%mass(k,i)) .gt. &
+                prec_tol(file_grid,"mass",chn%bsi%now%mass(k,i))) ok = .FALSE.
         end do
         end do
 
