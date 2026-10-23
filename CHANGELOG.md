@@ -8,7 +8,7 @@ All notable changes to chion are recorded here. Format follows
 the CLIMBER-X SEMIX surface-scheme port on top of it; the history before this
 tag is the port itself, summarised rather than enumerated.
 
-## [Unreleased]
+## [v0.2.0] — 2026-10-23
 
 Synced with Chion.jl `main` `9ec6cc7` (= `03bb445`; `docs/PLAN_dev_nils.md`, deviations
 `docs/porting_notes.md` D29-D43). Default BESSI results change; the validation gate is green
