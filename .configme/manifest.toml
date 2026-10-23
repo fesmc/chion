@@ -1,5 +1,7 @@
 # configme manifest for chion.
+# Pins: stable (== main) for every dependency; a tagged release pins the
+# dependency tags.
 package = "chion"
 deps = [
-    "fesm-utils:dev",
+    "fesm-utils:stable",
 ]
