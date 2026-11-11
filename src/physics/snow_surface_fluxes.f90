@@ -40,6 +40,7 @@ module snow_surface_fluxes
                            CHION_SEB_SEMIX, &
                            CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                            CHION_LONGWAVE_CLOUD_PROXY, &
+                           BARE_SURFACE_TEMPERATURE_FROM_BELOW, &
                            chion_const_class, chion_step_forcing_class
     use snow_column_utils, only : surface_has_snow
 
@@ -642,8 +643,10 @@ contains
         ! no longer at the top cell's centre temperature(1)). The latent heat
         ! flux is therefore re-evaluated EXACTLY at Ts^{n+1}, while the energy
         ! solve used the linearization about Ts^n -- trap 2 again, deliberate.
-        ! t_srf is left as the solve set it, except that an emptied column
-        ! resets it to T0.
+        ! t_srf is left as the solve set it, also when the column empties: the
+        ! temperature of the surface left bare is the column step's to set
+        ! (D44). Under legacy_chion an emptied column resets it to T0, as in
+        ! Chion.jl.
         !
         ! Two branches, on the NEW interface temperature:
         !   Ts <  T0  solid exchange,  applied to mass(1)
@@ -769,7 +772,7 @@ contains
         vflux%sublimation_mass = max(-vflux%vapor_mass,0.0_wp)
 
         if (n .eq. 0) then
-            t_srf  = c%T0
+            if (.not. BARE_SURFACE_TEMPERATURE_FROM_BELOW) t_srf = c%T0
             albedo = c%alpha_ice
         end if
 

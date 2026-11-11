@@ -938,6 +938,36 @@ being nudged by a sub-ulp transfer. In a dp build the fill threshold stays EPS_T
 and the cap tolerance is ~1e-14 kg m-2; the harness gate is unaffected. Not under
 `legacy_chion` (no physics).
 
+### D44. Surface temperature of a column left bare, and of fresh snow on one
+**What:** the interface temperature `t_srf` of a snow-free column is that of the surface
+beneath, set by the column step (`snow_bessi.f90`, steps 5 and 16): over the ice substrate,
+the interface the energy solve found (prognostic); `T0` for bare ice without a substrate
+(BESSI's bare ice at the melting point); the air on land (D41). The sublimation kernel no
+longer resets it to `T0` when it empties the column (`apply_snow_surface_vapor_mass_flux`).
+Fresh snow on a column that started bare starts its interface at the air temperature, as
+its layers (step 3). Reverted under `legacy_chion` (`BARE_SURFACE_TEMPERATURE_FROM_BELOW`).
+
+**Why:** `t_srf` is the point the energy solve linearizes the surface fluxes about
+(`Ts_n = t_srf`, `snow_energy.f90`). Chion.jl resets it to `T0` when sublimation empties
+the column (`surface_fluxes.jl`, end of `_apply_snow_surface_vapor_mass_flux!`), even over a
+substrate at 230 K. Under a snowfall smaller than a day's sublimation demand this locks a
+cold column bare: each day's thin snow (0.08 kg m-2 at 30 kg m-2 yr-1) is solved about
+273 K, emits ~40 W m-2 too little longwave, comes out several K warmer than the air
+(also in the polar night), sublimates within the step, and the column is reset to `T0`
+again. From a cold start (empty column, `t_srf = T0`) it never builds snow: annual-mean
+`t_srf` 273.15 K, albedo `alpha_ice`, all snowfall sublimated, with and without a
+substrate. The thin-snow albedo (D40) aggravates it but is not needed: `legacy_chion`
+traps too.
+
+**Impact:** a -45 C column with 30 kg m-2 yr-1 from empty, 100 years
+(`tests/test_bessi.f90` test 18): Chion.jl/`legacy_chion` stores 0 and sublimates
+3000 kg m-2, `t_srf` 273.15 K, albedo 0.40; chion stores 2380 kg m-2, sublimates 629
+(6.3 kg m-2 yr-1 at the end), `t_srf` 226.3 K (air 228.2), albedo 0.81. In ablation-zone
+cycles a few 1e-4 relative on melt and `smb_ice` (test 1). A sublimation-limited column
+can still settle thin: at 12 kg m-2 yr-1 and -45 C it holds ~2 kg m-2 under the thin-snow
+albedo (~0.5) and sublimates its snowfall, where a column started with firn accumulates
+(D40's `swe_crit_albedo`, not this defect).
+
 ---
 
 ## WP-wide build note
@@ -1002,7 +1032,7 @@ Collected across batch 1. Severity: **A** = wrong results, **B** = latent/condit
 |---|---|
 | fixed upstream | 1 (vapour diagnostics, `03bb445`), 5, 6, 7, 13, 20b `273.15`/`86400` (PDD rewrite `ce6a68d`, `pdd_defects.md`), 4 (PDD active columns `6fca5d7`, kernel), 11 and 20 (bare-ice rain, `8fff530`, with a double count: D29), 19 (aging x dt, `6d077c5`), 24 (decoded time axis), 26 (`t` coordinate, `ecd4992`) |
 | still open | 3, 8, 21, 23, 25, D31 merge mean, 20b's single `sigma` (`pdd_defects.md` D11), 21b ITM long names |
-| new since `03bb445` | 27 (`Tsrf = T(1)` in the bottom deplete), 28 (substrate not reset), D29's double count in the substrate bare path, layer 5 unbounded under fine layers (D32), fixed-orbit TOA (D33), bare-ice latent heat (D35), `R_air` literal (D38), polar-night diurnal (D39), thin-snow albedo and land columns (D40, D41), aging refresh (D30) |
+| new since `03bb445` | 27 (`Tsrf = T(1)` in the bottom deplete), 28 (substrate not reset), D29's double count in the substrate bare path, layer 5 unbounded under fine layers (D32), fixed-orbit TOA (D33), bare-ice latent heat (D35), `R_air` literal (D38), polar-night diurnal (D39), thin-snow albedo and land columns (D40, D41), aging refresh (D30), `Tsrf = T0` on an emptied column (D44) |
 | not re-checked | 2, 9, 10, 12, 14-18, 19b, 22 |
 
 ### Mass-weighted mean of equal values is not exact (D31)

@@ -8,6 +8,18 @@ All notable changes to chion are recorded here. Format follows
 the CLIMBER-X SEMIX surface-scheme port on top of it; the history before this
 tag is the port itself, summarised rather than enumerated.
 
+## [Unreleased]
+
+### Fixed
+
+- BESSI: a cold, dry column started empty (e.g. the East Antarctic plateau, the north
+  Greenland interior) built no snow: each day's snowfall sublimated, `t_srf` stayed at 273 K
+  and the albedo at `alpha_ice`. Sublimation emptying the column reset `t_srf` to `T0`, about
+  which the next step linearized the surface fluxes. A column left bare now has the
+  temperature of the surface beneath (substrate: solved; no substrate: `T0`; land: air), and
+  fresh snow on a bare column starts its interface at the air temperature. Chion.jl has the
+  defect; `legacy_chion` keeps it (D44).
+
 ## [v0.2.0] — 2026-10-23
 
 Synced with Chion.jl `main` `9ec6cc7` (= `03bb445`; `docs/PLAN_dev_nils.md`, deviations
