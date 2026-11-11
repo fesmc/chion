@@ -110,7 +110,7 @@
     itm_c               = -45.0             ! [W m-2]
     itm_t               = 10.0              ! [W m-2 K-1]
     itm_b               = -2.0              ! [W m-2 deg-1]
-    itm_lat0            = 65.0              ! [deg N]
+    itm_lat0            = 65.0              ! [deg] (absolute value; either hemisphere)
     H_snow_max          = 5000.0            ! [mm w.e.]
     Pmaxfrac            = 0.6               ! [1]
     H_snow_crit_desert  = 10.0              ! [mm w.e.]

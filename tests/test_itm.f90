@@ -311,6 +311,10 @@ program test_itm
                    itm%par%itm_c, nfail)
     call check_val("itm_c_lat is linear in latitude", &
                    itm_c_lat(-45.0_wp,-2.0_wp,65.0_wp,70.0_wp), -55.0_wp, nfail)
+    call check_val("itm_c_lat is hemisphere-symmetric (lat = -75 as lat = 75)", &
+                   itm_c_lat(-45.0_wp,-2.0_wp,65.0_wp,-75.0_wp), -65.0_wp, nfail)
+    call check_val("itm_c_lat takes |lat0| (lat0 = -65 as lat0 = 65)", &
+                   itm_c_lat(-45.0_wp,-2.0_wp,-65.0_wp,-75.0_wp), -65.0_wp, nfail)
 
     call check_val("calc_atmos_transmissivity at sea level returns trans_a", &
                    calc_atmos_transmissivity(0.0_wp,itm%par%trans_a,itm%par%trans_b), &
@@ -410,6 +414,10 @@ contains
     !   * `elemental` dropped (scalar call here);
     !   * `ref_` name prefix;
     !   * EVERY floating literal typed `_wp`.
+    !
+    ! ref_itm_c_lat keeps smbpal's c + b*(lat - lat0). chion's itm_c_lat
+    ! takes |lat| and |lat0| (porting_notes D44); the two agree here because
+    ! all three columns and lat0 are northern.
     !
     ! On that last change. smbpal's source mixes untyped literals with dp
     ! ones (`0.d0`, `1.d0`, `1d3`, `0d0`, and a bare `273.15`) -- upstream
