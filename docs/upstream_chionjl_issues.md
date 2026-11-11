@@ -93,6 +93,21 @@ Mg m-3?).
 *Fix:* check the source (Vionnet et al. / HTESSEL); `ρ` in g cm-3 or `0.46` per kg m-3.
 *chion:* porting_notes open item 3 (ported as is).
 
+**8b. A cold, dry column never builds snow from empty.**
+When sublimation empties the column, `Tsrf` is reset to `T0`, also over the ice
+substrate, and the next step linearizes the surface fluxes about it. Under a snowfall
+smaller than a day's sublimation demand, each day's thin snow is solved about 273 K
+(~40 W m-2 too little emitted longwave at 228 K), comes out warmer than the air,
+sublimates within the step, and `Tsrf` is reset again: the column stays bare for good,
+`Tsrf = T0`, albedo `alpha_ice`, all snowfall sublimated. A -45 C column with 30 kg m-2
+yr-1 started empty stores nothing in 100 years (with a firn start: 24 kg m-2 yr-1).
+*Where:* `src/processes/surface_fluxes.jl:_apply_snow_surface_vapor_mass_flux!`
+(`_n_active == 0` -> `Tsrf = T0`); `src/step.jl:column_step_core!` (fresh snow on a bare
+column sets its layers to the air temperature, not `Tsrf`).
+*Fix:* leave `Tsrf` as the solve set it when the column empties (substrate: the solved
+interface; `T0` only for bare ice without one), and start fresh snow on a bare column at
+the air temperature, `Tsrf` included. *chion:* D45.
+
 ## B. Physics choices to consider
 
 **9. Thin-snow albedo (snow-cover fraction).**

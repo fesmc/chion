@@ -109,6 +109,7 @@ program test_bessi
     call test_fine_layers_firn(nfail)
     call test_thin_snow_albedo(nfail)
     call test_bare_land(nfail)
+    call test_cold_plateau_from_empty(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -1994,6 +1995,197 @@ contains
         return
 
     end subroutine test_bare_land
+
+    ! =====================================================================
+    ! Test 18 -- a cold, dry column from empty builds snow (D45)
+    ! =====================================================================
+
+    subroutine plateau_forcing(iday,t_mean,snowfall_year,forc)
+        ! East Antarctic plateau analogue (southern summer at day 15): air
+        ! temperature t_mean +- 15 K, a constant snowfall of snowfall_year
+        ! [kg m-2 yr-1], 60 % of a TOA shortwave cycle with polar night,
+        ! 5 m s-1 wind, 80 % relative humidity, 3000 m of ice.
+
+        implicit none
+
+        integer,                        intent(IN)  :: iday   ! 1..365
+        real(wp),                       intent(IN)  :: t_mean         ! [K]
+        real(wp),                       intent(IN)  :: snowfall_year  ! [kg m-2 yr-1]
+        type(chion_step_forcing_class), intent(OUT) :: forc
+
+        ! Local variables
+        real(wp) :: doy
+
+        doy = real(iday,wp)
+
+        call neutral_forcing(forc)
+
+        forc%air_temperature = t_mean + 15.0_wp*cos(2.0_wp*PI_WP*(doy - 15.0_wp)/real(NDAY_YEAR,wp))
+        forc%dt_days         = 1.0_wp
+        forc%snowfall_rate   = snowfall_year/(real(NDAY_YEAR,wp)*real(sec_day,wp))
+
+        forc%toa_shortwave     = max(230.0_wp + 300.0_wp*cos(2.0_wp*PI_WP*(doy - 355.0_wp) &
+                                                             /real(NDAY_YEAR,wp)),0.0_wp)
+        forc%has_toa_shortwave = .TRUE.
+        forc%shortwave_down    = 0.6_wp*forc%toa_shortwave
+
+        forc%wind_speed            = 5.0_wp
+        forc%relative_humidity     = 0.8_wp
+        forc%has_relative_humidity = .TRUE.
+        forc%air_pressure          = 70000.0_wp
+        forc%surface_height        = 3000.0_wp
+        forc%H_ice                 = 3000.0_wp
+
+        forc%latitude_deg        = -80.0_wp
+        forc%day_of_year         = doy
+        forc%solar_longitude_deg = modulo(360.0_wp*(doy - 80.0_wp)/real(NDAY_YEAR,wp),360.0_wp)
+
+        return
+
+    end subroutine plateau_forcing
+
+    subroutine test_cold_plateau_from_empty(nfail)
+        ! A cold start under 30 kg m-2 yr-1 of snowfall at -45 C. Each day
+        ! lays ~0.08 kg m-2 of snow on the empty column. Chion.jl (and
+        ! legacy_chion) then traps it: the sublimation that empties the
+        ! column resets t_srf to T0, the next step linearizes the surface
+        ! fluxes about 273 K, the thin snow comes out too warm and sublimates
+        ! within the step, and so on every day. The column stays "bare ice"
+        ! for good, reporting t_srf = T0 and alpha_ice, its snowfall all
+        ! sublimated. chion (D45) builds a firn column instead, with the
+        ! ice substrate (default) and without.
+        !
+        ! (a) one step: thin snow sublimating away over a substrate at 240 K
+        !     leaves the interface at the solved temperature, not T0.
+        ! (b) 100 years from empty: the snow accumulates, sublimation is a
+        !     small part of the snowfall, the surface sits near the air
+        !     temperature under a snow albedo, and the mass budget closes.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        integer      :: icol, n_ice, iyr, iday
+        real(wp_acc) :: precip, subl0, ts_sum, alb_sum, t_sum
+        real(wp)     :: ts_mean, alb_mean, t_mean
+        character(len=16) :: tag
+
+        integer,  parameter :: NYEARS = 100
+        real(wp), parameter :: T_PLATEAU = 228.15_wp     ! [K] annual mean, -45 C
+        real(wp), parameter :: SF_PLATEAU = 30.0_wp      ! [kg m-2 yr-1]
+
+        ! Closure tolerance. The daily ~0.08 kg m-2 lands on a ~6 kg m-2 fine
+        ! surface layer, 36500 times: in sp each addition rounds at ~4e-7 of
+        ! the layer, a relative residual of ~3e-6 after 100 years (test 1's
+        ! 1e-6 is for 5 kg m-2 days). dp closes to ~5e-13.
+        real(wp_acc), parameter :: CLOSURE_TOL = merge(2.0e-5_wp_acc,1.0e-10_wp_acc,wp .eq. sp)
+
+        write(*,"(a)") "--- 18. cold, dry column from empty builds snow (D45) ---"
+
+        call chion_const_init(c)
+
+        ! (a) A dry, windy step: the day's snow sublimates away.
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c)
+        bsi%now%ice_temperature = 240.0_wp
+        bsi%now%t_srf           = 240.0_wp
+
+        call neutral_forcing(forc)
+        forc%air_temperature       = 240.0_wp
+        forc%snowfall_rate         = 1.0e-7_wp
+        forc%wind_speed            = 8.0_wp
+        forc%relative_humidity     = 0.2_wp
+        forc%has_relative_humidity = .TRUE.
+        call bessi_column_step(bsi,1,forc,c)
+
+        write(*,"(a,i0,a,g14.6)") "         (a) n_lay = ", bsi%now%n_lay(1), &
+                                  "  t_srf = ", bsi%now%t_srf(1)
+        call check("(a) the thin snow sublimated away", bsi%now%n_lay(1) .eq. 0, nfail)
+        if (.not. CHION_LEGACY_MODE) then
+            call check("(a) emptied over a substrate: t_srf is the solved one, not T0", &
+                       abs(bsi%now%t_srf(1) - 240.0_wp) .lt. 10.0_wp, nfail)
+        else
+            call check_val("(a) legacy: emptied column reset to T0", bsi%now%t_srf(1), c%T0, nfail)
+        end if
+
+        call bessi_dealloc(bsi)
+
+        ! (b) 100 years from empty, with the substrate and without.
+        do n_ice = 5, 0, -5
+
+            write(tag,"(a,i0,a)") "(b, n_ice=", n_ice, ")"
+
+            call bessi_par_init(bsi%par)
+            bsi%par%ice_substrate_layers = n_ice
+            call bessi_par_validate(bsi%par)
+            call bessi_alloc(bsi,1)
+            call bessi_init_state(bsi,c)
+            icol = 1
+
+            precip = 0.0_wp_acc
+            do iyr = 1, NYEARS
+                subl0   = bsi%now%sublimation(icol)
+                ts_sum  = 0.0_wp_acc
+                alb_sum = 0.0_wp_acc
+                t_sum   = 0.0_wp_acc
+                do iday = 1, NDAY_YEAR
+                    call plateau_forcing(iday,T_PLATEAU,SF_PLATEAU,forc)
+                    precip = precip + real(forc%snowfall_rate*real(sec_day,wp),wp_acc)
+                    call bessi_column_step(bsi,icol,forc,c)
+                    ts_sum  = ts_sum  + bsi%now%t_srf(icol)
+                    alb_sum = alb_sum + bsi%now%albedo(icol)
+                    t_sum   = t_sum   + forc%air_temperature
+                end do
+            end do
+
+            ! Means over the last year.
+            ts_mean  = real(ts_sum /NDAY_YEAR,wp)
+            alb_mean = real(alb_sum/NDAY_YEAR,wp)
+            t_mean   = real(t_sum  /NDAY_YEAR,wp)
+
+            write(*,"(a,a,f10.2,a,f10.2,a,f10.2)") "         ", trim(tag), &
+                    precip, " kg m-2 fallen, stored ", column_storage(bsi,icol), &
+                    ", sublimated ", bsi%now%sublimation(icol)
+            write(*,"(a,a,f9.3,a,f8.3,a,f9.3,a,f6.3)") "         ", trim(tag), &
+                    ts_mean, " K mean t_srf (air ", t_mean, &
+                    "), last year sublimation ", bsi%now%sublimation(icol) - subl0, &
+                    ", mean albedo ", alb_mean
+
+            call check_close(trim(tag)//" mass closes", closure_lhs(bsi,icol),precip, &
+                             CLOSURE_TOL,nfail)
+
+            if (.not. CHION_LEGACY_MODE) then
+                call check(trim(tag)//" snow accumulated (> 2/3 of the snowfall stored)", &
+                           column_storage(bsi,icol) .gt. 2.0_wp_acc/3.0_wp_acc*precip, nfail)
+                call check(trim(tag)//" sublimation < 1/3 of the snowfall", &
+                           bsi%now%sublimation(icol) .lt. precip/3.0_wp_acc, nfail)
+                call check(trim(tag)//" mean t_srf within 5 K of the air", &
+                           abs(ts_mean - t_mean) .lt. 5.0_wp, nfail)
+                call check(trim(tag)//" mean albedo is snow's (> 0.75)", &
+                           alb_mean .gt. 0.75_wp, nfail)
+                call check(trim(tag)//" no melt, no runoff", &
+                           bsi%now%melt(icol) .eq. 0.0_wp_acc .and. &
+                           bsi%now%runoff(icol) .eq. 0.0_wp_acc, nfail)
+            else
+                call check(trim(tag)//" legacy: trapped bare, the snowfall sublimated", &
+                           bsi%now%n_lay(icol) .eq. 0 .and. &
+                           bsi%now%sublimation(icol) .gt. 0.99_wp_acc*precip, nfail)
+            end if
+
+            call bessi_dealloc(bsi)
+
+        end do
+
+        write(*,*)
+
+        return
+
+    end subroutine test_cold_plateau_from_empty
 
     subroutine check(label,condition,nfail)
 
