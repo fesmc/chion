@@ -77,6 +77,7 @@ program test_api
     call test_get_smb(nfail)
     call test_flux_totals(nfail)
     call test_tsrf_annual(nfail)
+    call test_init_snowpack(nfail)
 
     ! The scratch parameter file is written into the working directory, so
     ! remove it rather than leaving it in a git status.
@@ -1067,6 +1068,80 @@ contains
         return
 
     end subroutine test_flux_totals
+
+    subroutine test_init_snowpack(nfail)
+        ! chion_init_state with an initial snowpack (D46): every model holds
+        ! it as storage, and the SMB and flux baselines start at zero, so the
+        ! first chion_get_smb reports the step, not the initial snowpack.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_class) :: chn
+        integer  :: im
+        real(wp) :: smb(2), store(2), t_srf(2)
+        real(wp_acc) :: smb_cum(2), flux_cum(CHION_NFLUX,2), tot(2,4), dt_sec
+        character(len=8) :: models(3)
+
+        real(wp), parameter :: SWE(2)    = [500.0_wp, 0.0_wp]
+        real(wp), parameter :: T_INIT(2) = [230.0_wp, 230.0_wp]
+
+        write(*,"(a)") "--- 10. chion_init_state with an initial snowpack (D46) ---"
+
+        models(1) = "bessi"
+        models(2) = "pdd"
+        models(3) = "itm"
+
+        dt_sec = real(DT_DAYS,wp_acc)*real(sec_day,wp_acc)
+
+        do im = 1, 3
+
+            call write_model_par(PAR_TMP,trim(models(im)))
+            call chion_init(chn,PAR_TMP,2)
+            call chion_init_state(chn,swe=SWE,t_init=T_INIT)
+
+            select case(trim(models(im)))
+                case("bessi")
+                    store(1) = sum(chn%bsi%now%mass(1:chn%bsi%now%n_lay(1),1))
+                    store(2) = sum(chn%bsi%now%mass(1:chn%bsi%now%n_lay(2),2))
+                    t_srf    = chn%bsi%now%t_srf
+                case("pdd")
+                    store    = chn%pdd%now%snowpack_swe
+                    t_srf    = T_INIT
+                case("itm")
+                    store    = chn%itm%now%H_snow
+                    t_srf    = chn%itm%now%tsrf
+            end select
+
+            call check(trim(models(im))//": the snowpack is stored", &
+                       abs(store(1) - SWE(1)) .le. 1.0e-4_wp*SWE(1) .and. store(2) .eq. 0.0_wp, nfail)
+            call check(trim(models(im))//": surface at t_init", all(t_srf .eq. T_INIT), nfail)
+
+            call chion_model_smb_cum(chn%par,chn%bsi,chn%pdd,chn%itm,smb_cum)
+            call chion_model_flux_cum(chn%par,chn%bsi,chn%pdd,chn%itm,flux_cum)
+            call get_totals(chn,tot)
+            call check(trim(models(im))//": SMB and flux accumulators start at 0 (or MV)", &
+                       all(smb_cum .eq. 0.0_wp_acc) .and. all(chn%smb_cum_prev .eq. 0.0_wp_acc) .and. &
+                       all(flux_cum .eq. 0.0_wp_acc .or. flux_cum .eq. real(MV,wp_acc)) .and. &
+                       all(tot .eq. 0.0_wp_acc .or. tot .eq. real(MV,wp_acc)), nfail)
+
+            call set_forcing(chn,[1,2],1,"accum")
+            call chion_update(chn,DT_DAYS)
+            call chion_get_smb(chn,smb)
+            call check(trim(models(im))//": first step's SMB excludes the snowpack (|smb*dt| < 1 kg m-2)", &
+                       all(abs(real(smb,wp_acc)*dt_sec) .lt. 1.0_wp_acc), nfail)
+
+            call chion_end(chn)
+
+        end do
+
+        write(*,*)
+
+        return
+
+    end subroutine test_init_snowpack
 
     subroutine get_totals(chn,tot)
         implicit none

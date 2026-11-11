@@ -242,8 +242,10 @@ contains
 
     end subroutine chion_model_dealloc
 
-    subroutine chion_model_init_state(par,c,bsi,pdd,itm)
-        ! Cold start. Restart reading is WP14.
+    subroutine chion_model_init_state(par,c,bsi,pdd,itm,swe,t_init)
+        ! Cold start. Restart reading is WP14. swe and t_init are the
+        ! optional initial snowpack of chion_init_state (D46), passed on as
+        ! they come (an absent optional stays absent).
 
         implicit none
 
@@ -252,16 +254,20 @@ contains
         type(bessi_class),       intent(INOUT) :: bsi
         type(pdd_class),         intent(INOUT) :: pdd
         type(itm_class),         intent(INOUT) :: itm
+        real(wp), optional,      intent(IN)    :: swe(:)      ! (ncol) [kg m-2]
+        real(wp), optional,      intent(IN)    :: t_init(:)   ! (ncol) [K]
 
         select case(trim(par%model))
             case("bessi")
-                call bessi_init_state(bsi,c)
+                call bessi_init_state(bsi,c,swe,t_init)
             case("pdd")
-                call pdd_init_state(pdd)
+                ! PDD has no snow temperature; t_init is not used.
+                call pdd_init_state(pdd,swe)
             case("itm")
-                ! No H_snow argument: itm_init_state then seeds the snowpack
-                ! at H_snow_max, matching a fresh smbpal run (smbpal.f90:117).
-                call itm_init_state(itm,c)
+                ! Without swe, itm_init_state seeds the snowpack at
+                ! H_snow_max, matching a fresh smbpal run (smbpal.f90:117).
+                ! kg m-2 = mm w.e.
+                call itm_init_state(itm,c,H_snow=swe,t_init=t_init)
             case DEFAULT
                 call chion_model_error("chion_model_init_state",par%model)
         end select
@@ -279,6 +285,10 @@ contains
         ! choice and is preserved: it means a column that is switched off
         ! immediately stops reporting stale accumulators to the output, and a
         ! column that is switched back on necessarily starts clean.
+        !
+        ! The reset is the DEFAULT cold start, without the initial snowpack
+        ! of chion_init_state (swe, t_init; D46): a deactivated column is
+        ! bare (ITM: at H_snow_max, as smbpal), whatever the run started with.
 
         implicit none
 
