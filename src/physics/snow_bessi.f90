@@ -74,7 +74,8 @@ module snow_bessi
                            ALBEDO_THIN_SNOW_BLEND, LAND_COLUMNS_WITHOUT_ICE, &
                            BARE_SURFACE_TEMPERATURE_FROM_BELOW, &
                            DEF_NTOT, DEF_MASS_MAX, DEF_MASS_SPLIT, DEF_MASS_MIN, &
-                           DEF_DENSITY_INIT, DEF_TEMPERATURE_INIT, &
+                           DEF_DENSITY_INIT, DEF_TEMPERATURE_INIT, DEF_DENSITY_INIT_FIRN, &
+                           BESSI_REFERENCE_SNOW_DEPTH_M, &
                            DEF_ICE_SUBSTRATE_LAYERS, DEF_ICE_SUBSTRATE_TOP_THICKNESS, &
                            NEAR_SURFACE_LAYERS, DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES, &
                            CHION_ALBEDO_PRESCRIBED, CHION_ALBEDO_SEMIX, &
@@ -86,7 +87,8 @@ module snow_bessi
     use snow_column_utils,  only : surface_has_snow, column_has_liquid_water
 
     use snow_accumulation,  only : apply_accumulation
-    use snow_layers,        only : remesh_near_surface_layers
+    use snow_layers,        only : remesh_near_surface_layers, rebalance_layer, &
+                                   near_surface_layer_count
     use snow_albedo,        only : albedo_update, albedo_update_aging, &
                                    snow_cover_fraction, thin_snow_albedo
     use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration, &
@@ -132,6 +134,7 @@ module snow_bessi
         real(wp) :: mass_min              ! [kg m-2] surface-layer merge trigger
         real(wp) :: density_init          ! [kg m-3] density of an inactive layer
         real(wp) :: temperature_init      ! [K] temperature of an inactive layer
+        real(wp) :: density_init_firn     ! [kg m-3] initial snowpack (swe), D46
 
         ! Thermal ice substrate (Chion.jl 03bb445): layers below the snow/firn
         ! column, top thickness doubling downward; 0 = none (bare ice held at
@@ -261,6 +264,7 @@ contains
         par%mass_min         = DEF_MASS_MIN
         par%density_init     = DEF_DENSITY_INIT
         par%temperature_init = DEF_TEMPERATURE_INIT
+        par%density_init_firn = DEF_DENSITY_INIT_FIRN
 
         par%ice_substrate_layers        = DEF_ICE_SUBSTRATE_LAYERS
         par%ice_substrate_top_thickness = DEF_ICE_SUBSTRATE_TOP_THICKNESS
@@ -334,6 +338,14 @@ contains
             write(io_unit_err,*) "bessi_par_validate:: Error: mass_split/mass_max must be at least 0.5."
             write(io_unit_err,*) "mass_split, mass_max, ratio = ", &
                                  par%mass_split, par%mass_max, par%mass_split/par%mass_max
+            stop "Program stopped."
+        end if
+
+        if (.not. ieee_is_finite(par%density_init_firn) .or. &
+            .not. (par%density_init_firn .gt. 0.0_wp)) then
+            write(io_unit_err,*) "bessi_par_validate:: Error: &
+                                 &density_init_firn must be finite and positive."
+            write(io_unit_err,*) "density_init_firn = ", par%density_init_firn
             stop "Program stopped."
         end if
 
@@ -531,7 +543,7 @@ contains
     ! State initialization and reset
     ! =====================================================================
 
-    subroutine bessi_init_state(bsi,c)
+    subroutine bessi_init_state(bsi,c,swe,t_init)
         ! Chion.jl _initialize_bessi_state_kernel! (src/state.jl:42-90).
         !
         ! A cold start has NO active layers (n = 0). The layer arrays are still
@@ -543,11 +555,26 @@ contains
         ! t_srf starts at T0 and the albedo at alpha_dry -- note NOT alpha_ice,
         ! even though the column is bare. The first step overwrites both. The
         ! ice substrate starts at temperature_init (Chion.jl state.jl).
+        !
+        ! Optional initial snowpack (chion, D46), both (ncol):
+        !   swe    [kg m-2] a column with swe > 0 starts as a firn column of
+        !          that mass (bessi_init_firn_column); swe requires t_init;
+        !   t_init [K]      every column's substrate and t_srf, and the firn's
+        !          layers, start at min(t_init, T0) instead of
+        !          temperature_init / T0, so a bare column starts cold too.
+        ! The snowpack is initial storage: every accumulator starts at zero.
+        ! Without them the state is the cold start above, bit for bit.
 
         implicit none
 
         type(bessi_class),       intent(INOUT) :: bsi
         type(chion_const_class), intent(IN)    :: c
+        real(wp), optional,      intent(IN)    :: swe(:)      ! (ncol) [kg m-2]
+        real(wp), optional,      intent(IN)    :: t_init(:)   ! (ncol) [K]
+
+        ! Local variables
+        integer  :: icol
+        real(wp) :: t_cold
 
         bsi%now%n_lay       = 0
         bsi%now%mass        = 0.0_wp
@@ -578,9 +605,184 @@ contains
         bsi%now%bulk_density = 0.0_wp
         bsi%now%liquid_water = 0.0_wp
 
+        if (present(swe) .and. .not. present(t_init)) then
+            write(io_unit_err,*) "bessi_init_state:: Error: an initial snowpack (swe) &
+                                 &needs its temperature (t_init)."
+            stop "Program stopped."
+        end if
+
+        if (.not. present(t_init)) return
+
+        call bessi_check_init_field("t_init",t_init,bsi%now%ncol)
+        if (present(swe)) call bessi_check_init_field("swe",swe,bsi%now%ncol)
+
+        do icol = 1, bsi%now%ncol
+
+            if (.not. (t_init(icol) .gt. 0.0_wp)) then
+                write(io_unit_err,*) "bessi_init_state:: Error: t_init must be positive [K]."
+                write(io_unit_err,*) "icol, t_init = ", icol, t_init(icol)
+                stop "Program stopped."
+            end if
+
+            t_cold = min(t_init(icol),c%T0)
+
+            bsi%now%ice_temperature(:,icol) = t_cold
+            bsi%now%t_srf(icol)             = t_cold
+
+            if (present(swe)) then
+                if (swe(icol) .lt. 0.0_wp) then
+                    write(io_unit_err,*) "bessi_init_state:: Error: swe must be non-negative."
+                    write(io_unit_err,*) "icol, swe = ", icol, swe(icol)
+                    stop "Program stopped."
+                end if
+                if (swe(icol) .gt. 0.0_wp) &
+                    call bessi_init_firn_column(bsi,icol,swe(icol),t_cold,c)
+            end if
+
+        end do
+
         return
 
     end subroutine bessi_init_state
+
+    subroutine bessi_check_init_field(name,x,ncol)
+        ! Length ncol and finite, for the optional fields of bessi_init_state.
+
+        implicit none
+
+        character(len=*), intent(IN) :: name
+        real(wp),         intent(IN) :: x(:)
+        integer,          intent(IN) :: ncol
+
+        if (size(x) .ne. ncol) then
+            write(io_unit_err,*) "bessi_init_state:: Error: "//trim(name)//" must have length ncol."
+            write(io_unit_err,*) "ncol, size("//trim(name)//") = ", ncol, size(x)
+            stop "Program stopped."
+        end if
+
+        if (.not. all(ieee_is_finite(x))) then
+            write(io_unit_err,*) "bessi_init_state:: Error: "//trim(name)//" must be finite."
+            stop "Program stopped."
+        end if
+
+        return
+
+    end subroutine bessi_check_init_field
+
+    subroutine bessi_init_firn_column(bsi,icol,swe,t_firn,c)
+        ! A firn column of total mass swe at density_init_firn and t_firn, on
+        ! column icol of a freshly initialised (bare) state (D46).
+        !
+        ! The swe is laid on the empty column as one layer and given the
+        ! structure by the routines that maintain it in a (sub)step, so it
+        ! has the invariants of a column grown by accumulation and the first
+        ! step has nothing to repair. The routine is the one that owns the
+        ! layering in a grown column: without fine layers the surface
+        ! rebalance of accumulation (split while mass(1) > mass_max, merge
+        ! while mass(1) < mass_min); with them the near-surface remesh (cap
+        ! the fine layers to their thicknesses, the excess into the first
+        ! layer below them, which is split/merged by mass, D32). There the
+        ! surface rebalance plays no part: a fine layer 1 never reaches
+        ! mass_max. The result:
+        !   * the fine layers at their maximum thicknesses (a shallow column's
+        !     deepest one may be thinner);
+        !   * below them, the top mass layer in [mass_min, mass_max], holding
+        !     the remainder, and layers of mass_split beneath it -- a split
+        !     leaves mass_split BELOW the layer it splits, so in a grown
+        !     column the partial layer is the upper one, not the bottom one;
+        !   * n <= Ntot: at Ntot the two deepest layers merge (the bottom one
+        !     takes the excess), as in accumulation.
+        ! Under legacy_chion (D32 reverted) everything below the fine layers
+        ! stays in one layer, as in a grown legacy column. Equal temperatures
+        ! and densities mix to themselves (D31), so every layer is at t_firn
+        ! and density_init_firn (to round-off). The depth cap (22.5 m) is
+        ! checked here rather than enforced: the build must not export mass,
+        ! and it is asserted that it did not.
+
+        implicit none
+
+        type(bessi_class),       intent(INOUT) :: bsi
+        integer,                 intent(IN)    :: icol
+        real(wp),                intent(IN)    :: swe       ! [kg m-2] > 0
+        real(wp),                intent(IN)    :: t_firn    ! [K] <= T0
+        type(chion_const_class), intent(IN)    :: c
+
+        ! Local variables
+        real(wp)     :: t_srf_build, albedo_build
+        real(wp_acc) :: depth, exported_base, exported_smb, exported_runoff
+
+        associate(par         => bsi%par,                    &
+                  n           => bsi%now%n_lay(icol),        &
+                  mass        => bsi%now%mass(:,icol),       &
+                  mass_w      => bsi%now%mass_w(:,icol),     &
+                  density     => bsi%now%density(:,icol),    &
+                  temperature => bsi%now%temperature(:,icol))
+
+        if (.not. (par%density_init_firn .lt. c%rho_i)) then
+            write(io_unit_err,*) "bessi_init_state:: Error: density_init_firn must be below rho_i."
+            write(io_unit_err,*) "density_init_firn, rho_i = ", par%density_init_firn, c%rho_i
+            stop "Program stopped."
+        end if
+
+        depth = real(swe,wp_acc)/real(par%density_init_firn,wp_acc)
+
+        if (depth .gt. real(BESSI_REFERENCE_SNOW_DEPTH_M,wp_acc)) then
+            write(io_unit_err,*) "bessi_init_state:: Error: the initial snowpack exceeds &
+                                 &the snow-depth cap."
+            write(io_unit_err,*) "icol, swe [kg m-2], swe/density_init_firn [m], cap [m] = ", &
+                                 icol, swe, depth, BESSI_REFERENCE_SNOW_DEPTH_M
+            stop "Program stopped."
+        end if
+
+        n              = 1
+        mass(1)        = swe
+        mass_w(1)      = 0.0_wp
+        density(1)     = par%density_init_firn
+        temperature(1) = t_firn
+
+        ! The routines may export at the base only when a split frees a slot
+        ! at Ntot by depletion (Ntot - k <= 1) or a bottom merge exceeds
+        ! rho_i; collected here and required to be zero.
+        exported_base   = 0.0_wp_acc
+        exported_smb    = 0.0_wp_acc
+        exported_runoff = 0.0_wp_acc
+        t_srf_build     = t_firn
+        albedo_build    = c%alpha_dry
+
+        if (near_surface_layer_count(par%near_surface_layer_max_thicknesses) .eq. 0) then
+            call rebalance_layer(mass,mass_w,density,temperature,n,1, &
+                                 exported_base,exported_smb,exported_runoff, &
+                                 t_srf_build,albedo_build, &
+                                 par%Ntot,par%mass_max,par%mass_split,par%mass_min,c)
+        else
+            call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
+                                            exported_base,exported_smb,exported_runoff, &
+                                            t_srf_build,albedo_build, &
+                                            par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
+                                            par%near_surface_layer_max_thicknesses,c)
+        end if
+
+        if (exported_base .ne. 0.0_wp_acc .or. exported_smb .ne. 0.0_wp_acc .or. &
+            exported_runoff .ne. 0.0_wp_acc) then
+            write(io_unit_err,*) "bessi_init_state:: Error: the layer structure cannot hold &
+                                 &the initial snowpack without exporting mass (Ntot too small)."
+            write(io_unit_err,*) "icol, swe, Ntot, exported = ", icol, swe, par%Ntot, exported_base
+            stop "Program stopped."
+        end if
+
+        end associate
+
+        ! A dry snow surface at the firn temperature, as if just snowed on.
+        bsi%now%t_srf(icol)         = t_firn
+        bsi%now%albedo(icol)        = c%alpha_dry
+        bsi%now%albedo_snow(icol)   = c%alpha_dry
+        bsi%now%snow_age_days(icol) = 0.0_wp
+        bsi%now%w_snow_old(icol)    = swe
+        bsi%now%w_snow_max(icol)    = swe
+
+        return
+
+    end subroutine bessi_init_firn_column
 
     subroutine bessi_reset_columns(bsi,c,idx)
         ! Chion.jl _reset_bessi_columns_kernel! (src/runtime.jl:98-142), called
@@ -597,6 +799,11 @@ contains
         ! (chion deviation, docs/porting_notes.md D34): Chion.jl's reset kernel
         ! leaves ice_temperature stale, so a re-activated column would start
         ! on the ice of its previous life (reported upstream, N8).
+        !
+        ! A deactivated column is reset BARE, to the default cold start, even
+        ! when the run started with an initial snowpack (chion_init_state's
+        ! swe, t_init; D46): that is a cold-start option, not a column
+        ! property, and a column that is switched back on accumulates its own.
 
         implicit none
 

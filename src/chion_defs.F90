@@ -251,6 +251,10 @@ module chion_defs
     real(wp), parameter, public :: DEF_DENSITY_INIT     = 300.0_wp
     real(wp), parameter, public :: DEF_TEMPERATURE_INIT = 273.0_wp
 
+    ! Density of the firn column an optional initial snowpack is built from
+    ! (chion_init_state's swe, D46).
+    real(wp), parameter, public :: DEF_DENSITY_INIT_FIRN = 350.0_wp
+
     ! Thermal ice substrate below the snow/firn column (Chion.jl 03bb445,
     ! src/models.jl:98-99), Chion.jl's default 5 layers (0 = none, the
     ! bare-ice-at-T0 treatment).

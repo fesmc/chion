@@ -233,6 +233,7 @@ contains
         call check("bessi: max_substeps = 8",      bpar%diurnal_shortwave_max_substeps .eq. 8, nfail)
         call check_val("bessi: density_init from defaults",     bpar%density_init,     300.0_wp, nfail)
         call check_val("bessi: temperature_init from defaults", bpar%temperature_init, 273.0_wp, nfail)
+        call check_val("bessi: density_init_firn from defaults", bpar%density_init_firn, 350.0_wp, nfail)
         call check_val("bessi: diurnal_shortwave_threshold from defaults", &
                        bpar%diurnal_shortwave_threshold, 0.0_wp, nfail)
         call check_val("bessi: diurnal_shortwave_min_air_temperature from defaults", &

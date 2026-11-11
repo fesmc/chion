@@ -110,6 +110,8 @@ program test_bessi
     call test_thin_snow_albedo(nfail)
     call test_bare_land(nfail)
     call test_cold_plateau_from_empty(nfail)
+    call test_initial_snowpack(nfail)
+    call test_cold_plateau_from_firn(nfail)
 
     write(*,*)
     write(*,"(a)") "=========================================================="
@@ -2186,6 +2188,291 @@ contains
         return
 
     end subroutine test_cold_plateau_from_empty
+
+    ! =====================================================================
+    ! Test 19 -- an initial snowpack at the cold start (D46)
+    ! =====================================================================
+
+    subroutine test_initial_snowpack(nfail)
+        ! bessi_init_state with swe and t_init builds the firn column one
+        ! snowfall of swe onto the empty column would: the fine layers at
+        ! their thicknesses, below them one layer in [mass_min, mass_max] over
+        ! layers of mass_split, at most Ntot layers; all of it at t_init, as
+        ! initial storage with every accumulator at zero. swe = 0 with t_init
+        ! is a bare column on a cold substrate; no arguments is today's start.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi, bsi0
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        real(wp)     :: h(NEAR_SURFACE_LAYERS), dz
+        real(wp)     :: swe_case(3)
+        integer      :: icol, k, n, n_fine, n_before
+        logical      :: fine_ok, temp_ok, below_ok, dens_ok
+        character(len=40) :: tag
+
+        real(wp),     parameter :: T_INIT = 230.0_wp
+        real(wp_acc), parameter :: STORE_TOL = 8.0_wp_acc*real(epsilon(1.0_wp),wp_acc)
+
+        write(*,"(a)") "--- 19. initial snowpack at the cold start (D46) ---"
+
+        call chion_const_init(c)
+
+        ! (a) Default layering (fine layers on). Columns: 500, 2000 and
+        !     7000 kg m-2 (20 m at 350 kg m-3: more layers than Ntot).
+        swe_case = [500.0_wp, 2000.0_wp, 7000.0_wp]
+        h = DEF_NEAR_SURFACE_LAYER_MAX_THICKNESSES
+        n_fine = count(h .gt. 0.0_wp)
+
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,3)
+        call bessi_init_state(bsi,c,swe=swe_case,t_init=[T_INIT,T_INIT,T_INIT])
+
+        do icol = 1, 3
+
+            n = bsi%now%n_lay(icol)
+            write(tag,"(a,f7.1,a)") "(a, swe=", swe_case(icol), ")"
+
+            write(*,"(a,a,i3,a,*(f8.2))") "         ", trim(tag), n, " layers:", &
+                                          bsi%now%mass(1:n,icol)
+
+            call check_close(trim(tag)//" storage == swe", column_storage(bsi,icol), &
+                             real(swe_case(icol),wp_acc),STORE_TOL,nfail)
+            call check(trim(tag)//" n_lay > 1 and <= Ntot", n .gt. 1 .and. n .le. bsi%par%Ntot, nfail)
+
+            fine_ok = .TRUE.
+            do k = 1, min(n_fine,n-1)
+                dz = bsi%now%mass(k,icol)/bsi%now%density(k,icol)
+                fine_ok = fine_ok .and. abs(dz - h(k)) .le. 1.0e-5_wp*h(k)
+            end do
+            call check(trim(tag)//" fine layers at their thicknesses", fine_ok, nfail)
+
+            ! Below the fine layers: the top mass layer within [mass_min,
+            ! mass_max], the interior ones mass_split, the bottom one at
+            ! least mass_split (it takes the excess at Ntot). legacy_chion
+            ! (D32 reverted) keeps all of it in one layer, as test 15.
+            if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
+                below_ok = .TRUE.
+                if (n .gt. n_fine+1) then
+                    below_ok = bsi%now%mass(n_fine+1,icol) .ge. bsi%par%mass_min .and. &
+                               bsi%now%mass(n_fine+1,icol) .le. bsi%par%mass_max
+                    do k = n_fine+2, n-1
+                        below_ok = below_ok .and. bsi%now%mass(k,icol) .eq. bsi%par%mass_split
+                    end do
+                    below_ok = below_ok .and. bsi%now%mass(n,icol) .ge. bsi%par%mass_split
+                end if
+                call check(trim(tag)//" mass layers: [mass_min,mass_max] over mass_split", below_ok, nfail)
+            else
+                call check(trim(tag)//" legacy: everything below the fine layers in one layer", &
+                           n .eq. n_fine+1, nfail)
+            end if
+
+            temp_ok = all(bsi%now%temperature(1:n,icol) .eq. T_INIT) .and. &
+                      all(bsi%now%ice_temperature(:,icol) .eq. T_INIT) .and. &
+                      bsi%now%t_srf(icol) .eq. T_INIT
+            call check(trim(tag)//" layers, substrate and t_srf at t_init", temp_ok, nfail)
+
+            dens_ok = all(abs(bsi%now%density(1:n,icol) - bsi%par%density_init_firn) .le. &
+                          4.0_wp*epsilon(1.0_wp)*bsi%par%density_init_firn) .and. &
+                      all(bsi%now%mass_w(1:n,icol) .eq. 0.0_wp)
+            call check(trim(tag)//" dry, at density_init_firn", dens_ok, nfail)
+
+            call check(trim(tag)//" albedo dry snow, snow age 0", &
+                       bsi%now%albedo(icol) .eq. c%alpha_dry .and. &
+                       bsi%now%albedo_snow(icol) .eq. c%alpha_dry .and. &
+                       bsi%now%snow_age_days(icol) .eq. 0.0_wp, nfail)
+
+            call check(trim(tag)//" accumulators zero (storage, not SMB)", &
+                       bsi%now%mass_base(icol) .eq. 0.0_wp_acc .and. &
+                       bsi%now%smb_ice(icol)   .eq. 0.0_wp_acc .and. &
+                       bsi%now%runoff(icol)    .eq. 0.0_wp_acc .and. &
+                       bsi%now%melt(icol)      .eq. 0.0_wp_acc .and. &
+                       bsi%now%refreezing(icol).eq. 0.0_wp_acc .and. &
+                       bsi%now%vapor_mass(icol).eq. 0.0_wp_acc .and. &
+                       bsi%now%sublimation(icol).eq. 0.0_wp_acc, nfail)
+
+        end do
+
+        if (NEAR_SURFACE_SPLIT_MERGE_BELOW) &
+            call check("(a, swe=7000) column full at Ntot", bsi%now%n_lay(3) .eq. bsi%par%Ntot, nfail)
+
+        ! The first step finds nothing to repair: a cold, dry, calm day
+        ! leaves the layer count and the fine-layer geometry as built.
+        n_before = bsi%now%n_lay(2)
+        call neutral_forcing(forc)
+        forc%air_temperature = T_INIT
+        call bessi_column_step(bsi,2,forc,c)
+        fine_ok = .TRUE.
+        do k = 1, n_fine
+            dz = bsi%now%mass(k,2)/bsi%now%density(k,2)
+            fine_ok = fine_ok .and. abs(dz - h(k)) .le. 1.0e-5_wp*h(k)
+        end do
+        call check("(a, swe=2000) first step: layers unchanged, fine layers on target", &
+                   bsi%now%n_lay(2) .eq. n_before .and. fine_ok .and. &
+                   bsi%now%mass_base(2) .eq. 0.0_wp_acc, nfail)
+
+        call bessi_dealloc(bsi)
+
+        ! (b) No fine layers: BESSI's mass layering, layer 1 in [mass_min,
+        !     mass_max] over layers of mass_split.
+        call bessi_par_init(bsi%par)
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
+        call bessi_par_validate(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c,swe=[1000.0_wp],t_init=[T_INIT])
+        n = bsi%now%n_lay(1)
+        write(*,"(a,i3,a,*(f8.2))") "         (b, no fine layers, swe=1000)", n, " layers:", &
+                                    bsi%now%mass(1:n,1)
+        call check_close("(b) storage == swe", column_storage(bsi,1),1000.0_wp_acc,STORE_TOL,nfail)
+        below_ok = bsi%now%mass(1,1) .ge. bsi%par%mass_min .and. &
+                   bsi%now%mass(1,1) .le. bsi%par%mass_max .and. &
+                   all(bsi%now%mass(2:n,1) .eq. bsi%par%mass_split)
+        call check("(b) layer 1 in [mass_min,mass_max] over mass_split layers", &
+                   n .gt. 1 .and. below_ok, nfail)
+        call bessi_dealloc(bsi)
+
+        ! (c) swe = 0 with t_init: bare, on a substrate at t_init; and
+        !     t_init above T0 is capped at T0.
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,2)
+        call bessi_init_state(bsi,c,swe=[0.0_wp,0.0_wp],t_init=[T_INIT,280.0_wp])
+        call check("(c) swe = 0: bare column", all(bsi%now%n_lay .eq. 0), nfail)
+        call check("(c) swe = 0: substrate and t_srf at t_init", &
+                   all(bsi%now%ice_temperature(:,1) .eq. T_INIT) .and. &
+                   bsi%now%t_srf(1) .eq. T_INIT, nfail)
+        call check("(c) t_init > T0 capped at T0", &
+                   all(bsi%now%ice_temperature(:,2) .eq. c%T0) .and. &
+                   bsi%now%t_srf(2) .eq. c%T0, nfail)
+        call bessi_dealloc(bsi)
+
+        ! (d) t_init alone: as (c) for every column.
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c,t_init=[T_INIT])
+        call check("(d) t_init alone: bare, substrate at t_init", &
+                   bsi%now%n_lay(1) .eq. 0 .and. &
+                   all(bsi%now%ice_temperature(:,1) .eq. T_INIT), nfail)
+        call bessi_dealloc(bsi)
+
+        ! (e) No arguments: today's cold start.
+        call bessi_par_init(bsi0%par)
+        call bessi_alloc(bsi0,1)
+        call bessi_init_state(bsi0,c)
+        call check("(e) no arguments: empty, substrate at temperature_init, t_srf = T0", &
+                   bsi0%now%n_lay(1) .eq. 0 .and. &
+                   all(bsi0%now%ice_temperature(:,1) .eq. bsi0%par%temperature_init) .and. &
+                   all(bsi0%now%temperature(:,1) .eq. bsi0%par%temperature_init) .and. &
+                   all(bsi0%now%density(:,1) .eq. bsi0%par%density_init) .and. &
+                   bsi0%now%t_srf(1) .eq. c%T0 .and. bsi0%now%albedo(1) .eq. c%alpha_dry, nfail)
+        call bessi_dealloc(bsi0)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_initial_snowpack
+
+    ! =====================================================================
+    ! Test 20 -- a cold, dry column started with firn accumulates (D46)
+    ! =====================================================================
+
+    subroutine test_cold_plateau_from_firn(nfail)
+        ! Test 18's plateau at 12 kg m-2 yr-1 and -45 C. Started empty, the
+        ! column settles thin (a few kg m-2) under the thin-snow albedo and
+        ! sublimates its snowfall (D40, D45). Started with 500 kg m-2 of firn
+        ! at 228 K it accumulates: storage grows, t_srf stays near the air,
+        ! the albedo is that of dry snow, and the mass budget closes with
+        ! the initial snowpack as initial storage:
+        !   (S - S0) + runoff + smb_ice - vapor_mass == snowfall.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(bessi_class)       :: bsi, bsi0
+        type(chion_const_class) :: c
+        type(chion_step_forcing_class) :: forc
+        integer      :: iyr, iday
+        real(wp_acc) :: precip, s0, ts_sum, alb_sum, t_sum
+        real(wp)     :: ts_mean, alb_mean, t_mean
+
+        integer,  parameter :: NYEARS     = 100
+        real(wp), parameter :: T_PLATEAU  = 228.15_wp     ! [K] annual mean, -45 C
+        real(wp), parameter :: SF_PLATEAU = 12.0_wp       ! [kg m-2 yr-1]
+        real(wp), parameter :: SWE_INIT   = 500.0_wp      ! [kg m-2]
+        real(wp), parameter :: T_INIT     = 228.0_wp      ! [K]
+
+        ! Test 18's tolerance.
+        real(wp_acc), parameter :: CLOSURE_TOL = merge(2.0e-5_wp_acc,1.0e-10_wp_acc,wp .eq. sp)
+
+        write(*,"(a)") "--- 20. cold, dry column started with firn accumulates (D46) ---"
+
+        call chion_const_init(c)
+
+        call bessi_par_init(bsi%par)
+        call bessi_alloc(bsi,1)
+        call bessi_init_state(bsi,c,swe=[SWE_INIT],t_init=[T_INIT])
+
+        call bessi_par_init(bsi0%par)
+        call bessi_alloc(bsi0,1)
+        call bessi_init_state(bsi0,c)
+
+        s0     = column_storage(bsi,1)
+        precip = 0.0_wp_acc
+
+        do iyr = 1, NYEARS
+            ts_sum  = 0.0_wp_acc
+            alb_sum = 0.0_wp_acc
+            t_sum   = 0.0_wp_acc
+            do iday = 1, NDAY_YEAR
+                call plateau_forcing(iday,T_PLATEAU,SF_PLATEAU,forc)
+                precip = precip + real(forc%snowfall_rate*real(sec_day,wp),wp_acc)
+                call bessi_column_step(bsi, 1,forc,c)
+                call bessi_column_step(bsi0,1,forc,c)
+                ts_sum  = ts_sum  + bsi%now%t_srf(1)
+                alb_sum = alb_sum + bsi%now%albedo(1)
+                t_sum   = t_sum   + forc%air_temperature
+            end do
+        end do
+
+        ! Means over the last year.
+        ts_mean  = real(ts_sum /NDAY_YEAR,wp)
+        alb_mean = real(alb_sum/NDAY_YEAR,wp)
+        t_mean   = real(t_sum  /NDAY_YEAR,wp)
+
+        write(*,"(a,f8.2,a)")       "         snowfall over 100 yr         ", precip, " kg m-2"
+        write(*,"(a,f8.2,a,f8.2,a)") "         storage from empty           ", &
+                                    column_storage(bsi0,1), " kg m-2, sublimated ", &
+                                    bsi0%now%sublimation(1), " kg m-2"
+        write(*,"(a,f8.2,a,f8.2,a,f8.2,a)") "         storage from 500 kg m-2      ", &
+                                    column_storage(bsi,1), " kg m-2 (+", column_storage(bsi,1) - s0, &
+                                    "), sublimated ", bsi%now%sublimation(1), " kg m-2"
+        write(*,"(a,f9.3,a,f8.3,a,f6.3)") "         last year: mean t_srf ", ts_mean, &
+                                          " K (air ", t_mean, "), mean albedo ", alb_mean
+
+        call check("firn start: storage grows", column_storage(bsi,1) .gt. s0, nfail)
+        call check("firn start: stores more than from empty", &
+                   column_storage(bsi,1) - s0 .gt. column_storage(bsi0,1), nfail)
+        call check("firn start: mean t_srf within 5 K of the air", abs(ts_mean - t_mean) .lt. 5.0_wp, nfail)
+        call check("firn start: mean albedo is dry snow's (> 0.75)", alb_mean .gt. 0.75_wp, nfail)
+        call check("firn start: no melt, no runoff", &
+                   bsi%now%melt(1) .eq. 0.0_wp_acc .and. bsi%now%runoff(1) .eq. 0.0_wp_acc, nfail)
+        call check_close("firn start: mass closes with S0 as initial storage", &
+                         closure_lhs(bsi,1) - s0,precip,CLOSURE_TOL,nfail)
+
+        call bessi_dealloc(bsi)
+        call bessi_dealloc(bsi0)
+
+        write(*,*)
+
+        return
+
+    end subroutine test_cold_plateau_from_firn
 
     subroutine check(label,condition,nfail)
 
