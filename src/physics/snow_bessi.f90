@@ -21,7 +21,7 @@ module snow_bessi
     !      else; resolve use_prescribed_albedo
     !   2  accumulation (snow + rain, split/merge, depth cap)
     !   3  fresh snow onto a column that started bare -> temperature(1:n) = T_air
-    !      and t_srf = T_air (D45), then the near-surface remesh (fine layers only)
+    !      and t_srf = min(T_air, T0) (D45), then the near-surface remesh (fine layers only)
     !   4  prescribed albedo, if any, applied BEFORE the bare-surface test
     !   5  no surface snow -> bare-ice ablation, accumulate diagnostics, RETURN
     !      (percolation and refreezing are skipped ENTIRELY -- trap, see below);
@@ -796,11 +796,14 @@ contains
         ! (T0 for bare ice without a substrate) is not the fresh snow's.
         ! Linearized about T0, a thin cold layer emits ~40 W m-2 too little
         ! longwave, comes out too warm and sublimates away within the step.
+        ! Capped at T0: a snow surface is never above melting, and fresh snow
+        ! in air above freezing linearized about T_air > T0 melts far too much
+        ! (2.5x the melt of a 20-yr ablation cycle, Chion.jl#29).
 
         if (forc%snowfall_rate .gt. 0.0_wp) then
             if (started_without_surface_snow) then
                 temperature(1:n) = forc%air_temperature
-                if (BARE_SURFACE_TEMPERATURE_FROM_BELOW) t_srf = forc%air_temperature
+                if (BARE_SURFACE_TEMPERATURE_FROM_BELOW) t_srf = min(forc%air_temperature, c%T0)
             end if
         end if
 

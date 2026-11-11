@@ -20,7 +20,7 @@ tag is the port itself, summarised rather than enumerated.
   and the albedo at `alpha_ice`. Sublimation emptying the column reset `t_srf` to `T0`, about
   which the next step linearized the surface fluxes. A column left bare now has the
   temperature of the surface beneath (substrate: solved; no substrate: `T0`; land: air), and
-  fresh snow on a bare column starts its interface at the air temperature. Chion.jl has the
+  fresh snow on a bare column starts its interface at the air temperature, capped at `T0`. Chion.jl has the
   defect; `legacy_chion` keeps it (D45).
 
 ## [v0.2.0] — 2026-10-23
