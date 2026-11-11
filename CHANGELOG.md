@@ -8,6 +8,14 @@ All notable changes to chion are recorded here. Format follows
 the CLIMBER-X SEMIX surface-scheme port on top of it; the history before this
 tag is the port itself, summarised rather than enumerated.
 
+## [Unreleased]
+
+### Fixed
+
+- ITM latitude offset is symmetric about the equator, `itm_c + itm_b*(|lat| - |itm_lat0|)`
+  (was `itm_c + itm_b*(lat - itm_lat0)`, which gave Antarctica +235 W m-2 with the Greenland
+  parameters). Unchanged in the Northern Hemisphere with `itm_lat0 > 0` (D44).
+
 ## [v0.2.0] — 2026-10-23
 
 Synced with Chion.jl `main` `9ec6cc7` (= `03bb445`; `docs/PLAN_dev_nils.md`, deviations

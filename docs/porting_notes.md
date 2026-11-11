@@ -938,6 +938,17 @@ being nudged by a sub-ulp transfer. In a dp build the fill threshold stays EPS_T
 and the cap tolerance is ~1e-14 kg m-2; the harness gate is unaffected. Not under
 `legacy_chion` (no physics).
 
+## After v0.2.0
+
+### D44. ITM latitude offset: symmetric about the equator
+**What:** `itm_c_lat` is linear in the distance from the equator, `c + b*(|lat| - |lat0|)`,
+instead of smbpal's `c + b*(lat - lat0)`. `|lat0| >= 90` still disables it. Chion.jl's
+`_itm_latitude_offset` takes the same form.
+**Why:** with the Greenland-tuned `itm_c = -45`, `itm_b = -2`, `itm_lat0 = 65`, the old form
+gave Antarctica (lat ~ -75) an offset of +235 W m-2 instead of -65.
+**Impact:** none for `lat, lat0 > 0`; Southern-Hemisphere ITM columns change. `test_itm`'s
+smbpal reference keeps smbpal's form; its columns are northern. Not under `legacy_chion`.
+
 ---
 
 ## WP-wide build note

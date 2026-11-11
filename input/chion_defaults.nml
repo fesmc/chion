@@ -435,8 +435,8 @@
     trans_c             = 0.01              ! [1] Unused by the active transmissivity form
     itm_c               = -45.0             ! [W m-2] ITM offset
     itm_t               = 10.0              ! [W m-2 K-1] ITM temperature coefficient
-    itm_b               = -2.0              ! [W m-2 deg-1] Latitude slope of itm_c
-    itm_lat0            = 65.0              ! [deg N] Reference latitude; |lat0| >= 90 disables
+    itm_b               = -2.0              ! [W m-2 deg-1] Slope of itm_c in |latitude|
+    itm_lat0            = 65.0              ! [deg] Reference latitude (its absolute value; either hemisphere); |lat0| >= 90 disables
     H_snow_max          = 5000.0            ! [mm w.e.] Snowpack cap
     Pmaxfrac            = 0.6               ! [1] Refreezing factor
     H_snow_crit_desert  = 10.0              ! [mm w.e.] Critical snow depth, PDDs <= 100
@@ -459,9 +459,11 @@
 !   sqrt-elevation form (smb_itm.f90:116). Kept so the parameter set
 !   matches smbpal's exactly.
 !
-! itm_lat0
-!   |itm_lat0| >= 90 disables the latitude dependence of itm_c
-!   entirely, which is what the default does.
+! itm_b, itm_lat0
+!   itm_c varies as itm_c + itm_b*(|lat| - |itm_lat0|): linear in the
+!   distance from the equator, the same in both hemispheres (smbpal's
+!   form, c + b*(lat - lat0), for lat and lat0 > 0). |itm_lat0| >= 90
+!   disables the latitude dependence of itm_c entirely.
 !
 ! H_snow_crit_desert
 !   Has no zero guard in smbpal; a value of 0 divides by zero
