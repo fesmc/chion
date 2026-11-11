@@ -956,7 +956,10 @@ the interface the energy solve found (prognostic); `T0` for bare ice without a s
 (BESSI's bare ice at the melting point); the air on land (D41). The sublimation kernel no
 longer resets it to `T0` when it empties the column (`apply_snow_surface_vapor_mass_flux`).
 Fresh snow on a column that started bare starts its interface at the air temperature, as
-its layers (step 3). Reverted under `legacy_chion` (`BARE_SURFACE_TEMPERATURE_FROM_BELOW`).
+its layers (step 3), capped at `T0`: a snow surface is never above melting, and in air above
+freezing an interface at `T_air > T0` linearizes the melting surface's fluxes about a
+surface that cannot exist (20 yr at 268 K, 80 kg m-2 yr-1 on the substrate: runoff
+241 405 uncapped, 140 612 capped, 145 182 before D45; Chion.jl#29 takes the same cap). Reverted under `legacy_chion` (`BARE_SURFACE_TEMPERATURE_FROM_BELOW`).
 
 **Why:** `t_srf` is the point the energy solve linearizes the surface fluxes about
 (`Ts_n = t_srf`, `snow_energy.f90`). Chion.jl resets it to `T0` when sublimation empties
