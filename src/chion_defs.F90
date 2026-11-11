@@ -211,7 +211,7 @@ module chion_defs
     !     chion takes it from what lies beneath (the solved substrate surface,
     !     T0 for bare ice without one, the air on land) and starts fresh snow's
     !     interface at the air temperature, like its layers
-    !     (docs/porting_notes.md D44).
+    !     (docs/porting_notes.md D45).
     !
     ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
     ! the plain build is gated against Chion.jl for PDD.

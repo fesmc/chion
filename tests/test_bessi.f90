@@ -1997,7 +1997,7 @@ contains
     end subroutine test_bare_land
 
     ! =====================================================================
-    ! Test 18 -- a cold, dry column from empty builds snow (D44)
+    ! Test 18 -- a cold, dry column from empty builds snow (D45)
     ! =====================================================================
 
     subroutine plateau_forcing(iday,t_mean,snowfall_year,forc)
@@ -2052,7 +2052,7 @@ contains
         ! fluxes about 273 K, the thin snow comes out too warm and sublimates
         ! within the step, and so on every day. The column stays "bare ice"
         ! for good, reporting t_srf = T0 and alpha_ice, its snowfall all
-        ! sublimated. chion (D44) builds a firn column instead, with the
+        ! sublimated. chion (D45) builds a firn column instead, with the
         ! ice substrate (default) and without.
         !
         ! (a) one step: thin snow sublimating away over a substrate at 240 K
@@ -2084,7 +2084,7 @@ contains
         ! 1e-6 is for 5 kg m-2 days). dp closes to ~5e-13.
         real(wp_acc), parameter :: CLOSURE_TOL = merge(2.0e-5_wp_acc,1.0e-10_wp_acc,wp .eq. sp)
 
-        write(*,"(a)") "--- 18. cold, dry column from empty builds snow (D44) ---"
+        write(*,"(a)") "--- 18. cold, dry column from empty builds snow (D45) ---"
 
         call chion_const_init(c)
 

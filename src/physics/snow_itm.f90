@@ -95,8 +95,9 @@ module snow_itm
 
         real(wp) :: itm_c                 ! [W m-2] ITM offset
         real(wp) :: itm_t                 ! [W m-2 K-1] ITM temperature coefficient
-        real(wp) :: itm_b                 ! [W m-2 deg-1] latitude slope of itm_c
-        real(wp) :: itm_lat0              ! [deg N] reference latitude; |lat0| >= 90 disables
+        real(wp) :: itm_b                 ! [W m-2 deg-1] slope of itm_c in |latitude|
+        real(wp) :: itm_lat0              ! [deg] reference latitude (its absolute value; either
+                                          ! hemisphere); |lat0| >= 90 disables
 
         real(wp) :: H_snow_max            ! [mm w.e.] snowpack cap
         real(wp) :: Pmaxfrac              ! [1] refreezing factor
@@ -719,18 +720,20 @@ contains
     end function calc_itm
 
     pure function itm_c_lat(c,b,lat0,lat) result(c2D)
-        ! smbpal itm_c_lat (smb_itm.f90:330-343). Linear latitude dependence
-        ! of the ITM offset.
+        ! smbpal itm_c_lat (smb_itm.f90:330-343), made hemisphere-symmetric:
+        ! the ITM offset is linear in the distance from the equator, |lat|,
+        ! so a Southern-Hemisphere column at -lat gets the same offset as one
+        ! at +lat. Equal to smbpal's c + b*(lat - lat0) for lat, lat0 > 0.
 
         implicit none
 
-        real(wp), intent(IN) :: c         ! [W m-2] offset at lat0
-        real(wp), intent(IN) :: b         ! [W m-2 deg-1]
-        real(wp), intent(IN) :: lat0      ! [deg N]
+        real(wp), intent(IN) :: c         ! [W m-2] offset at |lat| = |lat0|
+        real(wp), intent(IN) :: b         ! [W m-2 deg-1] slope in |lat|
+        real(wp), intent(IN) :: lat0      ! [deg] reference latitude (its absolute value; either hemisphere)
         real(wp), intent(IN) :: lat       ! [deg N]
         real(wp) :: c2D                   ! [W m-2]
 
-        c2D = c + b*(lat - lat0)
+        c2D = c + b*(abs(lat) - abs(lat0))
 
         return
 

@@ -106,7 +106,7 @@ yr-1 started empty stores nothing in 100 years (with a firn start: 24 kg m-2 yr-
 column sets its layers to the air temperature, not `Tsrf`).
 *Fix:* leave `Tsrf` as the solve set it when the column empties (substrate: the solved
 interface; `T0` only for bare ice without one), and start fresh snow on a bare column at
-the air temperature, `Tsrf` included. *chion:* D44.
+the air temperature, `Tsrf` included. *chion:* D45.
 
 ## B. Physics choices to consider
 

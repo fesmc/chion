@@ -21,7 +21,7 @@ module snow_bessi
     !      else; resolve use_prescribed_albedo
     !   2  accumulation (snow + rain, split/merge, depth cap)
     !   3  fresh snow onto a column that started bare -> temperature(1:n) = T_air
-    !      and t_srf = T_air (D44), then the near-surface remesh (fine layers only)
+    !      and t_srf = T_air (D45), then the near-surface remesh (fine layers only)
     !   4  prescribed albedo, if any, applied BEFORE the bare-surface test
     !   5  no surface snow -> bare-ice ablation, accumulate diagnostics, RETURN
     !      (percolation and refreezing are skipped ENTIRELY -- trap, see below);
@@ -41,7 +41,7 @@ module snow_bessi
     !  14  refreezing
     !  15  near-surface remesh (fine layers only)
     !  16  final albedo fixup (and snow age), the blend on the final column;
-    !      a column left bare takes the temperature of the surface beneath (D44)
+    !      a column left bare takes the temperature of the surface beneath (D45)
     !
     ! ---------------------------------------------------------------------
     ! Traps honoured here (docs/PLAN.md section 5)
@@ -791,7 +791,7 @@ contains
         ! copies the reset slot temperature into layer 2, and a column with
         ! 0 < mass(1) <= TOL_EMPTY_LAYER already had layers below.
         !
-        ! So does its interface (D44): t_srf is the point the energy solve
+        ! So does its interface (D45): t_srf is the point the energy solve
         ! linearizes the surface fluxes about, and the bare surface's value
         ! (T0 for bare ice without a substrate) is not the fresh snow's.
         ! Linearized about T0, a thin cold layer emits ~40 W m-2 too little
@@ -1094,7 +1094,7 @@ contains
         if (.not. surface_has_snow(mass,n)) snow_age = 0.0_wp
 
         ! A column left bare by melt or sublimation has the temperature of the
-        ! surface beneath (D44): on a substrate the interface the solve found,
+        ! surface beneath (D45): on a substrate the interface the solve found,
         ! which the next step linearizes about; T0 for bare ice without one;
         ! the air on land (D41). Chion.jl's sublimation path resets it to T0
         ! even over a substrate at 230 K.

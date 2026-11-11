@@ -938,7 +938,18 @@ being nudged by a sub-ulp transfer. In a dp build the fill threshold stays EPS_T
 and the cap tolerance is ~1e-14 kg m-2; the harness gate is unaffected. Not under
 `legacy_chion` (no physics).
 
-### D44. Surface temperature of a column left bare, and of fresh snow on one
+## After v0.2.0
+
+### D44. ITM latitude offset: symmetric about the equator
+**What:** `itm_c_lat` is linear in the distance from the equator, `c + b*(|lat| - |lat0|)`,
+instead of smbpal's `c + b*(lat - lat0)`. `|lat0| >= 90` still disables it. Chion.jl's
+`_itm_latitude_offset` takes the same form.
+**Why:** with the Greenland-tuned `itm_c = -45`, `itm_b = -2`, `itm_lat0 = 65`, the old form
+gave Antarctica (lat ~ -75) an offset of +235 W m-2 instead of -65.
+**Impact:** none for `lat, lat0 > 0`; Southern-Hemisphere ITM columns change. `test_itm`'s
+smbpal reference keeps smbpal's form; its columns are northern. Not under `legacy_chion`.
+
+### D45. Surface temperature of a column left bare, and of fresh snow on one
 **What:** the interface temperature `t_srf` of a snow-free column is that of the surface
 beneath, set by the column step (`snow_bessi.f90`, steps 5 and 16): over the ice substrate,
 the interface the energy solve found (prognostic); `T0` for bare ice without a substrate
@@ -1032,7 +1043,7 @@ Collected across batch 1. Severity: **A** = wrong results, **B** = latent/condit
 |---|---|
 | fixed upstream | 1 (vapour diagnostics, `03bb445`), 5, 6, 7, 13, 20b `273.15`/`86400` (PDD rewrite `ce6a68d`, `pdd_defects.md`), 4 (PDD active columns `6fca5d7`, kernel), 11 and 20 (bare-ice rain, `8fff530`, with a double count: D29), 19 (aging x dt, `6d077c5`), 24 (decoded time axis), 26 (`t` coordinate, `ecd4992`) |
 | still open | 3, 8, 21, 23, 25, D31 merge mean, 20b's single `sigma` (`pdd_defects.md` D11), 21b ITM long names |
-| new since `03bb445` | 27 (`Tsrf = T(1)` in the bottom deplete), 28 (substrate not reset), D29's double count in the substrate bare path, layer 5 unbounded under fine layers (D32), fixed-orbit TOA (D33), bare-ice latent heat (D35), `R_air` literal (D38), polar-night diurnal (D39), thin-snow albedo and land columns (D40, D41), aging refresh (D30), `Tsrf = T0` on an emptied column (D44) |
+| new since `03bb445` | 27 (`Tsrf = T(1)` in the bottom deplete), 28 (substrate not reset), D29's double count in the substrate bare path, layer 5 unbounded under fine layers (D32), fixed-orbit TOA (D33), bare-ice latent heat (D35), `R_air` literal (D38), polar-night diurnal (D39), thin-snow albedo and land columns (D40, D41), aging refresh (D30), `Tsrf = T0` on an emptied column (D45) |
 | not re-checked | 2, 9, 10, 12, 14-18, 19b, 22 |
 
 ### Mass-weighted mean of equal values is not exact (D31)

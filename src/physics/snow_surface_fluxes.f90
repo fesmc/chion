@@ -645,7 +645,7 @@ contains
         ! solve used the linearization about Ts^n -- trap 2 again, deliberate.
         ! t_srf is left as the solve set it, also when the column empties: the
         ! temperature of the surface left bare is the column step's to set
-        ! (D44). Under legacy_chion an emptied column resets it to T0, as in
+        ! (D45). Under legacy_chion an emptied column resets it to T0, as in
         ! Chion.jl.
         !
         ! Two branches, on the NEW interface temperature:
