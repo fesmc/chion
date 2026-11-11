@@ -305,16 +305,32 @@ contains
 
     end subroutine pdd_dealloc
 
-    subroutine pdd_init_state(pdd)
+    subroutine pdd_init_state(pdd,swe)
         ! Cold start. Chion.jl PDDState(model) zeroes all four fields
         ! (src/state.jl:187-195). Note there is no equivalent of BESSI's
-        ! density_init / temperature_init: a PDD column starts bare.
+        ! density_init / temperature_init: a PDD column starts bare, or, with
+        ! swe (chion_init_state, D46), with that snowpack as initial storage.
 
         implicit none
 
-        type(pdd_class), intent(INOUT) :: pdd
+        type(pdd_class),    intent(INOUT) :: pdd
+        real(wp), optional, intent(IN)    :: swe(:)   ! (ncol) [kg m-2] >= 0
 
-        pdd%now%snowpack_swe = 0.0_wp
+        if (present(swe)) then
+            if (size(swe) .ne. pdd%now%ncol) then
+                write(io_unit_err,*) "pdd_init_state:: Error: swe must have length ncol."
+                write(io_unit_err,*) "ncol, size(swe) = ", pdd%now%ncol, size(swe)
+                stop "Program stopped."
+            end if
+            if (any(.not. (swe .ge. 0.0_wp))) then
+                write(io_unit_err,*) "pdd_init_state:: Error: swe must be non-negative."
+                write(io_unit_err,*) "min(swe) = ", minval(swe)
+                stop "Program stopped."
+            end if
+            pdd%now%snowpack_swe = swe
+        else
+            pdd%now%snowpack_swe = 0.0_wp
+        end if
         pdd%now%smb_ice      = 0.0_wp_acc
         pdd%now%runoff       = 0.0_wp_acc
         pdd%now%pdd_sum      = 0.0_wp_acc

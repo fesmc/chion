@@ -10,6 +10,15 @@ tag is the port itself, summarised rather than enumerated.
 
 ## [Unreleased]
 
+### Added
+
+- Optional initial snowpack at the cold start: `chion_init_state(chn, swe, t_init)`, (ncol)
+  fields of snow [kg m-2] and its temperature [K], capped at `T0`. BESSI builds a firn column
+  at the new `&bessi density_init_firn` (350 kg m-3), layered as one snowfall of `swe` onto an
+  empty column, and starts the substrate and `t_srf` of every column at `min(t_init, T0)`;
+  ITM sets `H_snow` and `tsrf`, PDD `snowpack_swe`. Initial storage, not SMB: the
+  accumulators start at zero. Without the arguments the cold start is unchanged (D46).
+
 ### Fixed
 
 - ITM latitude offset is symmetric about the equator, `itm_c + itm_b*(|lat| - |itm_lat0|)`

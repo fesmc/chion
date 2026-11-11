@@ -982,6 +982,42 @@ can still settle thin: at 12 kg m-2 yr-1 and -45 C it holds ~2 kg m-2 under the 
 albedo (~0.5) and sublimates its snowfall, where a column started with firn accumulates
 (D40's `swe_crit_albedo`, not this defect).
 
+### D46. Optional initial snowpack at the cold start
+**What:** `chion_init_state(chn, swe, t_init)` takes two optional (ncol) fields: `swe`
+[kg m-2], the initial snowpack, and `t_init` [K], the temperature of its snow, its surface
+and the BESSI ice substrate, capped at `T0`. Without them the cold start is unchanged, bit
+for bit. BESSI: a column with `swe > 0` starts as a dry firn column at the new `&bessi
+density_init_firn` (350 kg m-3) and `min(t_init, T0)`, `t_srf` likewise, albedo
+`alpha_dry`; a column with `swe = 0` starts bare, its substrate and `t_srf` at
+`min(t_init, T0)` instead of `temperature_init` (273 K) and `T0`. `swe` requires `t_init`.
+ITM: `H_snow = swe`, `tsrf = min(t_init, T0)`. PDD: `snowpack_swe = swe` (`t_init` unused).
+The snowpack is initial storage: every accumulator, and the SMB and flux baselines, start at
+zero. A column reset by `chion_set_active_mask` returns to the default (bare) cold start.
+
+**Layering:** `bessi_init_firn_column` lays `swe` on the empty column as one layer and hands
+it to the routine that owns the layering of a grown column: `remesh_near_surface_layers`
+with fine layers (cap them to their thicknesses, the excess into the first layer below,
+which is split by mass, D32), `rebalance_layer` at the surface without. So it has the
+invariants of a column grown by accumulation, and the first step repairs nothing: the fine
+layers at their thicknesses; below them one layer in `[mass_min, mass_max]` holding the
+remainder, over layers of `mass_split` (a split leaves `mass_split` below the layer it
+splits, so the partial layer is the upper one, not the bottom one); `n <= Ntot`, the bottom
+layer taking the excess by bottom merges. With the defaults, 500 kg m-2 is 7, 17.5, 35, 105,
+335.5 kg m-2 and 2000 kg m-2 adds five layers of 300. Under `legacy_chion` everything below
+the fine layers stays in one layer, as in a grown legacy column. A `swe` deeper than the
+22.5 m cap at `density_init_firn`, or one the column cannot hold without exporting mass
+(`Ntot` at most one above the fine layers), is an error.
+
+**Why:** an ice-sheet host cold-starts on ice columns, which are never snow-free. A dry,
+cold BESSI column started empty can settle thin under the thin-snow albedo (D40): at -45 C
+and 12 kg m-2 yr-1 it holds 1.8 kg m-2 after 100 years and sublimates its snowfall; started
+with 500 kg m-2 at 228 K it stores 1086 kg m-2 (+5.9 kg m-2 yr-1), albedo 0.81, `t_srf`
+226.3 K (air 228.2; `tests/test_bessi.f90` test 20). A cold `t_init` also spares a bare
+substrate the 1-2 years of relaxing from 273 K.
+
+**Impact:** none without the arguments. Chion.jl: same option proposed. Not reverted under
+`legacy_chion` (an input, not a correction).
+
 ---
 
 ## WP-wide build note

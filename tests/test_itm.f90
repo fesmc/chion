@@ -107,6 +107,20 @@ program test_itm
     call check("itm_init_state without H_snow would seed at H_snow_max", &
                abs(itm%par%H_snow_max - 5.0e3_wp) .lt. 1.0e-6_wp, nfail)
 
+    ! Initial snowpack of chion_init_state (D46): H_snow = swe, and t_init
+    ! sets tsrf = min(t_init, T0); without t_init tsrf stays T0.
+    call itm_init_state(itm,cn,H_snow=[500.0_wp, 0.0_wp, 20.0_wp], &
+                        t_init=[230.0_wp, 280.0_wp, cn%T0])
+    call check("itm_init_state: H_snow = swe", &
+               all(itm%now%H_snow .eq. [500.0_wp, 0.0_wp, 20.0_wp]), nfail)
+    call check("itm_init_state: tsrf = min(t_init, T0)", &
+               all(itm%now%tsrf .eq. [230.0_wp, cn%T0, cn%T0]), nfail)
+    call itm_init_state(itm,cn,H_snow=[500.0_wp, 0.0_wp, 20.0_wp])
+    call check("itm_init_state: without t_init, tsrf = T0", all(itm%now%tsrf .eq. cn%T0), nfail)
+
+    ! The run below starts from its own snowpack.
+    call itm_init_state(itm,cn,H_snow=[400.0_wp, 60.0_wp, 5.0_wp])
+
     ! === Column configurations ==========================================
     cname = [character(len=16) :: "ice sheet","tundra","ocean"]
     z_srf = [1500.0_wp,  500.0_wp,  -10.0_wp]

@@ -336,18 +336,20 @@ contains
 
     end subroutine itm_dealloc
 
-    subroutine itm_init_state(itm,cn,H_snow)
+    subroutine itm_init_state(itm,cn,H_snow,t_init)
         ! Cold start. smbpal seeds the snowpack at its maximum thickness
         ! (smbpal.f90:117: smb%now%H_snow = smb%par%itm%H_snow_max), which is
         ! preserved as the default so a chion ITM run starting from scratch
         ! matches an smbpal run starting from scratch. Pass H_snow to
-        ! override, e.g. from a restart.
+        ! override, e.g. from a restart or chion_init_state's swe (D46);
+        ! t_init sets tsrf = min(t_init, T0) instead of T0.
 
         implicit none
 
         type(itm_class),         intent(INOUT) :: itm
         type(chion_const_class), intent(IN)    :: cn
-        real(wp), optional,      intent(IN)    :: H_snow(:)
+        real(wp), optional,      intent(IN)    :: H_snow(:)   ! (ncol) [mm w.e.]
+        real(wp), optional,      intent(IN)    :: t_init(:)   ! (ncol) [K]
 
         if (.not. allocated(itm%now%H_snow)) then
             write(io_unit_err,*) "itm_init_state:: Error: state not allocated. Call itm_alloc first."
@@ -373,6 +375,15 @@ contains
         itm%now%refrz    = 0.0_wp
         itm%now%melt_net = 0.0_wp
         itm%now%tsrf     = cn%T0
+
+        if (present(t_init)) then
+            if (size(t_init) .ne. itm%now%ncol) then
+                write(io_unit_err,*) "itm_init_state:: Error: t_init must have length ncol."
+                write(io_unit_err,*) "ncol, size(t_init) = ", itm%now%ncol, size(t_init)
+                stop "Program stopped."
+            end if
+            itm%now%tsrf = min(t_init,cn%T0)
+        end if
 
         itm%now%smb_cum    = 0.0_wp_acc
         itm%now%smbi_cum   = 0.0_wp_acc

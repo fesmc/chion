@@ -300,6 +300,7 @@
     mass_min         = 100.0                ! [kg m-2] Surface-layer mass that triggers a merge
     density_init     = 300.0                ! [kg m-3] Density assigned to an inactive layer slot
     temperature_init = 273.0                ! [K] Temperature assigned to an inactive layer slot
+    density_init_firn = 350.0               ! [kg m-3] Density of an initial snowpack (chion_init_state swe)
 
     ice_substrate_layers        = 5         ! [1] Thermal ice layers below the snow/firn column (0 = none)
     ice_substrate_top_thickness = 0.05      ! [m] Top substrate layer; each layer below is twice as thick
@@ -333,6 +334,14 @@
 !   The snow-depth cap is a fixed 22.5 m of solid depth
 !   (BESSI_REFERENCE_SNOW_DEPTH_M, Chion.jl 03bb445), independent of Ntot
 !   and mass_split; changing Ntot does not move it.
+!
+! density_init_firn
+!   Only used when the host passes an initial snowpack to chion_init_state
+!   (swe, t_init; D46): each column with swe > 0 starts as a firn column of
+!   that mass at this density, layered as one snowfall of swe onto an empty
+!   column (fine near-surface layers, then mass_split layers), at
+!   min(t_init, T0). Must stay below rho_i; swe/density_init_firn must fit
+!   in the 22.5 m depth cap.
 !
 ! ice_substrate_layers, ice_substrate_top_thickness
 !   Chion.jl 03bb445: fixed layers of glacier ice (0.05, 0.10, 0.20, 0.40,

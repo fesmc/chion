@@ -10,6 +10,7 @@ module chion_api
     !
     !     call chion_init(chn,filename,ncol,group="chion",cnst=cnst)  ! params + allocate
     !     call chion_init_state(chn)                        ! cold start
+    !     ! or chion_init_state(chn,swe=swe,t_init=t_init)  ! with a snowpack
     !     do while (...)
     !         ! host writes chn%forc%<field>(:) directly
     !         call chion_update(chn,dt_days)
@@ -311,8 +312,23 @@ contains
 
     end subroutine chion_init
 
-    subroutine chion_init_state(chn)
+    subroutine chion_init_state(chn,swe,t_init)
         ! Cold start.
+        !
+        ! Optional initial snowpack (D46), each of length ncol:
+        !   swe    [kg m-2] snowpack per column, >= 0;
+        !   t_init [K]      temperature of that column's snow, its surface and
+        !                   (BESSI) its ice substrate, capped at T0.
+        !   BESSI: a column with swe > 0 starts as a firn column of that mass
+        !          at &bessi density_init_firn and min(t_init, T0); a column
+        !          with swe = 0 starts bare, its substrate and t_srf at
+        !          min(t_init, T0). swe requires t_init.
+        !   ITM:   H_snow = swe (default H_snow_max); tsrf = min(t_init, T0).
+        !   PDD:   snowpack_swe = swe; t_init is not used.
+        ! The snowpack is initial storage, not SMB: every accumulator and the
+        ! SMB / flux baselines start at zero. Without the arguments the state
+        ! is the default cold start, bit for bit. A deactivated column is
+        ! reset to the default (bare) cold start, not to this one.
         !
         ! Restart reading is deliberately NOT folded in here. chion_io depends
         ! on this module for chion_class, so chion_api cannot call chion_io
@@ -331,9 +347,32 @@ contains
 
         implicit none
 
-        type(chion_class), intent(INOUT) :: chn
+        type(chion_class),  intent(INOUT) :: chn
+        real(wp), optional, intent(IN)    :: swe(:)      ! (ncol) [kg m-2]
+        real(wp), optional, intent(IN)    :: t_init(:)   ! (ncol) [K]
 
-        call chion_model_init_state(chn%par,chn%c,chn%bsi,chn%pdd,chn%itm)
+        if (present(swe)) then
+            if (size(swe) .ne. chn%grd%ncol) then
+                write(io_unit_err,*) "chion_init_state:: Error: swe must have length ncol."
+                write(io_unit_err,*) "ncol, size(swe) = ", chn%grd%ncol, size(swe)
+                stop "Program stopped."
+            end if
+            if (any(.not. (swe .ge. 0.0_wp))) then
+                write(io_unit_err,*) "chion_init_state:: Error: swe must be non-negative."
+                write(io_unit_err,*) "min(swe) = ", minval(swe)
+                stop "Program stopped."
+            end if
+        end if
+
+        if (present(t_init)) then
+            if (size(t_init) .ne. chn%grd%ncol) then
+                write(io_unit_err,*) "chion_init_state:: Error: t_init must have length ncol."
+                write(io_unit_err,*) "ncol, size(t_init) = ", chn%grd%ncol, size(t_init)
+                stop "Program stopped."
+            end if
+        end if
+
+        call chion_model_init_state(chn%par,chn%c,chn%bsi,chn%pdd,chn%itm,swe,t_init)
 
         ! Bring the SMB baseline in line with the state that was just built,
         ! so a chion_get_smb before the first chion_update reports zero rather
@@ -1274,6 +1313,7 @@ contains
         call nml_read(filename,group,"mass_min",        par%mass_min,        init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"density_init",    par%density_init,    init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"temperature_init",par%temperature_init,init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
+        call nml_read(filename,group,"density_init_firn",par%density_init_firn,init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
 
         call nml_read(filename,group,"ice_substrate_layers",       par%ice_substrate_layers,       init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
         call nml_read(filename,group,"ice_substrate_top_thickness",par%ice_substrate_top_thickness,init=init_pars,defaults_file=def_file,defaults_group=def_bessi)
