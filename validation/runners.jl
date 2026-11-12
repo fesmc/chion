@@ -450,7 +450,10 @@ function run_julia_itm(; forcing::AbstractString, outfile::AbstractString,
     itm_forcing = Chion.SnowpackForcing(f.calendar,
                                         merge(f.fields, (ice_thickness=hi, annual_pdd=pdd)))
 
-    model = ITMModel(g; ITM_PARAMS...)
+    # Chion.jl 38cb742 dropped the unused `trans_c` (chion still reads it, smbpal's &itm).
+    params = :trans_c in fieldnames(ITMModel) ? ITM_PARAMS :
+             Base.structdiff(ITM_PARAMS, NamedTuple{(:trans_c,)})
+    model = ITMModel(g; params...)
 
     # "all", not the names in ITM_VARS: the selector parser lowercases every name
     # (io.jl), so `H_snow` cannot be selected individually (upstream defect).

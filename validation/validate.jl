@@ -373,9 +373,10 @@ layers held at `NEAR_SURFACE_THICKNESSES` by the conservative remesh, the
 every BESSI field, same forcing). Coverage, on chion's output: the limited
 layers sit at their target thickness at the end of every step with a layer
 below them; cap-down fires (snowfall pushed into layer 5 of `cold_dry`, no
-melt); fill-up fires (layer 5 gives mass while `melting` melts); and layer 5,
-which Chion.jl never splits or merges (N7; chion's C4b split/merge is reverted
-under legacy), outgrows `mass_max` while the columns stay at <= 5 layers.
+melt); fill-up fires (layer 5 gives mass while `melting` melts); and the
+layers below the fine ones are split by mass (Chion.jl `38cb742`
+`_split_deep_layers!`): the columns grow beyond 5 layers, layer 5 never beyond
+`mass_max`.
 """
 function run_bessi_fine(fbessi::AbstractString)
     jl = run_julia_bessi(; forcing=fbessi, outfile="julia_bessi_fine.nc", workdir=WORKDIR,
@@ -421,8 +422,8 @@ function run_bessi_fine(fbessi::AbstractString)
                nchecked > 0 && noff == 0),
               ("fine: cap-down fires (snowfall pushed into layer 5, cold_dry)", cap > 0),
               ("fine: fill-up fires (layer 5 refills the top while melting)", fill > 0),
-              ("fine: layer 5 is never split (N <= 5, layer 5 beyond mass_max; N7)",
-               nmax <= 5 && m5max > 500.0)]
+              ("fine: deep layers are split (N > 5, layer 5 at most mass_max)",
+               nmax > 5 && m5max <= 500.0)]
     println()
     println("--- coverage assertions (fine near-surface layers) ---")
     for (label, ok) in checks
