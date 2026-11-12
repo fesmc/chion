@@ -2427,8 +2427,11 @@ contains
                                           " K (air ", t_mean, "), mean albedo ", alb_mean
 
         call check("firn start: storage grows", column_storage(bsi,1) .gt. s0, nfail)
-        call check("firn start: stores more than from empty", &
-                   column_storage(bsi,1) - s0 .gt. column_storage(bsi0,1), nfail)
+        ! Started empty, the column settles thin under the thin-snow albedo
+        ! (D40); without the blend (legacy_chion) it accumulates as well.
+        if (ALBEDO_THIN_SNOW_BLEND) &
+            call check("firn start: stores more than from empty", &
+                       column_storage(bsi,1) - s0 .gt. column_storage(bsi0,1), nfail)
         call check("firn start: mean t_srf within 5 K of the air", abs(ts_mean - t_mean) .lt. 5.0_wp, nfail)
         call check("firn start: mean albedo is dry snow's (> 0.75)", alb_mean .gt. 0.75_wp, nfail)
         call check("firn start: no melt, no runoff", &
