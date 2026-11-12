@@ -1,8 +1,8 @@
 program test_forcing_host
     ! Acceptance test: chion_forcing_host.
     !
-    !   1. forcing_shortwave_cloud: TOA*tau_clear(z)*(1 - cloud), and the cloud
-    !      proxy reads that cloud fraction back.
+    !   1. forcing_shortwave_transmissivity: TOA*(trans0 + trans_per_km*z[km]),
+    !      clamped to [0, 1]; non-finite or negative height = sea level.
     !   2. forcing_wind_speed: elevation term; a uniform slope gives u_s*slope
     !      inside the grid, the same on a grid twice as coarse; at least 0.
     !   3. forcing_tvar_sigma: the line and its bounds.
@@ -10,9 +10,10 @@ program test_forcing_host
     !      lag-one correlation near exp(-dt/tau), reproducible from the seed,
     !      and the Park-Miller start (seed 1: x = 33614, 564950498).
 
-    use chion_defs, only : wp, chion_const_class, chion_const_init
+    use, intrinsic :: ieee_arithmetic, only : ieee_value, ieee_quiet_nan
+
+    use chion_defs, only : wp
     use chion_forcing_host
-    use snow_surface_fluxes, only : clear_sky_transmissivity
 
     implicit none
 
@@ -41,17 +42,25 @@ contains
 
     subroutine test_shortwave(nfail)
         integer, intent(inout) :: nfail
-        type(chion_const_class) :: c
-        real(wp) :: sw
+        real(wp) :: nan_wp
 
-        write(*,*); write(*,"(a)") "--- shortwave from a cloud fraction ---"
-        call chion_const_init(c)
-        sw = forcing_shortwave_cloud(c, 500.0_wp, 1500.0_wp, 0.31_wp)
-        call check_close("SWdn = TOA (0.85 + 0.075*1.5)(1 - 0.31)", sw, 500.0_wp*0.9625_wp*0.69_wp, 1.0e-6_wp, nfail)
-        call check_close("SWdn/(TOA tau_clear) = 1 - cloud", sw/(500.0_wp*clear_sky_transmissivity(c, 1500.0_wp)), &
-                         0.69_wp, 1.0e-6_wp, nfail)
-        call check_close("negative height = sea level", forcing_shortwave_cloud(c, 500.0_wp, -50.0_wp, 0.31_wp), &
-                         500.0_wp*0.85_wp*0.69_wp, 1.0e-6_wp, nfail)
+        write(*,*); write(*,"(a)") "--- shortwave through a transmissivity ---"
+        nan_wp = ieee_value(nan_wp, ieee_quiet_nan)
+        call check_close("Greenland: SWdn = TOA (0.587 + 0.052*1.5)", &
+                         forcing_shortwave_transmissivity(500.0_wp, 1500.0_wp, 0.587_wp, 0.052_wp), &
+                         500.0_wp*(0.587_wp + 0.052_wp*1.5_wp), 1.0e-6_wp, nfail)
+        call check_close("negative height = sea level", &
+                         forcing_shortwave_transmissivity(500.0_wp, -50.0_wp, 0.587_wp, 0.052_wp), &
+                         500.0_wp*0.587_wp, 1.0e-6_wp, nfail)
+        call check_close("NaN height = sea level", &
+                         forcing_shortwave_transmissivity(500.0_wp, nan_wp, 0.587_wp, 0.052_wp), &
+                         500.0_wp*0.587_wp, 1.0e-6_wp, nfail)
+        call check_close("transmissivity capped at 1", &
+                         forcing_shortwave_transmissivity(500.0_wp, 9000.0_wp, 0.68_wp, 0.041_wp), &
+                         500.0_wp, 1.0e-6_wp, nfail)
+        call check_close("transmissivity floored at 0", &
+                         forcing_shortwave_transmissivity(500.0_wp, 1000.0_wp, -0.2_wp, 0.1_wp), &
+                         0.0_wp, 1.0e-6_wp, nfail)
     end subroutine test_shortwave
 
     subroutine test_wind(nfail)

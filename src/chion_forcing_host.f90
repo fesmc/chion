@@ -3,13 +3,12 @@ module chion_forcing_host
     ! temperature and precipitation (library level; Chion.jl src/forcing.jl has
     ! the same functions). None is called by chion itself.
     !
-    ! - forcing_shortwave_cloud: the surface shortwave from the top-of-atmosphere
-    !   one, SWdn = TOA*tau_clear(z)*(1 - cloud), with tau_clear the cloud proxy's
-    !   clear-sky transmissivity (clear_sky_transmissivity), so the proxy's
-    !   cloudiness 1 - SWdn/(TOA*tau_clear) is the given cloud fraction. MAR
-    !   v3.14 1981-2010 over Greenland's ice: SWdn/TOA = 0.61 + 0.05 z[km] in
-    !   summer, cloud = 0.31 (with chion's TOA); CERES 2001-2020: Greenland 0.33,
-    !   Antarctica 0.23.
+    ! - forcing_shortwave_transmissivity: the surface shortwave from the
+    !   top-of-atmosphere one through a per-domain direct transmissivity linear in
+    !   the surface height, SWdn = TOA*min(max(trans0 + trans_per_km*z[km], 0), 1).
+    !   Summer fits with chion's TOA: MAR v3.14 1981-2010 over Greenland's ice
+    !   0.587 + 0.052 z[km]; CERES over Antarctica 0.68 + 0.041 z[km]. The cloud
+    !   proxy then diagnoses its own cloudiness from SWdn/TOA.
     ! - forcing_wind_speed: the wind from the surface elevation and slope on a
     !   regular grid, U = u0 + u_z*max(z,0)[km] + u_s*|grad z|[m/km], the slope a
     !   centred difference over a fixed baseline of about L (2n cells,
@@ -27,36 +26,43 @@ module chion_forcing_host
     !   portable Park-Miller generator and Box-Muller, so a seed gives the same
     !   sequence with any compiler and in Chion.jl.
 
-    use chion_defs,          only : wp, chion_const_class
-    use snow_surface_fluxes, only : clear_sky_transmissivity
+    use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
+
+    use chion_defs, only : wp
 
     implicit none
 
     private
 
-    public :: forcing_shortwave_cloud
+    public :: forcing_shortwave_transmissivity
     public :: forcing_wind_speed
     public :: forcing_tvar_sigma
     public :: forcing_red_noise_monthly
 
 contains
 
-    elemental function forcing_shortwave_cloud(c,toa,height,cloud) result(sw_down)
-        ! SWdn = TOA*tau_clear(z)*(1 - cloud) [W m-2].
+    elemental function forcing_shortwave_transmissivity(toa,height,trans0,trans_per_km) result(sw_down)
+        ! SWdn = TOA*min(max(trans0 + trans_per_km*z/1000, 0), 1) [W m-2], z the
+        ! surface height floored at 0; a height that is not finite counts as 0.
 
         implicit none
 
-        type(chion_const_class), intent(IN) :: c
-        real(wp),                intent(IN) :: toa       ! [W m-2] top-of-atmosphere shortwave
-        real(wp),                intent(IN) :: height    ! [m] surface height
-        real(wp),                intent(IN) :: cloud     ! [1] cloud fraction
+        real(wp), intent(IN) :: toa            ! [W m-2] top-of-atmosphere shortwave
+        real(wp), intent(IN) :: height         ! [m] surface height
+        real(wp), intent(IN) :: trans0         ! [1] transmissivity at sea level
+        real(wp), intent(IN) :: trans_per_km   ! [km-1] its increase with height
         real(wp) :: sw_down
 
-        sw_down = toa*clear_sky_transmissivity(c,height)*(1.0_wp - cloud)
+        real(wp) :: z
+
+        z = 0.0_wp
+        if (ieee_is_finite(height)) z = max(height,0.0_wp)
+
+        sw_down = toa*min(max(trans0 + trans_per_km*z/1000.0_wp,0.0_wp),1.0_wp)
 
         return
 
-    end function forcing_shortwave_cloud
+    end function forcing_shortwave_transmissivity
 
     function forcing_wind_speed(z_srf,dx,u0,u_z,u_s,length_km) result(u)
         ! U = u0 + u_z*max(z,0)[km] + u_s*|grad z|[m/km], at least 0 [m s-1], on a
