@@ -750,17 +750,16 @@ contains
                    res%latent_heat_linear_coefficient .eq. 1.5_wp .and. &
                    res%latent_heat_constant_term .eq. 2.5_wp, nfail)
 
-        ! The distinguishing case: mass(1) between 0 and TOL_EMPTY_LAYER does
-        ! NOT take the early exit. If anyone "unifies" the thresholds, this
-        ! check fails.
+        ! mass(1) between 0 and TOL_EMPTY_LAYER takes the early exit too: the
+        ! threshold is surface_has_snow's (Chion.jl 38cb742).
         mass(1) = 1.0e-11_wp
         t_srf   = 999.0_wp
 
         call snow_energy_flux(mass,density,temperature,t_srf,3,c,forc,0.8_wp, &
                               0.0_wp,0.0_wp,3600.0_wp,res)
 
-        call check("mass(1)=1e-11 does NOT take the early exit (guard is <= 0)", &
-                   t_srf .ne. 999.0_wp, nfail)
+        call check("mass(1)=1e-11 takes the early exit (guard is TOL_EMPTY_LAYER)", &
+                   t_srf .eq. 999.0_wp, nfail)
 
         return
 

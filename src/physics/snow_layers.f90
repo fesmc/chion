@@ -508,12 +508,14 @@ contains
 
     subroutine remove_depleted_surface_and_route_water(mass,mass_w,density,temperature,n, &
                                                        runoff,c)
-        ! Remove an exhausted surface layer, first moving its residual liquid
-        ! water into layer 2 if one exists, or to runoff if it does not.
+        ! Remove an exhausted surface layer, first moving its residue -- its
+        ! liquid water and the negligible solid mass left (Chion.jl 38cb742)
+        ! -- into the liquid water of layer 2 if one exists, or to runoff if
+        ! it does not.
         !
-        ! Julia does not guard n == 0 here: with no layers, mass_w(1) (which is
-        ! zero after any reset) is added to runoff and remove_surface_layer
-        ! no-ops. Preserved.
+        ! Julia does not guard n == 0 here: with no layers, mass_w(1) and
+        ! mass(1) (which are zero after any reset) are added to runoff and
+        ! remove_surface_layer no-ops. Preserved.
 
         implicit none
 
@@ -525,10 +527,15 @@ contains
         real(wp_acc), intent(INOUT) :: runoff       ! [kg m-2] cumulative runoff
         type(chion_const_class), intent(IN) :: c
 
+        ! Local variables
+        real(wp_acc) :: residual
+
+        residual = real(mass_w(1),wp_acc) + real(max(mass(1),0.0_wp),wp_acc)
+
         if (n .gt. 1) then
-            mass_w(2) = mass_w(2) + mass_w(1)
+            mass_w(2) = real(real(mass_w(2),wp_acc) + residual,wp)
         else
-            runoff = runoff + real(mass_w(1),wp_acc)
+            runoff = runoff + residual
         end if
 
         mass_w(1) = 0.0_wp

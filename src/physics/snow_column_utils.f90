@@ -44,8 +44,8 @@ contains
         ! Gates the bare-ice branch of the column step, so this is one of the
         ! most consequential predicates in the model.
         !
-        ! NOTE the threshold is TOL_EMPTY_LAYER, while the energy solve's own
-        ! early exit uses mass(1) <= 0 (energy_flux.jl:343). The two differ.
+        ! The same threshold, TOL_EMPTY_LAYER, decides whether the energy solve
+        ! has snow rows and whether rain is held (Chion.jl 38cb742).
 
         implicit none
 

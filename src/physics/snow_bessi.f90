@@ -48,10 +48,10 @@ module snow_bessi
     ! Traps honoured here (docs/PLAN.md section 5)
     ! ---------------------------------------------------------------------
     ! * Step 5 is an EARLY RETURN. A column that is bare after accumulation
-    !   does not percolate and does not refreeze, even if it holds liquid
-    !   water (it can: rain falls into mass_w(1) whenever mass(1) > 0, which
-    !   is a weaker test than surface_has_snow). Water simply sits there until
-    !   the column has snow again.
+    !   does not percolate and does not refreeze. It holds no liquid water:
+    !   rain is held only above TOL_EMPTY_LAYER, the threshold of
+    !   surface_has_snow, and a sub-threshold surface layer left by
+    !   accumulation is removed with its water (step 2, Chion.jl 38cb742).
     ! * Step 11: the melt potential (melt energy/Lm) also pays for warming
     !   sub-freezing snow to T0, so the snow melted is less than it; the
     !   potential left once the snow is gone melts ice (smb_ice and runoff),
@@ -89,7 +89,8 @@ module snow_bessi
 
     use snow_accumulation,  only : apply_accumulation
     use snow_layers,        only : remesh_near_surface_layers, rebalance_layer, &
-                                   near_surface_layer_count
+                                   near_surface_layer_count, &
+                                   remove_depleted_surface_and_route_water
     use snow_albedo,        only : albedo_update, albedo_update_aging, &
                                    snow_cover_fraction, thin_snow_albedo
     use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration, &
@@ -1016,6 +1017,16 @@ contains
                                 forc%snowfall_rate,forc%rainfall_rate,dt_seconds, &
                                 forc%air_temperature,forc%wind_speed)
 
+        ! A sub-threshold surface layer (e.g. from a trace of snowfall on bare
+        ! ice) is not snow: remove it, its water and solid to the layer below
+        ! or to runoff (Chion.jl 38cb742), so that the bare branch below
+        ! leaves nothing stored in it unseen.
+        do while (n .gt. 0)
+            if (real(mass(1),wp_acc) .gt. TOL_EMPTY_LAYER) exit
+            call remove_depleted_surface_and_route_water(mass,mass_w,density,temperature,n, &
+                                                         runoff,c)
+        end do
+
         ! === Step 3: fresh snow onto a column that started bare ==============
         ! Every active layer takes the air temperature capped at T0 (Chion.jl
         ! 38cb742: solid snow is never above melting), not only layer 1: a
@@ -1411,13 +1422,10 @@ contains
         !
         ! RAIN IS NOT ADDED TO RUNOFF HERE (D29). Julia adds the step's rain
         ! (runoff += rain + melt), but apply_accumulation has already routed
-        ! it: to runoff when no layer can hold it, to mass_w(1) under a sliver
-        ! surface layer (0 < mass(1) <= TOL_EMPTY_LAYER), where Julia counts it
-        ! twice.
+        ! it to runoff: no layer above TOL_EMPTY_LAYER can hold it.
         !
-        ! A sliver surface layer keeps its rows in the solve above the
-        ! substrate, as in Julia: snow_energy_flux counts layers with
-        ! mass(1) > 0, not TOL_EMPTY_LAYER.
+        ! The column holds no layers here: the column step removed any
+        ! sub-threshold surface layer after accumulation.
 
         implicit none
 

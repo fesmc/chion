@@ -13,7 +13,10 @@ program test_bessi
     ! bessi_column_step_core and where the mass comes from or goes:
     !
     !   accumulation   snowfall  -> mass(1)                       [source]
-    !                  rainfall  -> mass_w(1), only if mass(1) > 0
+    !                  rainfall  -> mass_w(1), only if mass(1) > TOL_EMPTY_LAYER,
+    !                               else runoff
+    !                  a sub-threshold surface layer -> layer 2's mass_w,
+    !                               or runoff                  [in-column]
     !                  bottom export -> mass_base AND smb_ice, in equal
     !                                   amounts; its liquid -> runoff
     !   vapor flux     mass(1) or mass_w(1) += vapor_mass         [source/sink]
@@ -49,8 +52,8 @@ program test_bessi
     ! Two upstream defects would break this identity; chion fixes the first
     ! and the test avoids the second rather than hiding it:
     !
-    !   * defect 11 -- rain falling on a column with mass(1) <= 0 was silently
-    !     dropped upstream. chion now routes it to runoff (D29), so every
+    !   * defect 11 -- rain falling on a column that cannot hold it was
+    !     silently dropped upstream. chion routes it to runoff (D29), so every
     !     kilogram offered is accepted and no rain is withheld.
     !   * defect  1 -- apply_snow_surface_vapor_mass_flux returned the
     !     unclipped vapor_mass while applying a clipped one, so when
@@ -134,8 +137,8 @@ contains
         ! Synthetic annual cycle at 70 N: a cold accumulation season and a
         ! melt season strong enough to strip the column bare, so that a
         ! multi-year run exercises accumulation, densification, melt,
-        ! percolation, refreezing, the ice-melt shortfall AND the bare-ice
-        ! early return.
+        ! percolation, refreezing, the ice melt AND the bare-ice early
+        ! return.
 
         implicit none
 
@@ -1102,27 +1105,25 @@ contains
     end subroutine test_capacity
 
     ! =====================================================================
-    ! Test 5 -- the bare-ice early return
+    ! Test 5 -- a sub-threshold surface layer is removed
     ! =====================================================================
 
     subroutine test_bare_ice_skips_water(nfail)
         ! Two identical columns differing ONLY in the surface layer's solid
-        ! mass, straddling TOL_EMPTY_LAYER. Column 1 is "bare" by
-        ! surface_has_snow and must take the early return; column 2 is not.
+        ! mass, straddling TOL_EMPTY_LAYER. Column 1's sliver is not snow:
+        ! since Chion.jl 38cb742 the step removes it after accumulation, its
+        ! contents to the layer below, which becomes the surface. A column
+        ! that is bare after accumulation therefore has no layers, and no
+        ! water can sit unseen under a bare surface. Column 1 then steps like
+        ! column 2: its wet, cold layer percolates and refreezes.
         !
         ! The subsurface layer is wet (20 kg m-2 of liquid) and cold (263 K),
-        ! so if percolation ran it would shed ~5.9 kg m-2 to runoff (pore
-        ! volume 0.141 m, retention 14.1 kg m-2) and if refreezing ran it
-        ! would freeze ~6.4 kg m-2 and pull the layer up to T0. Neither may
-        ! happen on the bare column.
+        ! so percolation sheds water to runoff and refreezing freezes some
+        ! and warms the layer.
         !
         ! mass_min is lowered for this test. With the default 100 kg m-2 the
         ! merge loop inside apply_accumulation would immediately absorb the
-        ! sliver of a surface layer into the layer below, and the column would
-        ! no longer be bare by the time the step-5 test is reached -- which is
-        ! itself worth knowing: on a default column the bare state with a wet
-        ! layer underneath is only reachable through melt or sublimation, not
-        ! through a thin surface layer.
+        ! sliver of a surface layer into the layer below.
 
         implicit none
 
@@ -1133,12 +1134,10 @@ contains
         type(chion_const_class) :: c
         type(chion_step_forcing_class) :: forc
 
-        write(*,"(a)") "--- 5. bare-ice branch skips percolation and refreezing ---"
+        write(*,"(a)") "--- 5. a sub-threshold surface layer is removed ---"
 
         ! No fine near-surface layers (the default since C11): their remesh
-        ! would fill the sliver surface layer from below. No ice substrate:
-        ! its energy solve would take the sliver and the layer below with it
-        ! (test 5b covers the bare branch over the substrate).
+        ! would fill the sliver surface layer from below. No ice substrate.
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
         bsi%par%mass_min = 1.0e-12_wp
@@ -1148,7 +1147,7 @@ contains
         call bessi_alloc(bsi,2)
         call bessi_init_state(bsi,c)
 
-        ! Column 1: surface mass below TOL_EMPTY_LAYER -> bare.
+        ! Column 1: surface mass below TOL_EMPTY_LAYER.
         bsi%now%n_lay(1)         = 2
         bsi%now%mass(1,1)        = 1.0e-11_wp
         bsi%now%mass(2,1)        = 100.0_wp
@@ -1184,24 +1183,10 @@ contains
         call bessi_column_step(bsi,1,forc,c)
         call bessi_column_step(bsi,2,forc,c)
 
-        write(*,"(a,g16.8)") "         bare  mass_w(2)   = ", bsi%now%mass_w(2,1)
-        write(*,"(a,g16.8)") "         snowy mass_w(2)   = ", bsi%now%mass_w(2,2)
-
-        ! The bare column: nothing may have touched the water or the heat.
-        call check("bare column: liquid water untouched (no percolation)", &
-                   bsi%now%mass_w(2,1) .eq. 20.0_wp, nfail)
-        call check("bare column: nothing refroze", &
-                   bsi%now%refreezing(1) .eq. 0.0_wp_acc, nfail)
-        call check("bare column: subsurface temperature unchanged (no latent release)", &
-                   bsi%now%temperature(2,1) .eq. 263.0_wp, nfail)
-        call check("bare column: subsurface solid mass unchanged", &
-                   bsi%now%mass(2,1) .eq. 100.0_wp, nfail)
-        call check("bare column: took the bare-ice path (melt charged to runoff)", &
-                   bsi%now%runoff(1) .gt. 0.0_wp_acc, nfail)
-        call check("bare column: albedo forced to bare ice", &
-                   abs(bsi%now%albedo(1) - c%alpha_ice) .lt. 1.0e-6_wp, nfail)
-
-        ! The contrast case: with snow present, both DO run.
+        call check("sliver removed: the layer below is the surface (n = 1)", &
+                   bsi%now%n_lay(1) .eq. 1, nfail)
+        call check("sliver removed: snow path, water processed and refrozen", &
+                   bsi%now%refreezing(1) .gt. 0.0_wp_acc, nfail)
         call check("snowy column: water was processed (percolation and/or refreezing)", &
                    bsi%now%mass_w(2,2) .ne. 20.0_wp, nfail)
         call check("snowy column: refreezing occurred", &
@@ -1222,9 +1207,10 @@ contains
         ! with only rain falling:
         !
         !   1. n = 0: nothing can hold the rain, so it must reach runoff.
-        !   2. a surface layer below TOL_EMPTY_LAYER: bare by surface_has_snow,
-        !      but mass(1) > 0, so the rain lands in mass_w(1) and must NOT
-        !      also reach runoff. Chion.jl dev_nils 8fff530 counts it twice.
+        !   2. a lone surface layer below TOL_EMPTY_LAYER: it holds no rain
+        !      (Chion.jl 38cb742; dev_nils 8fff530 held it there and counted
+        !      it twice) and is removed after accumulation, its solid mass to
+        !      runoff too.
         !
         ! The bare-ice branch adds its own ice melt to runoff, so the rain's
         ! share is runoff - melt.
@@ -1250,7 +1236,7 @@ contains
         call bessi_par_init(bsi%par)
         bsi%par%mass_min = 1.0e-12_wp
         bsi%par%ice_substrate_layers = n_ice
-        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp   ! keep the sliver (test 5)
+        bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
         call bessi_par_validate(bsi%par)
         call bessi_alloc(bsi,2)
         call bessi_init_state(bsi,c)
@@ -1258,13 +1244,12 @@ contains
         ! Column 1: no layers.
         bsi%now%n_lay(1) = 0
 
-        ! Column 2: a sliver of a surface layer over a dry layer.
-        bsi%now%n_lay(2)         = 2
+        ! Column 2: a lone sliver of a surface layer.
+        bsi%now%n_lay(2)         = 1
         bsi%now%mass(1,2)        = 1.0e-11_wp
-        bsi%now%mass(2,2)        = 100.0_wp
         bsi%now%mass_w(:,2)      = 0.0_wp
-        bsi%now%density(1:2,2)   = 400.0_wp
-        bsi%now%temperature(1:2,2) = 263.0_wp
+        bsi%now%density(1,2)     = 400.0_wp
+        bsi%now%temperature(1,2) = 263.0_wp
 
         call neutral_forcing(forc)
         forc%air_temperature = 275.0_wp
@@ -1285,12 +1270,10 @@ contains
                          bsi%now%runoff(1) - bsi%now%melt(1), &
                          rain_mass, 1.0e-6_wp_acc, nfail)
 
-        call check("sliver: still bare", &
-                   .not. surface_has_snow(bsi%now%mass(:,2),bsi%now%n_lay(2)), nfail)
-        call check_close("sliver: rain held in mass_w(1)", &
-                         real(bsi%now%mass_w(1,2),wp_acc), rain_mass, 1.0e-6_wp_acc, nfail)
-        call check("sliver: rain not also in runoff", &
-                   abs(bsi%now%runoff(2) - bsi%now%melt(2)) .le. 1.0e-9_wp_acc, nfail)
+        call check("sliver: removed, bare", bsi%now%n_lay(2) .eq. 0, nfail)
+        call check_close("sliver: rain (and the sliver) reach runoff once", &
+                         bsi%now%runoff(2) - bsi%now%melt(2), &
+                         rain_mass + 1.0e-11_wp_acc, 1.0e-6_wp_acc, nfail)
 
         call bessi_dealloc(bsi)
 

@@ -18,14 +18,12 @@ module snow_accumulation
     !
     ! PRESERVED QUIRKS:
     !   * Rain alone never creates a snow layer, and rain is only added to
-    !     mass_w(1) when mass(1) > 0 STRICTLY (not > TOL_TINY).
+    !     mass_w(1) when mass(1) > TOL_EMPTY_LAYER (Chion.jl 38cb742).
     !
-    ! DEVIATION (docs/porting_notes.md D29): rain with no layer to hold it
-    ! goes to runoff HERE, so every kilogram of rain is routed exactly once.
-    ! Chion.jl dropped it (upstream defect 11) until dev_nils 8fff530, which
-    ! instead adds the step's rain to runoff in the bare-ice branch; that
-    ! counts it twice when 0 < mass(1) <= TOL_EMPTY_LAYER, where the rain is
-    ! already in mass_w(1). Totals are otherwise identical.
+    ! DEVIATION (docs/porting_notes.md D29), structural: rain with no layer
+    ! to hold it goes to runoff HERE, so every kilogram of rain is routed
+    ! exactly once. Chion.jl adds the step's rain to runoff in the bare-ice
+    ! branches instead; the totals are the same.
     !   * The split loop's out-of-slots branch is asymmetric: with Ntot <= 2 it
     !     calls free_slot_for_split, otherwise merge_bottom_layer. The
     !     Ntot <= 2 case cannot merge a bottom layer without destroying the only
@@ -36,7 +34,7 @@ module snow_accumulation
     !   * The fresh-snow density clamp lower bound 50 kg m-3 is a bare literal
     !     upstream (accumulation.jl:18,25); named here.
 
-    use chion_defs, only : wp, wp_acc, chion_const_class, &
+    use chion_defs, only : wp, wp_acc, TOL_EMPTY_LAYER, chion_const_class, &
                            CHION_FRESH_SNOW_DENSITY_CONSTANT, &
                            CHION_FRESH_SNOW_DENSITY_PARAMETERIZED, &
                            io_unit_err
@@ -126,7 +124,8 @@ contains
         !      otherwise rain -> runoff, albedo = alpha_ice, and return.
         !   1. snowfall: add mass to layer 1, mix its density by volume, and
         !      brighten the albedo.
-        !   2. rainfall: add to mass_w(1) if mass(1) > 0, else to runoff.
+        !   2. rainfall: add to mass_w(1) if mass(1) > TOL_EMPTY_LAYER, else
+        !      to runoff.
         !   3. split loop  while mass(1) > mass_max
         !   4. merge loop  while n > 1 and mass(1) < mass_min
         !   5. depth cap.
@@ -210,10 +209,12 @@ contains
         end if
 
         ! --- Step 2: rainfall -----------------------------------------------
-        ! Strict mass(1) > 0, and only into the surface layer; otherwise there
-        ! is nothing to hold it and it runs off (D29).
+        ! Only into a surface layer above TOL_EMPTY_LAYER, the threshold of
+        ! surface_has_snow (Chion.jl 38cb742): rain on a sub-threshold remnant
+        ! is not held, the step treating that column as bare. Otherwise there
+        ! is nothing to hold it and it runs off here (D29).
         if (rainfall_rate .gt. 0.0_wp) then
-            if (mass(1) .gt. 0.0_wp) then
+            if (real(mass(1),wp_acc) .gt. TOL_EMPTY_LAYER) then
                 mass_w(1) = mass_w(1) + rainfall_rate*dt_seconds
             else
                 runoff = runoff + real(rainfall_rate*dt_seconds,wp_acc)

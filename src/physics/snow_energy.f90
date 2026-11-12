@@ -52,7 +52,7 @@ module snow_energy
     ! half-cell conductance, and row 1 keeps its coupling to row 2 -- see
     ! step 5 below.
 
-    use chion_defs, only : wp, wp_acc, io_unit_err, TOL_TINY, CHION_SEB_SEMIX, &
+    use chion_defs, only : wp, wp_acc, io_unit_err, TOL_TINY, TOL_EMPTY_LAYER, CHION_SEB_SEMIX, &
                            CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                            chion_const_class, chion_step_forcing_class
 
@@ -321,8 +321,8 @@ contains
         ! The solve behind snow_energy_flux, over THERMAL ROWS (energy_flux.jl
         ! _thermal_row): rows 1..n_snow are the snow/firn layers, rows
         ! n_snow+1..n_snow+n_ice the ice substrate. n_snow = n when the column
-        ! has layers and mass(1) > 0, else 0; with no snow the top substrate
-        ! layer is the (bare-ice) surface.
+        ! has layers and mass(1) > TOL_EMPTY_LAYER, else 0; with no snow the
+        ! top substrate layer is the (bare-ice) surface.
         !
         ! ICE SUBSTRATE (Chion.jl 03bb445). n_ice fixed layers of glacier ice,
         ! top thickness h0, doubling downward (h0*2**(k-1); h0 = 0.05 m and
@@ -411,11 +411,10 @@ contains
         type(turb_semix_lin_class)        :: tx
 
         ! === Step 0: thermal rows, early exit ================================
-        ! energy_flux.jl: n_snow = n if n > 0 and mass(1) > 0, else 0. NOTE the
-        ! threshold is mass(1) <= 0, NOT TOL_EMPTY_LAYER as in surface_has_snow.
-        ! The two guards differ deliberately -- see docs/PLAN.md section 5,
-        ! item 1. A column with neither snow rows nor substrate is left
-        ! untouched (temperature and t_srf), and the two precipitation latent
+        ! energy_flux.jl: n_snow = n if n > 0 and mass(1) > TOL_EMPTY_LAYER,
+        ! else 0 -- the threshold of surface_has_snow (Chion.jl 38cb742). A
+        ! column with neither snow rows nor substrate is left untouched
+        ! (temperature and t_srf), and the two precipitation latent
         ! coefficients are echoed through.
 
         res%needs_melt                     = .FALSE.
@@ -436,7 +435,7 @@ contains
         n_ice  = size(ice_temperature)
         n_snow = 0
         if (n .gt. 0) then
-            if (mass(1) .gt. 0.0_wp) n_snow = n
+            if (real(mass(1),wp_acc) .gt. TOL_EMPTY_LAYER) n_snow = n
         end if
         n_rows = n_snow + n_ice
 
