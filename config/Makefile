@@ -266,6 +266,11 @@ monthly : chion-static
 			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
 		@echo "    test_monthly.x is ready."
 
+forcing : chion-static
+		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_forcing_host.x $(testdir)/test_forcing_host.f90 \
+			-L${CURDIR}/$(objdir) -lchion $(LFLAGS)
+		@echo "    test_forcing_host.x is ready."
+
 domain : chion-static $(driver_objs)
 		$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -o $(bindir)/test_domain.x $(testdir)/test_domain.f90 \
 			$(driver_objs) -L${CURDIR}/$(objdir) -lchion $(LFLAGS)
@@ -288,7 +293,7 @@ itm : chion-static
 		@echo "    test_itm.x is ready."
 
 # All acceptance tests
-test_targets = defs utils layers energy water surface seb wp7 bessi pdd diagnostics itm api io monthly
+test_targets = defs utils layers energy water surface seb wp7 bessi pdd diagnostics itm api io monthly forcing
 tests : $(test_targets)
 
 # Driver executables
