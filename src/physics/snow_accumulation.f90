@@ -11,8 +11,7 @@ module snow_accumulation
     ! DEPENDENCY ON WP4: everything in the "layer-structure enforcement" section
     ! is delegated to snow_layers, in two calls at the bottom of
     ! apply_accumulation: rebalance_layer at k = 1 (Julia's split and merge
-    ! loops, which chion also runs below fine near-surface layers, D32) and
-    ! enforce_snow_depth_cap. WP4 dropped Ntot from the merge, and Ntot and
+    ! loops) and enforce_snow_depth_cap. WP4 dropped Ntot from the merge, and Ntot and
     ! dt_seconds from enforce_snow_depth_cap, because neither body uses them;
     ! C1 also dropped mass_split from the latter (the cap is a constant depth
     ! since 03bb445).

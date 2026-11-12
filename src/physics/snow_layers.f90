@@ -13,15 +13,15 @@ module snow_layers
     !     _enforce_snow_depth_cap!                -> enforce_snow_depth_cap
     !     _cap_near_surface_layer_thicknesses!    -> cap_near_surface_layer_thicknesses
     !     _fill_near_surface_layer_thicknesses!   -> fill_near_surface_layer_thicknesses
+    !     _split_deep_layers!                     -> split_deep_layers
     !     _remesh_near_surface_layers!            -> remesh_near_surface_layers
     ! plus chion's rebalance_layer, the split and merge loops of
-    ! _apply_accumulation_resolved! (accumulation.jl) for one layer k.
+    ! _apply_accumulation_resolved! (accumulation.jl).
     !
-    ! THE MASS LAYER k: Chion.jl splits and merges the surface layer only.
-    ! split_layer, merge_layer and free_slot_for_split act on layer k, the
-    ! top MASS layer; k = 1 is Chion.jl's surface layer. With fine
-    ! near-surface layers chion applies them also to the first layer below
-    ! the fine ones (docs/porting_notes.md D32), see remesh_near_surface_layers.
+    ! THE LAYER k: split_layer, merge_layer, free_slot_for_split and
+    ! rebalance_layer take the layer they act on; k = 1 is Chion.jl's surface
+    ! layer, the only one the last three are used on. split_layer also splits
+    ! the layers below the fine near-surface ones (split_deep_layers).
     !
     ! CALLING CONVENTION (docs/porting_notes.md D8): every routine takes
     ! contiguous column slices -- mass(:,icol), mass_w(:,icol), ... -- together
@@ -63,13 +63,12 @@ module snow_layers
     ! NEAR_SURFACE_LAYERS layers at maximum thicknesses h_max(k) [m] (0 = no
     ! limit, Julia's Inf; the limited layers are a leading block,
     ! bessi_par_validate). It conserves solid mass, liquid water, volume and
-    ! sensible enthalpy (temperature by mass_weighted_mean, D31). chion then
-    ! splits and merges the first layer below them by mass (D32; not under
-    ! legacy_chion).
+    ! sensible enthalpy (temperature by mass_weighted_mean, D31). Since
+    ! Chion.jl 38cb742 it then splits every layer below them heavier than
+    ! mass_max (split_deep_layers).
 
     use chion_defs, only : wp, wp_acc, io_unit_err, TOL_TINY, TOL_EMPTY_LAYER, &
                            BESSI_REFERENCE_SNOW_DEPTH_M, &
-                           NEAR_SURFACE_SPLIT_MERGE_BELOW, &
                            chion_const_class
 
     implicit none
@@ -95,6 +94,7 @@ module snow_layers
     public :: near_surface_layer_count
     public :: cap_near_surface_layer_thicknesses
     public :: fill_near_surface_layer_thicknesses
+    public :: split_deep_layers
     public :: remesh_near_surface_layers
 
 contains
@@ -1126,22 +1126,17 @@ contains
 
     end subroutine fill_near_surface_layer_thicknesses
 
-    subroutine remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                          mass_base,smb_ice,runoff,t_srf,albedo, &
-                                          Ntot,mass_max,mass_split,mass_min,h_max,c)
-        ! Conservative remesh of the fine near-surface layers: cap downward,
-        ! then fill upward. Called twice per (sub)step by the BESSI kernel,
-        ! after accumulation and after refreezing. A no-op without limits.
-        !
-        ! DEVIATION (docs/porting_notes.md D32; not under legacy_chion): the
-        ! first layer below the fine ones, k0, is then kept within
-        ! [mass_min, mass_max] by the mass-based split and merge that Chion.jl
-        ! applies to the surface layer only (rebalance_layer at k0). In
-        ! Chion.jl everything the cap pushes below the fine layers stays in
-        ! layer k0, which is never split or merged, so a firn column ends as
-        ! the fine layers over one cell of up to the 22.5 m depth cap. The
-        ! accumulators are touched only when the split frees a slot at Ntot
-        ! (bottom merge or depletion, as in accumulation).
+    subroutine split_deep_layers(mass,mass_w,density,temperature,n, &
+                                 mass_base,smb_ice,Ntot,first_deep,mass_max,mass_split,c)
+        ! Chion.jl layer_structure.jl _split_deep_layers! (38cb742). Keeps the
+        ! firn below the fine near-surface layers resolved: the remesh passes
+        ! all excess material into layer first_deep, and every layer from
+        ! first_deep on that exceeds mass_max is split into an upper part and
+        ! a lower part of mass_split (split_layer). A full column first merges
+        ! its two deepest layers (merge_bottom_layer, as accumulation does);
+        ! the two deepest layers of a full column are never split, so the deep
+        ! bulk layer may grow. No merge of light layers. The accumulators are
+        ! touched only by a bottom merge whose density exceeds rho_i.
 
         implicit none
 
@@ -1152,31 +1147,78 @@ contains
         integer,  intent(INOUT) :: n
         real(wp_acc), intent(INOUT) :: mass_base
         real(wp_acc), intent(INOUT) :: smb_ice
-        real(wp_acc), intent(INOUT) :: runoff
-        real(wp), intent(INOUT) :: t_srf
-        real(wp), intent(INOUT) :: albedo
+        integer,  intent(IN)    :: Ntot
+        integer,  intent(IN)    :: first_deep       ! first layer below the fine ones
+        real(wp), intent(IN)    :: mass_max         ! [kg m-2] split trigger
+        real(wp), intent(IN)    :: mass_split       ! [kg m-2] mass of the lower part
+        type(chion_const_class), intent(IN) :: c
+
+        ! Local variables
+        integer :: k
+
+        k = first_deep
+
+        do while (k .le. n)
+
+            if (mass(k) .gt. mass_max) then
+
+                if (n .eq. Ntot) then
+                    if (k .ge. n-1) exit
+                    call merge_bottom_layer(mass,mass_w,density,temperature,n, &
+                                            mass_base,smb_ice,c)
+                end if
+
+                call split_layer(mass,mass_w,density,temperature,n,k,Ntot,mass_max,mass_split)
+
+                ! The upper part may still exceed mass_max.
+                cycle
+
+            end if
+
+            k = k + 1
+
+        end do
+
+        return
+
+    end subroutine split_deep_layers
+
+    subroutine remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
+                                          mass_base,smb_ice,Ntot,mass_max,mass_split,h_max,c)
+        ! Chion.jl layer_structure.jl _remesh_near_surface_layers! (38cb742).
+        ! Conservative remesh of the fine near-surface layers: cap downward,
+        ! then fill upward, then split the layers below them by mass
+        ! (split_deep_layers, from the first layer below the fine ones). Called
+        ! twice per (sub)step by the BESSI kernel, after accumulation and after
+        ! refreezing. A no-op without limits.
+
+        implicit none
+
+        real(wp), intent(INOUT) :: mass(:)
+        real(wp), intent(INOUT) :: mass_w(:)
+        real(wp), intent(INOUT) :: density(:)
+        real(wp), intent(INOUT) :: temperature(:)
+        integer,  intent(INOUT) :: n
+        real(wp_acc), intent(INOUT) :: mass_base
+        real(wp_acc), intent(INOUT) :: smb_ice
         integer,  intent(IN)    :: Ntot
         real(wp), intent(IN)    :: mass_max         ! [kg m-2] split trigger
         real(wp), intent(IN)    :: mass_split       ! [kg m-2] mass left below
-        real(wp), intent(IN)    :: mass_min         ! [kg m-2] merge trigger
         real(wp), intent(IN)    :: h_max(:)         ! (NEAR_SURFACE_LAYERS) [m], 0 = no limit
         type(chion_const_class), intent(IN) :: c
 
         ! Local variables
-        integer :: k0
+        integer :: n_fine
+
+        n_fine = near_surface_layer_count(h_max)
+
+        if (n_fine .eq. 0) return
 
         call cap_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n,Ntot,h_max,c)
         call fill_near_surface_layer_thicknesses(mass,mass_w,density,temperature,n,h_max,c)
 
-        if (.not. NEAR_SURFACE_SPLIT_MERGE_BELOW) return
-
-        k0 = near_surface_layer_count(h_max) + 1
-
-        if (k0 .gt. 1 .and. k0 .le. Ntot) then
-            call rebalance_layer(mass,mass_w,density,temperature,n,k0, &
-                                 mass_base,smb_ice,runoff,t_srf,albedo, &
-                                 Ntot,mass_max,mass_split,mass_min,c)
-        end if
+        call split_deep_layers(mass,mass_w,density,temperature,n,mass_base,smb_ice, &
+                               Ntot,n_fine+1,mass_max,mass_split,c)
 
         return
 

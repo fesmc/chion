@@ -946,13 +946,12 @@ contains
     subroutine test_fine_layers_firn(nfail)
         ! A firn column under sustained cold accumulation with fine
         ! near-surface layers, 4 years at 8.6 kg m-2 d-1: Ntot capacity,
-        ! bottom merges and the depth cap all act. chion (C4b, D32) splits
-        ! and merges the first layer below the fine ones by mass, so the
-        ! column keeps several layers there, each interior one (5 .. n-1;
-        ! the bottom one collects bottom merges, as in BESSI without fine
-        ! layers) within [mass_min, mass_max] after every step. Chion.jl,
-        ! and legacy_chion builds, keep everything below the fine layers in
-        ! layer 5. Mass closure in both.
+        ! bottom merges and the depth cap all act. Every layer below the fine
+        ! ones heavier than mass_max is split (Chion.jl 38cb742
+        ! _split_deep_layers!), so the column keeps several layers there,
+        ! each interior one (5 .. n-1; the bottom one collects bottom merges,
+        ! as in BESSI without fine layers) at most mass_max after every step.
+        ! Mass closure.
 
         implicit none
 
@@ -999,8 +998,7 @@ contains
             if (n .ge. 5) m5_max = max(m5_max,bsi%now%mass(5,1))
 
             do k = 5, n-1
-                if (bsi%now%mass(k,1) .lt. bsi%par%mass_min .or. &
-                    bsi%now%mass(k,1) .gt. bsi%par%mass_max) n_out = n_out + 1
+                if (bsi%now%mass(k,1) .gt. bsi%par%mass_max) n_out = n_out + 1
             end do
 
         end do
@@ -1010,18 +1008,11 @@ contains
         write(*,"(a,i0)")       "         interior sub-fine layers out of bounds = ", n_out
         write(*,"(a,g16.8)")    "         mass_base                           = ", bsi%now%mass_base(1)
 
-        if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
-            call check("C4b: several layers below the fine ones after year 1 (n >= 8)", &
-                       n_min_late .ge. 8, nfail)
-            call check("C4b: column reaches Ntot and never exceeds it", &
-                       n_max .eq. bsi%par%Ntot, nfail)
-            call check("C4b: interior sub-fine layers within [mass_min, mass_max]", &
-                       n_out .eq. 0, nfail)
-        else
-            call check("legacy: everything below the fine layers in layer 5 (n <= 5)", &
-                       n_max .le. 5, nfail)
-            call check("legacy: layer 5 outgrows mass_max", m5_max .gt. bsi%par%mass_max, nfail)
-        end if
+        call check("several layers below the fine ones after year 1 (n >= 8)", &
+                   n_min_late .ge. 8, nfail)
+        call check("column reaches Ntot and never exceeds it", &
+                   n_max .eq. bsi%par%Ntot, nfail)
+        call check("interior sub-fine layers at most mass_max", n_out .eq. 0, nfail)
         call check("bottom export occurred (depth cap / bottom merge)", &
                    bsi%now%mass_base(1) .gt. 0.0_wp_acc, nfail)
         call check_close("closure, firn column with fine layers", closure_lhs(bsi,1),precip, &
@@ -1058,9 +1049,8 @@ contains
 
         write(*,"(a)") "--- 4. column driven to Ntot capacity ---"
 
-        ! BESSI's mass-based layering: under legacy_chion the fine
-        ! near-surface layers (the default since C11) leave the layer below
-        ! them unsplit (D32), so the column would never reach Ntot.
+        ! BESSI's mass-based layering, without the fine near-surface layers
+        ! (the default since C11; test 15 drives them to Ntot).
         call chion_const_init(c)
         call bessi_par_init(bsi%par)
         bsi%par%near_surface_layer_max_thicknesses = 0.0_wp
@@ -2258,23 +2248,17 @@ contains
 
             ! Below the fine layers: the top mass layer within [mass_min,
             ! mass_max], the interior ones mass_split, the bottom one at
-            ! least mass_split (it takes the excess at Ntot). legacy_chion
-            ! (D32 reverted) keeps all of it in one layer, as test 15.
-            if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
-                below_ok = .TRUE.
-                if (n .gt. n_fine+1) then
-                    below_ok = bsi%now%mass(n_fine+1,icol) .ge. bsi%par%mass_min .and. &
-                               bsi%now%mass(n_fine+1,icol) .le. bsi%par%mass_max
-                    do k = n_fine+2, n-1
-                        below_ok = below_ok .and. bsi%now%mass(k,icol) .eq. bsi%par%mass_split
-                    end do
-                    below_ok = below_ok .and. bsi%now%mass(n,icol) .ge. bsi%par%mass_split
-                end if
-                call check(trim(tag)//" mass layers: [mass_min,mass_max] over mass_split", below_ok, nfail)
-            else
-                call check(trim(tag)//" legacy: everything below the fine layers in one layer", &
-                           n .eq. n_fine+1, nfail)
+            ! least mass_split (it takes the excess at Ntot).
+            below_ok = .TRUE.
+            if (n .gt. n_fine+1) then
+                below_ok = bsi%now%mass(n_fine+1,icol) .ge. bsi%par%mass_min .and. &
+                           bsi%now%mass(n_fine+1,icol) .le. bsi%par%mass_max
+                do k = n_fine+2, n-1
+                    below_ok = below_ok .and. bsi%now%mass(k,icol) .eq. bsi%par%mass_split
+                end do
+                below_ok = below_ok .and. bsi%now%mass(n,icol) .ge. bsi%par%mass_split
             end if
+            call check(trim(tag)//" mass layers: [mass_min,mass_max] over mass_split", below_ok, nfail)
 
             temp_ok = all(bsi%now%temperature(1:n,icol) .eq. T_INIT) .and. &
                       all(bsi%now%ice_temperature(:,icol) .eq. T_INIT) .and. &
@@ -2302,8 +2286,7 @@ contains
 
         end do
 
-        if (NEAR_SURFACE_SPLIT_MERGE_BELOW) &
-            call check("(a, swe=7000) column full at Ntot", bsi%now%n_lay(3) .eq. bsi%par%Ntot, nfail)
+        call check("(a, swe=7000) column full at Ntot", bsi%now%n_lay(3) .eq. bsi%par%Ntot, nfail)
 
         ! The first step finds nothing to repair: a cold, dry, calm day
         ! leaves the layer count and the fine-layer geometry as built.

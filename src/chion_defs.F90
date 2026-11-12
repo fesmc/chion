@@ -179,10 +179,6 @@ module chion_defs
     !     resets to alpha_dry (age 0) on any snowfall, as Chion.jl does.
     !     chion rejuvenates in proportion to the step's snowfall
     !     (docs/porting_notes.md D30).
-    !   * NEAR_SURFACE_SPLIT_MERGE_BELOW -> .FALSE., i.e. with fine
-    !     near-surface layers everything below them stays in one layer that
-    !     is never split or merged, as in Chion.jl. chion splits and merges
-    !     it by mass like the surface layer (docs/porting_notes.md D32).
     !   * TURB_SEMIX_ICE_SUBLIMATION -> .FALSE., i.e. the semix turbulence's
     !     latent exchange over bare ice carries the phase's latent heat at
     !     the surface temperature (Lv at T0), as in Chion.jl; chion uses
@@ -214,7 +210,6 @@ module chion_defs
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = 9.81_wp_acc
     logical,      parameter, public :: ITM_FIRN_PER_STEP = .TRUE.
     logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .TRUE.
-    logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .FALSE.
     logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .FALSE.
     logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .TRUE.
     logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .TRUE.
@@ -226,7 +221,6 @@ module chion_defs
     real(wp_acc), parameter, public :: DENSIFY_GRAVITY = real(DEF_GRAVITY,wp_acc)
     logical,      parameter, public :: ITM_FIRN_PER_STEP = .FALSE.
     logical,      parameter, public :: ALBEDO_AGING_BINARY_REFRESH = .FALSE.
-    logical,      parameter, public :: NEAR_SURFACE_SPLIT_MERGE_BELOW = .TRUE.
     logical,      parameter, public :: TURB_SEMIX_ICE_SUBLIMATION = .TRUE.
     logical,      parameter, public :: TURB_SEMIX_R_AIR_LITERAL = .FALSE.
     logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .FALSE.

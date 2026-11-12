@@ -19,12 +19,11 @@ program test_layers
     ! (cap down, fill up) conserves solid mass, liquid water, volume and
     ! sensible enthalpy sum(m*T); Chion.jl's test_geometric_accumulation
     ! (zero-input accumulation + remesh is the identity) is ported. Below the
-    ! fine layers chion splits and merges the first layer by mass (C4b, D32);
-    ! legacy_chion builds check Chion.jl's behaviour there instead.
+    ! fine layers every layer heavier than mass_max is split (Chion.jl
+    ! 38cb742 _split_deep_layers!).
 
     use chion_defs,  only : wp, wp_acc, chion_const_class, chion_const_init, &
-                            BESSI_REFERENCE_SNOW_DEPTH_M, NEAR_SURFACE_LAYERS, &
-                            NEAR_SURFACE_SPLIT_MERGE_BELOW
+                            BESSI_REFERENCE_SNOW_DEPTH_M, NEAR_SURFACE_LAYERS
     use snow_layers
     use snow_accumulation, only : apply_accumulation
 
@@ -772,8 +771,7 @@ program test_layers
                             c,8,mass_max,mass_split,0.0_wp, &
                             0.0_wp,0.0_wp,86400.0_wp,250.0_wp,5.0_wp)
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    8,mass_max,mass_split,mass_min,h_fine,c)
+                                    mass_base,smb_ice,8,mass_max,mass_split,h_fine,c)
     call check("geometric accumulation: n unchanged", n .eq. 5, nfail)
     call check("geometric accumulation: masses unchanged (rel 1e-6)", &
                all(abs(mass(1:5) - mass_before(1:5)) .le. 1.0e-6_wp*mass_before(1:5)), nfail)
@@ -795,8 +793,7 @@ program test_layers
     water_ref = sum(real(mass_w,wp_acc))
 
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    10,mass_max,mass_split,mass_min,h_fine,c)
+                                    mass_base,smb_ice,10,mass_max,mass_split,h_fine,c)
 
     call check("cap: four fine layers plus one below", n .eq. 5, nfail)
     at_target = .TRUE.
@@ -824,8 +821,7 @@ program test_layers
     mass_before = mass
 
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    10,mass_max,mass_split,mass_min,h_fine,c)
+                                    mass_base,smb_ice,10,mass_max,mass_split,h_fine,c)
 
     call check("fill: layer count unchanged", n .eq. 5, nfail)
     at_target = .TRUE.
@@ -866,8 +862,7 @@ program test_layers
     mass(1:2)    = [1.0_wp, 2.0_wp]
     density(1:2) = 300.0_wp
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    10,mass_max,mass_split,mass_min,h_fine,c)
+                                    mass_base,smb_ice,10,mass_max,mass_split,h_fine,c)
     call check("shallow column: one thin layer left", &
                n .eq. 1 .and. abs(mass(1) - 3.0_wp) .le. 1.0e-6_wp, nfail)
 
@@ -877,8 +872,7 @@ program test_layers
     mass(1:3)    = [6.0_wp, 15.0_wp, 200.0_wp]
     density(1:3) = 300.0_wp
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    3,mass_max,mass_split,mass_min,h_fine,c)
+                                    mass_base,smb_ice,3,mass_max,mass_split,h_fine,c)
     call check("full column (n = Ntot): deepest fine layer keeps its excess", &
                n .eq. 3 .and. mass(3) .eq. 200.0_wp, nfail)
 
@@ -891,89 +885,71 @@ program test_layers
     mass_before = mass
     temp_before = temperature
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    10,mass_max,mass_split,mass_min,h_off,c)
+                                    mass_base,smb_ice,10,mass_max,mass_split,h_off,c)
     call check("no limits: remesh is a no-op", n .eq. 2 .and. &
                all(mass .eq. mass_before) .and. all(temperature .eq. temp_before), nfail)
 
     write(*,*)
 
     ! =====================================================================
-    ! Below the fine layers: split and merge by mass (C4b, D32)
+    ! Below the fine layers: split by mass (Chion.jl 38cb742 _split_deep_layers!)
     ! =====================================================================
-    if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
-        write(*,"(a)") "--- below the fine layers: split/merge of layer 5 (C4b) ---"
-    else
-        write(*,"(a)") "--- below the fine layers: layer 5 left alone (legacy_chion) ---"
-    end if
+    write(*,"(a)") "--- below the fine layers: split of the deep layers ---"
 
     ! --- Split: layer 5 above mass_max.
     call fine_column([800.0_wp], 400.0_wp)
     total_ref = column_total()
     ent_ref   = column_enthalpy()
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    10,mass_max,mass_split,mass_min,h_fine,c)
-    if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
-        call check("split below: layer 5 split (n = 6, 500 + 300)", n .eq. 6 .and. &
-                   near(mass(5),500.0_wp) .and. near(mass(6),mass_split), nfail)
-        call check("split below: both halves keep density and temperature", &
-                   density(6) .eq. 400.0_wp .and. temperature(6) .eq. temperature(5), nfail)
-    else
-        call check("legacy: layer 5 not split", n .eq. 5 .and. near(mass(5),800.0_wp), nfail)
-    end if
+                                    mass_base,smb_ice,10,mass_max,mass_split,h_fine,c)
+    call check("split below: layer 5 split (n = 6, 500 + 300)", n .eq. 6 .and. &
+               near(mass(5),500.0_wp) .and. near(mass(6),mass_split), nfail)
+    call check("split below: both halves keep density and temperature", &
+               density(6) .eq. 400.0_wp .and. temperature(6) .eq. temperature(5), nfail)
     call check("split below: fine layers untouched", near(mass(1),6.0_wp) .and. &
                near(mass(2),15.0_wp) .and. near(mass(3),30.0_wp) .and. near(mass(4),90.0_wp), nfail)
     call check_conserve("split below conserves mass + water", total_ref, nfail)
     call check_acc("split below conserves sum(m*T)", column_enthalpy(), ent_ref, nfail)
 
-    ! --- Full merge: layer 5 below mass_min, layer 6 small.
+    ! --- No merge: a light layer 5 stays as it is.
     call fine_column([50.0_wp, 300.0_wp], 400.0_wp)
-    total_ref = column_total()
-    ent_ref   = column_enthalpy()
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    10,mass_max,mass_split,mass_min,h_fine,c)
-    if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
-        call check("merge below: layers 5 and 6 merged (n = 5, 350)", &
-                   n .eq. 5 .and. near(mass(5),350.0_wp) .and. mass(6) .eq. 0.0_wp, nfail)
-    else
-        call check("legacy: layer 5 not merged", n .eq. 6 .and. near(mass(5),50.0_wp), nfail)
-    end if
-    call check_conserve("merge below conserves mass + water", total_ref, nfail)
-    call check_acc("merge below conserves sum(m*T)", column_enthalpy(), ent_ref, nfail)
+                                    mass_base,smb_ice,10,mass_max,mass_split,h_fine,c)
+    call check("no merge below: layers 5 and 6 unchanged (50, 300)", &
+               n .eq. 6 .and. near(mass(5),50.0_wp) .and. near(mass(6),300.0_wp), nfail)
 
-    ! --- Partial transfer: layer 5 below mass_min, layer 6 large.
-    call fine_column([50.0_wp, 700.0_wp], 400.0_wp)
+    ! --- Every deep layer is split, not only layer 5: 1200 below a light
+    !     layer 5 becomes four layers of mass_split.
+    call fine_column([50.0_wp, 1200.0_wp], 400.0_wp)
     total_ref = column_total()
     ent_ref   = column_enthalpy()
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    10,mass_max,mass_split,mass_min,h_fine,c)
-    if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
-        call check("top-up below: layer 5 back to mass_split from layer 6", &
-                   n .eq. 6 .and. near(mass(5),mass_split) .and. near(mass(6),450.0_wp), nfail)
-    else
-        call check("legacy: layer 5 not topped up", n .eq. 6 .and. near(mass(5),50.0_wp), nfail)
-    end if
-    call check_conserve("top-up below conserves mass + water", total_ref, nfail)
-    call check_acc("top-up below conserves sum(m*T)", column_enthalpy(), ent_ref, nfail)
+                                    mass_base,smb_ice,10,mass_max,mass_split,h_fine,c)
+    call check("deep split: layer 6 split down to mass_split (50, 300 x 4)", n .eq. 9 .and. &
+               near(mass(5),50.0_wp) .and. all([(near(mass(k),mass_split), k = 6, 9)]), nfail)
+    call check_conserve("deep split conserves mass + water", total_ref, nfail)
+    call check_acc("deep split conserves sum(m*T)", column_enthalpy(), ent_ref, nfail)
 
     ! --- At capacity (Ntot = 7): each split first merges the two deepest
-    !     layers, until layer 5 is within bounds.
+    !     layers, until layer 5 is within bounds; the deepest two of the full
+    !     column are not split, so the bottom layer keeps 900.
     call fine_column([900.0_wp, 300.0_wp, 300.0_wp], 400.0_wp)
     total_ref = column_total()
     call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                    mass_base,smb_ice,runoff,t_srf,albedo, &
-                                    7,mass_max,mass_split,mass_min,h_fine,c)
-    if (NEAR_SURFACE_SPLIT_MERGE_BELOW) then
-        call check("at Ntot: layer 5 split after bottom merges (300, 300, 900)", &
-                   n .eq. 7 .and. near(mass(5),300.0_wp) .and. near(mass(6),300.0_wp) &
-                   .and. near(mass(7),900.0_wp), nfail)
-    else
-        call check("legacy: full column untouched", n .eq. 7 .and. near(mass(5),900.0_wp), nfail)
-    end if
+                                    mass_base,smb_ice,7,mass_max,mass_split,h_fine,c)
+    call check("at Ntot: layer 5 split after bottom merges (300, 300, 900)", &
+               n .eq. 7 .and. near(mass(5),300.0_wp) .and. near(mass(6),300.0_wp) &
+               .and. near(mass(7),900.0_wp), nfail)
     call check_conserve("at Ntot conserves mass + water", total_ref, nfail)
+
+    ! --- At capacity with the heavy layer among the deepest two: untouched,
+    !     nothing exported.
+    call fine_column([300.0_wp, 900.0_wp], 400.0_wp)
+    call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
+                                    mass_base,smb_ice,6,mass_max,mass_split,h_fine,c)
+    call check("at Ntot: the deepest two are not split (300, 900)", &
+               n .eq. 6 .and. near(mass(5),300.0_wp) .and. near(mass(6),900.0_wp) &
+               .and. mass_base .eq. 0.0_wp_acc, nfail)
 
     write(*,*)
 

@@ -701,23 +701,26 @@ contains
         ! rebalance of accumulation (split while mass(1) > mass_max, merge
         ! while mass(1) < mass_min); with them the near-surface remesh (cap
         ! the fine layers to their thicknesses, the excess into the first
-        ! layer below them, which is split/merged by mass, D32). There the
-        ! surface rebalance plays no part: a fine layer 1 never reaches
-        ! mass_max. The result:
+        ! layer below them, and split every layer below them heavier than
+        ! mass_max, Chion.jl 38cb742 _split_deep_layers!). There the surface
+        ! rebalance plays no part: a fine layer 1 never reaches mass_max. The
+        ! result:
         !   * the fine layers at their maximum thicknesses (a shallow column's
         !     deepest one may be thinner);
-        !   * below them, the top mass layer in [mass_min, mass_max], holding
-        !     the remainder, and layers of mass_split beneath it -- a split
-        !     leaves mass_split BELOW the layer it splits, so in a grown
-        !     column the partial layer is the upper one, not the bottom one;
+        !   * below them, without fine layers the top mass layer in
+        !     [mass_min, mass_max], with them in (mass_max - mass_split,
+        !     mass_max], holding the remainder, and layers of mass_split
+        !     beneath it -- a split leaves mass_split BELOW the layer it
+        !     splits, so the partial layer is the upper one, not the bottom
+        !     one;
         !   * n <= Ntot: at Ntot the two deepest layers merge (the bottom one
-        !     takes the excess), as in accumulation.
-        ! Under legacy_chion (D32 reverted) everything below the fine layers
-        ! stays in one layer, as in a grown legacy column. Equal temperatures
-        ! and densities mix to themselves (D31), so every layer is at t_firn
-        ! and density_init_firn (to round-off). The depth cap (22.5 m) is
-        ! checked here rather than enforced: the build must not export mass,
-        ! and it is asserted that it did not.
+        !     takes the excess); with fine layers the two deepest layers of a
+        !     full column are not split, so the bottom one may exceed
+        !     mass_max.
+        ! Equal temperatures and densities mix to themselves (D31), so every
+        ! layer is at t_firn and density_init_firn (to round-off). The depth
+        ! cap (22.5 m) is checked here rather than enforced: the build must
+        ! not export mass, and it is asserted that it did not.
 
         implicit none
 
@@ -761,8 +764,8 @@ contains
         temperature(1) = t_firn
 
         ! The routines may export at the base only when a split frees a slot
-        ! at Ntot by depletion (Ntot - k <= 1) or a bottom merge exceeds
-        ! rho_i; collected here and required to be zero.
+        ! at Ntot by depletion (surface rebalance with Ntot <= 2) or a bottom
+        ! merge exceeds rho_i; collected here and required to be zero.
         exported_base   = 0.0_wp_acc
         exported_smb    = 0.0_wp_acc
         exported_runoff = 0.0_wp_acc
@@ -776,9 +779,8 @@ contains
                                  par%Ntot,par%mass_max,par%mass_split,par%mass_min,c)
         else
             call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                            exported_base,exported_smb,exported_runoff, &
-                                            t_srf_build,albedo_build, &
-                                            par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
+                                            exported_base,exported_smb, &
+                                            par%Ntot,par%mass_max,par%mass_split, &
                                             par%near_surface_layer_max_thicknesses,c)
         end if
 
@@ -1034,8 +1036,8 @@ contains
         ! Fine layers: cap the fresh snow down into the column (after the air
         ! temperature is set, so every layer it reaches carries it).
         call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                        mass_base,smb_ice,runoff,t_srf,albedo_snow, &
-                                        par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
+                                        mass_base,smb_ice, &
+                                        par%Ntot,par%mass_max,par%mass_split, &
                                         par%near_surface_layer_max_thicknesses,c)
 
         ! === Step 4: prescribed albedo, applied before the bare test =========
@@ -1293,8 +1295,8 @@ contains
         ! in Julia (steps 12-14 above are guarded on liquid water).
 
         call remesh_near_surface_layers(mass,mass_w,density,temperature,n, &
-                                        mass_base,smb_ice,runoff,t_srf,albedo_snow, &
-                                        par%Ntot,par%mass_max,par%mass_split,par%mass_min, &
+                                        mass_base,smb_ice, &
+                                        par%Ntot,par%mass_max,par%mass_split, &
                                         par%near_surface_layer_max_thicknesses,c)
 
         ! === Step 16: final albedo fixup =====================================
