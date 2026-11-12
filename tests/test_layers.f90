@@ -373,6 +373,7 @@ program test_layers
     mass_w(1:2) = [  5.0_wp,   5.0_wp]
     density(1:2) = 500.0_wp
     albedo = 0.81_wp
+    t_srf  = 250.0_wp
 
     total_ref = column_total()
 
@@ -384,7 +385,7 @@ program test_layers
     call check_acc("all solid mass exported", mass_base, 200.0_wp_acc, nfail)
     call check_acc("all liquid water to runoff", runoff, 10.0_wp_acc, nfail)
     call check_val("albedo forced to bare ice", albedo, c%alpha_ice, nfail)
-    call check_val("t_srf reset to T0", t_srf, c%T0, nfail)
+    call check_val("emptied column keeps t_srf (Chion.jl 38cb742)", t_srf, 250.0_wp, nfail)
     call check_conserve("over-depletion conserves mass", total_ref, nfail)
 
     ! ...and back again: rebuild the column from zero layers.

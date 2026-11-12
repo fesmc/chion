@@ -558,8 +558,9 @@ contains
         ! against TOL_TINY, which is only meaningful in dp (porting_notes D1b).
         !
         ! The routine also refreshes the two instantaneous surface diagnostics:
-        ! t_srf tracks layer 1 (or T0 when the column empties) and the albedo
-        ! is forced to bare-ice when the column empties.
+        ! t_srf tracks layer 1 (when the column empties it keeps its value,
+        ! capped at T0) and the albedo is forced to bare-ice when the column
+        ! empties.
 
         implicit none
 
@@ -653,10 +654,12 @@ contains
             end if
         end do
 
+        ! An emptied column keeps its surface temperature, at most T0
+        ! (Chion.jl 38cb742).
         if (n .gt. 0) then
             t_srf = temperature(1)
         else
-            t_srf = c%T0
+            t_srf = min(t_srf,c%T0)
         end if
 
         if (n .eq. 0) albedo = c%alpha_ice

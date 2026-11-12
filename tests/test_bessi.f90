@@ -1318,7 +1318,7 @@ contains
 
     subroutine test_fresh_snow_split_on_bare(nfail)
         ! Chion.jl 03bb445: snow falling on a bare column takes the air
-        ! temperature in EVERY new layer. A snowfall above mass_max splits in
+        ! temperature in EVERY new layer (capped at T0 since 38cb742). A snowfall above mass_max splits in
         ! accumulation; before the fix the split copied the reset slot
         ! temperature (temperature_init = 273 K) into layer 2.
         !
@@ -1355,6 +1355,18 @@ contains
         call check("snowfall above mass_max split into >= 2 layers", n .ge. 2, nfail)
         call check("every new layer is near the air temperature, none at temperature_init", &
                    all(abs(bsi%now%temperature(1:n,1) - forc%air_temperature) .lt. 2.0_wp), nfail)
+
+        ! Air above freezing: the new snow takes T0 (Chion.jl 38cb742), and no
+        ! layer or interface is above it.
+        call bessi_init_state(bsi,c)
+        bsi%now%n_lay(1) = 0
+        forc%air_temperature = 278.0_wp
+        call bessi_column_step(bsi,1,forc,c)
+
+        n = bsi%now%n_lay(1)
+        call check("warm air: snow at most T0 in every layer, t_srf at most T0", &
+                   n .ge. 1 .and. all(bsi%now%temperature(1:n,1) .le. c%T0) &
+                   .and. bsi%now%t_srf(1) .le. c%T0, nfail)
 
         call bessi_dealloc(bsi)
 
@@ -2001,7 +2013,7 @@ contains
     end subroutine test_bare_land
 
     ! =====================================================================
-    ! Test 18 -- a cold, dry column from empty builds snow (D45)
+    ! Test 18 -- a cold, dry column from empty builds snow
     ! =====================================================================
 
     subroutine plateau_forcing(iday,t_mean,snowfall_year,forc)
@@ -2050,14 +2062,15 @@ contains
 
     subroutine test_cold_plateau_from_empty(nfail)
         ! A cold start under 30 kg m-2 yr-1 of snowfall at -45 C. Each day
-        ! lays ~0.08 kg m-2 of snow on the empty column. Chion.jl (and
-        ! legacy_chion) then traps it: the sublimation that empties the
-        ! column resets t_srf to T0, the next step linearizes the surface
-        ! fluxes about 273 K, the thin snow comes out too warm and sublimates
-        ! within the step, and so on every day. The column stays "bare ice"
-        ! for good, reporting t_srf = T0 and alpha_ice, its snowfall all
-        ! sublimated. chion (D45) builds a firn column instead, with the
-        ! ice substrate (default) and without.
+        ! lays ~0.08 kg m-2 of snow on the empty column. Chion.jl 9ec6cc7
+        ! trapped it: the sublimation that empties the column reset t_srf to
+        ! T0, the next step linearized the surface fluxes about 273 K, the
+        ! thin snow came out too warm and sublimated within the step, and so
+        ! on every day. The column stayed "bare ice" for good, reporting
+        ! t_srf = T0 and alpha_ice, its snowfall all sublimated. Since
+        ! 38cb742 (and chion's former D45) the emptied column keeps its
+        ! t_srf, and a firn column builds, with the ice substrate (default)
+        ! and without.
         !
         ! (a) one step: thin snow sublimating away over a substrate at 240 K
         !     leaves the interface at the solved temperature, not T0.
@@ -2088,7 +2101,7 @@ contains
         ! 1e-6 is for 5 kg m-2 days). dp closes to ~5e-13.
         real(wp_acc), parameter :: CLOSURE_TOL = merge(2.0e-5_wp_acc,1.0e-10_wp_acc,wp .eq. sp)
 
-        write(*,"(a)") "--- 18. cold, dry column from empty builds snow (D45) ---"
+        write(*,"(a)") "--- 18. cold, dry column from empty builds snow ---"
 
         call chion_const_init(c)
 
@@ -2110,12 +2123,8 @@ contains
         write(*,"(a,i0,a,g14.6)") "         (a) n_lay = ", bsi%now%n_lay(1), &
                                   "  t_srf = ", bsi%now%t_srf(1)
         call check("(a) the thin snow sublimated away", bsi%now%n_lay(1) .eq. 0, nfail)
-        if (.not. CHION_LEGACY_MODE) then
-            call check("(a) emptied over a substrate: t_srf is the solved one, not T0", &
-                       abs(bsi%now%t_srf(1) - 240.0_wp) .lt. 10.0_wp, nfail)
-        else
-            call check_val("(a) legacy: emptied column reset to T0", bsi%now%t_srf(1), c%T0, nfail)
-        end if
+        call check("(a) emptied over a substrate: t_srf is the solved one, not T0", &
+                   abs(bsi%now%t_srf(1) - 240.0_wp) .lt. 10.0_wp, nfail)
 
         call bessi_dealloc(bsi)
 
@@ -2163,23 +2172,17 @@ contains
             call check_close(trim(tag)//" mass closes", closure_lhs(bsi,icol),precip, &
                              CLOSURE_TOL,nfail)
 
-            if (.not. CHION_LEGACY_MODE) then
-                call check(trim(tag)//" snow accumulated (> 2/3 of the snowfall stored)", &
-                           column_storage(bsi,icol) .gt. 2.0_wp_acc/3.0_wp_acc*precip, nfail)
-                call check(trim(tag)//" sublimation < 1/3 of the snowfall", &
-                           bsi%now%sublimation(icol) .lt. precip/3.0_wp_acc, nfail)
-                call check(trim(tag)//" mean t_srf within 5 K of the air", &
-                           abs(ts_mean - t_mean) .lt. 5.0_wp, nfail)
-                call check(trim(tag)//" mean albedo is snow's (> 0.75)", &
-                           alb_mean .gt. 0.75_wp, nfail)
-                call check(trim(tag)//" no melt, no runoff", &
-                           bsi%now%melt(icol) .eq. 0.0_wp_acc .and. &
-                           bsi%now%runoff(icol) .eq. 0.0_wp_acc, nfail)
-            else
-                call check(trim(tag)//" legacy: trapped bare, the snowfall sublimated", &
-                           bsi%now%n_lay(icol) .eq. 0 .and. &
-                           bsi%now%sublimation(icol) .gt. 0.99_wp_acc*precip, nfail)
-            end if
+            call check(trim(tag)//" snow accumulated (> 2/3 of the snowfall stored)", &
+                       column_storage(bsi,icol) .gt. 2.0_wp_acc/3.0_wp_acc*precip, nfail)
+            call check(trim(tag)//" sublimation < 1/3 of the snowfall", &
+                       bsi%now%sublimation(icol) .lt. precip/3.0_wp_acc, nfail)
+            call check(trim(tag)//" mean t_srf within 5 K of the air", &
+                       abs(ts_mean - t_mean) .lt. 5.0_wp, nfail)
+            call check(trim(tag)//" mean albedo is snow's (> 0.75)", &
+                       alb_mean .gt. 0.75_wp, nfail)
+            call check(trim(tag)//" no melt, no runoff", &
+                       bsi%now%melt(icol) .eq. 0.0_wp_acc .and. &
+                       bsi%now%runoff(icol) .eq. 0.0_wp_acc, nfail)
 
             call bessi_dealloc(bsi)
 
@@ -2385,7 +2388,7 @@ contains
     subroutine test_cold_plateau_from_firn(nfail)
         ! Test 18's plateau at 12 kg m-2 yr-1 and -45 C. Started empty, the
         ! column settles thin (a few kg m-2) under the thin-snow albedo and
-        ! sublimates its snowfall (D40, D45). Started with 500 kg m-2 of firn
+        ! sublimates its snowfall (D40). Started with 500 kg m-2 of firn
         ! at 228 K it accumulates: storage grows, t_srf stays near the air,
         ! the albedo is that of dry snow, and the mass budget closes with
         ! the initial snowpack as initial storage:

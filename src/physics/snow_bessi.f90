@@ -20,8 +20,9 @@ module snow_bessi
     !   1  dt_seconds; snapshot started_without_surface_snow BEFORE anything
     !      else; resolve use_prescribed_albedo
     !   2  accumulation (snow + rain, split/merge, depth cap)
-    !   3  fresh snow onto a column that started bare -> temperature(1:n) = T_air
-    !      and t_srf = min(T_air, T0) (D45), then the near-surface remesh (fine layers only)
+    !   3  fresh snow onto a column that started bare -> temperature(1:n) =
+    !      min(T_air, T0) (on land t_srf too, D41), then the near-surface
+    !      remesh (fine layers only)
     !   4  prescribed albedo, if any, applied BEFORE the bare-surface test
     !   5  no surface snow -> bare-ice ablation, accumulate diagnostics, RETURN
     !      (percolation and refreezing are skipped ENTIRELY -- trap, see below);
@@ -41,7 +42,7 @@ module snow_bessi
     !  14  refreezing
     !  15  near-surface remesh (fine layers only)
     !  16  final albedo fixup (and snow age), the blend on the final column;
-    !      a column left bare takes the temperature of the surface beneath (D45)
+    !      snow-free land takes the air temperature (D41)
     !
     ! ---------------------------------------------------------------------
     ! Traps honoured here (docs/PLAN.md section 5)
@@ -73,7 +74,6 @@ module snow_bessi
     use chion_defs, only : wp, wp_acc, io_unit_err, &
                            TOL_TINY, TOL_EMPTY_LAYER, &
                            ALBEDO_THIN_SNOW_BLEND, LAND_COLUMNS_WITHOUT_ICE, &
-                           BARE_SURFACE_TEMPERATURE_FROM_BELOW, &
                            DEF_NTOT, DEF_MASS_MAX, DEF_MASS_SPLIT, DEF_MASS_MIN, &
                            DEF_DENSITY_INIT, DEF_TEMPERATURE_INIT, DEF_DENSITY_INIT_FIRN, &
                            BESSI_REFERENCE_SNOW_DEPTH_M, &
@@ -1015,24 +1015,19 @@ contains
                                 forc%air_temperature,forc%wind_speed)
 
         ! === Step 3: fresh snow onto a column that started bare ==============
-        ! Every active layer takes the air temperature (Chion.jl 03bb445), not
-        ! only layer 1: a snowfall above mass_max splits in accumulation and
-        ! copies the reset slot temperature into layer 2, and a column with
-        ! 0 < mass(1) <= TOL_EMPTY_LAYER already had layers below.
-        !
-        ! So does its interface (D45): t_srf is the point the energy solve
-        ! linearizes the surface fluxes about, and the bare surface's value
-        ! (T0 for bare ice without a substrate) is not the fresh snow's.
-        ! Linearized about T0, a thin cold layer emits ~40 W m-2 too little
-        ! longwave, comes out too warm and sublimates away within the step.
-        ! Capped at T0: a snow surface is never above melting, and fresh snow
-        ! in air above freezing linearized about T_air > T0 melts far too much
-        ! (2.5x the melt of a 20-yr ablation cycle, Chion.jl#29).
+        ! Every active layer takes the air temperature capped at T0 (Chion.jl
+        ! 38cb742: solid snow is never above melting), not only layer 1: a
+        ! snowfall above mass_max splits in accumulation and copies the reset
+        ! slot temperature into layer 2. The interface keeps its value, the
+        ! bare surface's (Chion.jl), except on land (D41), where it is the air
+        ! temperature: fresh snow there starts its interface at min(T_air, T0)
+        ! too, since a snow surface linearized about T_air > T0 melts far too
+        ! much (Chion.jl#29).
 
         if (forc%snowfall_rate .gt. 0.0_wp) then
             if (started_without_surface_snow) then
-                temperature(1:n) = forc%air_temperature
-                if (BARE_SURFACE_TEMPERATURE_FROM_BELOW) t_srf = min(forc%air_temperature, c%T0)
+                temperature(1:n) = min(forc%air_temperature,c%T0)
+                if (is_land) t_srf = min(forc%air_temperature,c%T0)
             end if
         end if
 
@@ -1093,9 +1088,6 @@ contains
                                                    dt_seconds)
                 return
             end if
-
-            ! Bare ice without a substrate is held at the melting point.
-            if (BARE_SURFACE_TEMPERATURE_FROM_BELOW) t_srf = c%T0
 
             bare_ice_fluxes = bare_ice_ablation_mass(c,forc,dt_seconds,albedo)
 
@@ -1323,20 +1315,8 @@ contains
 
         if (.not. surface_has_snow(mass,n)) snow_age = 0.0_wp
 
-        ! A column left bare by melt or sublimation has the temperature of the
-        ! surface beneath (D45): on a substrate the interface the solve found,
-        ! which the next step linearizes about; T0 for bare ice without one;
-        ! the air on land (D41). Chion.jl's sublimation path resets it to T0
-        ! even over a substrate at 230 K.
-        if (BARE_SURFACE_TEMPERATURE_FROM_BELOW) then
-            if (.not. surface_has_snow(mass,n)) then
-                if (is_land) then
-                    t_srf = forc%air_temperature
-                else if (n_ice .eq. 0) then
-                    t_srf = c%T0
-                end if
-            end if
-        end if
+        ! Snow-free land has the air temperature (D41).
+        if (is_land .and. .not. surface_has_snow(mass,n)) t_srf = forc%air_temperature
 
         end associate
 

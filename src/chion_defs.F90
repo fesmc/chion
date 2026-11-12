@@ -205,13 +205,6 @@ module chion_defs
     !     averages over [-pi, pi], which zero its shortwave when the solar
     !     geometry has no daylight (polar night), as in Chion.jl. chion steps
     !     such a day with its forcing as given (docs/porting_notes.md D39).
-    !   * BARE_SURFACE_TEMPERATURE_FROM_BELOW -> .FALSE., i.e. a column whose
-    !     snow sublimates away has its interface temperature reset to T0, and
-    !     fresh snow on a bare column keeps the old one, as in Chion.jl.
-    !     chion takes it from what lies beneath (the solved substrate surface,
-    !     T0 for bare ice without one, the air on land) and starts fresh snow's
-    !     interface at the air temperature, like its layers
-    !     (docs/porting_notes.md D45).
     !
     ! Not covered: the PDD budget (D23). Chion.jl adopted it (ce6a68d), so
     ! the plain build is gated against Chion.jl for PDD.
@@ -227,7 +220,6 @@ module chion_defs
     logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .TRUE.
     logical,      parameter, public :: ALBEDO_THIN_SNOW_BLEND = .FALSE.
     logical,      parameter, public :: LAND_COLUMNS_WITHOUT_ICE = .FALSE.
-    logical,      parameter, public :: BARE_SURFACE_TEMPERATURE_FROM_BELOW = .FALSE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .TRUE.
 #else
     real(wp_acc), parameter, public :: DENSIFY_R_GAS   = real(DEF_UNIVERSAL_GAS_CONSTANT,wp_acc)
@@ -240,7 +232,6 @@ module chion_defs
     logical,      parameter, public :: DIURNAL_SINGLE_INTERVAL_AVERAGED = .FALSE.
     logical,      parameter, public :: ALBEDO_THIN_SNOW_BLEND = .TRUE.
     logical,      parameter, public :: LAND_COLUMNS_WITHOUT_ICE = .TRUE.
-    logical,      parameter, public :: BARE_SURFACE_TEMPERATURE_FROM_BELOW = .TRUE.
     logical,      parameter, public :: CHION_LEGACY_MODE = .FALSE.
 #endif
 
