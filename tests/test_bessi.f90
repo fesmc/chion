@@ -19,7 +19,7 @@ program test_bessi
     !   vapor flux     mass(1) or mass_w(1) += vapor_mass         [source/sink]
     !   melt           mass -> mass_w, in-column; depleted layers route
     !                  their water to runoff
-    !                  shortfall -> ice_melt: runoff += it, smb_ice -= it
+    !                  potential left -> ice_melt: runoff += it, smb_ice -= it
     !   percolation    mass_w -> runoff
     !   refreezing     mass_w -> mass, in-column
     !   bare ice       melt_mass: runoff += it, and smb_ice += net_mass_change

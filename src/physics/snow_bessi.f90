@@ -51,10 +51,11 @@ module snow_bessi
     !   water (it can: rain falls into mass_w(1) whenever mass(1) > 0, which
     !   is a weaker test than surface_has_snow). Water simply sits there until
     !   the column has snow again.
-    ! * Step 11 accumulates the FULL REQUESTED melt mass into the melt
-    !   diagnostic, not the amount the snowpack could actually supply. The
-    !   shortfall is separately charged to smb_ice and runoff as ice melt, so
-    !   melt is "melt demand", not "snow melted".
+    ! * Step 11: the melt potential (melt energy/Lm) also pays for warming
+    !   sub-freezing snow to T0, so the snow melted is less than it; the
+    !   potential left once the snow is gone melts ice (smb_ice and runoff),
+    !   and the melt diagnostic is the snow plus the ice melted (Chion.jl
+    !   38cb742).
     ! * Step 10 accumulates latent_heat_flux_sum in units of W m-2 DAYS:
     !   the multiplier is forc%dt_days, NOT dt_seconds. Same in step 5.
     ! * The HTESSEL snapshot is taken before the energy solve and consumed
@@ -907,7 +908,7 @@ contains
         logical  :: uses_htessel
         integer  :: n_liquid_water_before_energy
         integer  :: n_ice
-        real(wp_acc) :: melted, ice_melt, routed_runoff, refrozen_mass
+        real(wp_acc) :: melted, melt_left, ice_melt, routed_runoff, refrozen_mass
 
         type(bare_ice_ablation_class)  :: bare_ice_fluxes
         type(latent_heat_coeff_class)  :: lh_coef
@@ -1226,40 +1227,29 @@ contains
                                     *real(forc%dt_days,wp_acc)
 
         ! === Step 11: melt ===================================================
-        ! melt_energy_available is wp_acc; melt_mass is the wp mass handed to
-        ! apply_melt, matching the kernel's interface.
+        ! melt_energy_available is wp_acc; melt_mass is the wp melt potential
+        ! (energy/Lm) handed to apply_melt, matching the kernel's interface.
+        ! apply_melt also charges warming sub-freezing snow to T0 (Chion.jl
+        ! 38cb742, closed energy budget). The potential left once the snow is
+        ! gone melts the ice beneath (at T0): smb_ice loses it, runoff gains it.
+        ! The melt diagnostic is what melted, snow plus ice.
         !
-        ! TRAP: the melt diagnostic receives the FULL REQUESTED melt_mass, not
-        ! `melted`. When the snowpack cannot supply the demand AND the column
-        ! is now empty, the shortfall is charged to the ice: smb_ice loses it
-        ! and runoff gains it. Both halves of that guard matter -- a shortfall
-        ! with layers still present (which apply_melt's general path can
-        ! produce) is silently dropped.
-        !
-        ! A land column has no ice to charge (D41): its melt is the snow
-        ! actually melted, and the shortfall energy is dropped, as on
-        ! snow-free land.
+        ! A land column has no ice to melt (D41): its melt is the snow melted,
+        ! and the potential left is dropped, as on snow-free land.
 
         if (energy%needs_melt) then
 
             melt_mass = real(energy%melt_energy_available/real(c%Lm,wp_acc),wp)
 
             call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo_snow, &
-                            par%mass_split,surface_mass_min,melt_mass,c,melted)
+                            par%mass_split,surface_mass_min,melt_mass,c,melted,melt_left)
 
-            if (is_land) then
-                melt = melt + melted
-            else
-                if (melted .lt. real(melt_mass,wp_acc)) then
-                    if (n .eq. 0) then
-                        ice_melt = real(melt_mass,wp_acc) - melted
-                        smb_ice  = smb_ice - ice_melt
-                        runoff   = runoff  + ice_melt
-                    end if
-                end if
+            ice_melt = 0.0_wp_acc
+            if (.not. is_land .and. n .eq. 0) ice_melt = melt_left
 
-                melt = melt + real(melt_mass,wp_acc)
-            end if
+            smb_ice = smb_ice - ice_melt
+            runoff  = runoff  + ice_melt
+            melt    = melt    + melted + ice_melt
 
         end if
 

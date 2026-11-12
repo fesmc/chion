@@ -1,40 +1,43 @@
 module snow_melt
     ! Application of surface melt to a single snowpack column.
     !
-    ! Port of Chion.jl/src/processes/melt.jl (_apply_melt!). The melt ENERGY is
-    ! computed by the energy solve (WP5); this module only converts a given
-    ! melt mass into liquid water, consuming snow layers from the top and
-    ! restructuring the column as layers are depleted.
+    ! Port of Chion.jl/src/processes/melt.jl (_melt_surface_layers!, 38cb742).
+    ! The melt ENERGY is computed by the energy solve (WP5); this module
+    ! converts the melt potential it stands for into liquid water, consuming
+    ! snow layers from the top and restructuring the column as layers are
+    ! depleted.
     !
     ! CALLING CONVENTION: contiguous column slices plus the active layer count
     ! n, which this routine may DECREASE. See docs/porting_notes.md D8.
     !
-    ! TWO PATHS:
-    !   Fast path -- when the requested melt is comfortably smaller than the
-    !     surface layer (melt < mass(1) - TOL_EMPTY_LAYER), the whole amount is
-    !     moved from mass(1) into mass_w(1) and nothing else happens. Note this
-    !     path returns the FULL requested melt.
-    !   General path -- otherwise a loop consumes layers from the top. Each
-    !     iteration either removes an already-empty surface layer (routing its
-    !     water down, or to runoff if it was the last layer), or melts up to
-    !     the whole surface layer. After each bite the surface layer is either
-    !     removed (if depleted below TOL_EMPTY_LAYER) or merged with the layer
-    !     below (if it has fallen under mass_min and is not the only layer).
-    !     This path returns only the mass actually melted, which is less than
-    !     requested once the column runs out of snow -- the caller uses that
-    !     shortfall to drive bare-ice melt (Chion.jl/src/step.jl:346-350).
+    ! CLOSED ENERGY BUDGET: melt_mass is the melt potential, the melt energy
+    ! divided by Lm [kg m-2 of ice at T0]. Ice taken from a surface layer below
+    ! T0 must first be warmed to T0, so each kilogram of it costs
+    ! 1 + ci*(T0 - T(1))/Lm of the potential, and less than melt_mass melts.
+    ! Chion.jl charges this only for melt from the surface energy balance, not
+    ! for a prescribed melt (a mass forcing); chion's melt always comes from
+    ! the energy balance, so it always charges.
+    !
+    ! The loop consumes layers from the top. Each iteration either removes an
+    ! already-empty surface layer (routing its water down, or to runoff if it
+    ! was the last layer), or melts what the potential affords of the surface
+    ! layer: all of it unless the affordable mass is more than TOL_EMPTY_LAYER
+    ! below its mass (the potential is then used up). After each bite the
+    ! surface layer is either removed (if depleted below TOL_EMPTY_LAYER) or
+    ! merged with the layer below (if it has fallen under mass_min and is not
+    ! the only layer). The potential left once the snow is exhausted is
+    ! returned: the caller melts the ice beneath with it
+    ! (Chion.jl/src/step.jl column_step_core!).
     !
     ! NOTE the two thresholds in the loop are different and deliberately so:
     ! TOL_TINY gates "this layer is already empty, drop it", TOL_EMPTY_LAYER
     ! gates "this layer has just been depleted, drop it". See docs/PLAN.md
     ! section 5, item 1.
     !
-    ! On exit of the general path the interface temperature is set to T0
-    ! (Chion.jl 03bb445: the surface is melting; it was layer 1's temperature
-    ! before), and a column that has lost all its snow has its albedo reset to
-    ! bare ice. Neither happens on the early return or on the fast path --
-    ! also deliberate: the energy solve has already set t_srf = T0 whenever
-    ! it requested melt.
+    ! On exit the interface temperature is set to T0 (the surface is melting),
+    ! and a column that has lost all its snow has its albedo reset to bare ice.
+    ! Neither happens on the early return -- deliberate: the energy solve has
+    ! already set t_srf = T0 whenever it requested melt.
     !
     ! The two restructuring operations live in snow_layers (WP4):
     ! remove_depleted_surface_and_route_water and merge_layer (k = 1). Julia
@@ -55,8 +58,9 @@ module snow_melt
 contains
 
     subroutine apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo_dyn, &
-                          mass_split,mass_min,melt_mass,c,melted)
-        ! Chion.jl/src/processes/melt.jl:12-65.
+                          mass_split,mass_min,melt_mass,c,melted,remaining)
+        ! Chion.jl/src/processes/melt.jl:21-80 (_melt_surface_layers!,
+        ! charge_sensible_heat = true).
 
         implicit none
 
@@ -70,12 +74,13 @@ contains
         real(wp),     intent(INOUT) :: albedo_dyn      ! [1] dynamic albedo
         real(wp),     intent(IN)    :: mass_split      ! [kg m-2]
         real(wp),     intent(IN)    :: mass_min        ! [kg m-2]
-        real(wp),     intent(IN)    :: melt_mass       ! [kg m-2] requested melt
+        real(wp),     intent(IN)    :: melt_mass       ! [kg m-2] melt potential (ice at T0)
         type(chion_const_class), intent(IN) :: c
-        real(wp_acc), intent(OUT)   :: melted          ! [kg m-2] actually melted
+        real(wp_acc), intent(OUT)   :: melted          ! [kg m-2] snow melted
+        real(wp_acc), intent(OUT)   :: remaining       ! [kg m-2] potential left (ice at T0)
 
         ! Local variables
-        real(wp_acc) :: remaining, dm
+        real(wp_acc) :: dm, cost, affordable
         real(wp)     :: m_srf
 
         ! _safe_nonnegative(melt_mass)
@@ -86,36 +91,37 @@ contains
         ! Early return leaves t_srf and albedo_dyn untouched (as in Julia).
         if (remaining .le. 0.0_wp_acc .or. n .le. 0) return
 
-        ! === Fast path ====================================================
-        m_srf = mass(1)
-
-        if (remaining .lt. real(m_srf,wp_acc) - TOL_EMPTY_LAYER) then
-            mass(1)   = real(real(m_srf,wp_acc)   - remaining,wp)
-            mass_w(1) = real(real(mass_w(1),wp_acc) + remaining,wp)
-            melted    = remaining
-            return
-        end if
-
-        ! === General path =================================================
         do while (remaining .gt. 0.0_wp_acc .and. n .gt. 0)
 
             m_srf = mass(1)
 
             if (real(m_srf,wp_acc) .le. TOL_TINY) then
-                ! Layer is already empty: drop it, routing its residual water
-                ! into layer 2, or to runoff if it was the last layer.
+                ! Layer is already empty: drop it, routing its residue into
+                ! layer 2, or to runoff if it was the last layer.
                 call remove_depleted_surface_and_route_water(mass,mass_w,density, &
                                                              temperature,n,runoff,c)
                 cycle
             end if
 
-            dm = min(real(m_srf,wp_acc),remaining)
+            ! Melt potential consumed per kilogram of ice from this layer.
+            cost = 1.0_wp_acc + real(c%ci,wp_acc) &
+                   *max(real(c%T0,wp_acc) - real(temperature(1),wp_acc),0.0_wp_acc) &
+                   /real(c%Lm,wp_acc)
+
+            affordable = remaining/cost
+
+            if (affordable .lt. real(m_srf,wp_acc) - TOL_EMPTY_LAYER) then
+                dm        = affordable
+                remaining = 0.0_wp_acc
+            else
+                dm        = real(m_srf,wp_acc)
+                remaining = max(remaining - dm*cost,0.0_wp_acc)
+            end if
 
             mass(1)   = real(real(m_srf,wp_acc)     - dm,wp)
             mass_w(1) = real(real(mass_w(1),wp_acc) + dm,wp)
 
-            remaining = remaining - dm
-            melted    = melted    + dm
+            melted = melted + dm
 
             if (real(mass(1),wp_acc) .le. TOL_EMPTY_LAYER) then
                 call remove_depleted_surface_and_route_water(mass,mass_w,density, &

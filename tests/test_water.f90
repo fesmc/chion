@@ -9,8 +9,10 @@ program test_water
     !                  content, both the partial and the complete branch, and
     !                  the rho_i density cap including its deliberate
     !                  volume non-conservation;
-    !   melt        -- fast path, and mass conservation through layer
-    !                  depletion.
+    !   melt        -- part of a layer, the warming of a cold layer to T0
+    !                  (closed energy budget), the merge of a thinned layer,
+    !                  mass conservation through layer depletion and the
+    !                  potential left for the ice.
 
     use chion_defs,        only : wp, wp_acc, TOL_TINY, &
                                   chion_const_class, chion_const_init
@@ -29,7 +31,7 @@ program test_water
     real(wp) :: t_srf, albedo_dyn
     real(wp) :: rho_i, rho_w, T0, ci, Lm
 
-    real(wp_acc) :: runoff, refrozen, melted
+    real(wp_acc) :: runoff, refrozen, melted, melt_left, cost
     real(wp_acc) :: before, after, expected, phi
     integer      :: n, nfail, k
 
@@ -306,7 +308,7 @@ program test_water
     ! MELT
     ! ======================================================================
     write(*,*)
-    write(*,"(a)") "--- melt: fast path ---"
+    write(*,"(a)") "--- melt: part of the surface layer ---"
 
     n           = 3
     mass        = 0.0_wp ; mass_w = 0.0_wp ; density = 0.0_wp
@@ -314,17 +316,54 @@ program test_water
     density(1:3)= [ 350.0_wp, 400.0_wp, 450.0_wp ]
     temperature = T0
     runoff      = 0.0_wp_acc
-    t_srf       = T0
+    t_srf       = 260.0_wp
     albedo_dyn  = c%alpha_dry
 
     call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo_dyn, &
-                    300.0_wp,100.0_wp,50.0_wp,c,melted)
+                    300.0_wp,100.0_wp,50.0_wp,c,melted,melt_left)
 
-    call check_rel("fast path melts the full requested mass", melted, 50.0_wp_acc, nfail)
+    call check_rel("a layer at T0 melts the full potential", melted, 50.0_wp_acc, nfail)
+    call check("no potential left", melt_left .eq. 0.0_wp_acc, nfail)
     call check_rel("surface solid mass reduced", real(mass(1),wp_acc), 150.0_wp_acc, nfail)
     call check_rel("surface liquid water increased", real(mass_w(1),wp_acc), 50.0_wp_acc, nfail)
     call check("layer count unchanged", n .eq. 3, nfail)
-    call check("no runoff on the fast path", runoff .eq. 0.0_wp_acc, nfail)
+    call check("no runoff", runoff .eq. 0.0_wp_acc, nfail)
+    call check("t_srf set to T0", t_srf .eq. T0, nfail)
+
+    write(*,*)
+    write(*,"(a)") "--- melt: a cold surface layer is warmed to T0 first ---"
+
+    n           = 2
+    mass        = 0.0_wp ; mass_w = 0.0_wp ; density = 0.0_wp
+    mass(1:2)   = [ 200.0_wp, 300.0_wp ]
+    density(1:2)= [ 350.0_wp, 400.0_wp ]
+    temperature(1:2) = [ T0 - 10.0_wp, T0 - 5.0_wp ]
+    runoff      = 0.0_wp_acc
+    t_srf       = T0
+
+    call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo_dyn, &
+                    300.0_wp,100.0_wp,50.0_wp,c,melted,melt_left)
+
+    cost = 1.0_wp_acc + real(ci,wp_acc)*real(T0 - temperature(1),wp_acc)/real(Lm,wp_acc)
+    call check_rel("melted = potential/(1 + ci (T0 - T1)/Lm)", melted, 50.0_wp_acc/cost, nfail)
+    call check("no potential left", melt_left .eq. 0.0_wp_acc, nfail)
+
+    write(*,*)
+    write(*,"(a)") "--- melt: a surface layer thinned below mass_min is merged ---"
+
+    n           = 3
+    mass        = 0.0_wp ; mass_w = 0.0_wp ; density = 0.0_wp
+    mass(1:3)   = [ 120.0_wp, 300.0_wp, 300.0_wp ]
+    density(1:3)= [ 350.0_wp, 400.0_wp, 450.0_wp ]
+    temperature = T0
+    runoff      = 0.0_wp_acc
+
+    call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo_dyn, &
+                    300.0_wp,100.0_wp,40.0_wp,c,melted,melt_left)
+
+    call check_rel("melted the potential", melted, 40.0_wp_acc, nfail)
+    call check("80 kg m-2 left < mass_min: merged with layer 2", n .eq. 2, nfail)
+    call check_rel("merged layer holds both", real(mass(1),wp_acc), 380.0_wp_acc, nfail)
 
     write(*,*)
     write(*,"(a)") "--- melt: mass conservation through layer depletion ---"
@@ -342,14 +381,14 @@ program test_water
     before = sum(real(mass(1:n),wp_acc)) + sum(real(mass_w(1:n),wp_acc))
 
     call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo_dyn, &
-                    300.0_wp,100.0_wp,450.0_wp,c,melted)
+                    300.0_wp,100.0_wp,450.0_wp,c,melted,melt_left)
 
     after = 0.0_wp_acc
     if (n .gt. 0) after = sum(real(mass(1:n),wp_acc)) + sum(real(mass_w(1:n),wp_acc))
     after = after + runoff
 
     call check_rel("total water is conserved through melt", after, before, nfail)
-    call check_rel("melted mass equals the requested melt", melted, 450.0_wp_acc, nfail)
+    call check_rel("melted mass equals the potential", melted, 450.0_wp_acc, nfail)
     call check("column still has layers", n .gt. 0, nfail)
 
     write(*,*)
@@ -361,6 +400,7 @@ program test_water
     mass_w(1:2)  = [   2.0_wp,   2.0_wp ]
     density(1:2) = [ 350.0_wp, 400.0_wp ]
     temperature  = T0
+    temperature(2) = T0 - 20.0_wp
     runoff       = 0.0_wp_acc
     t_srf        = 260.0_wp
     albedo_dyn   = c%alpha_dry
@@ -368,10 +408,14 @@ program test_water
     before = sum(real(mass(1:n),wp_acc)) + sum(real(mass_w(1:n),wp_acc))
 
     call apply_melt(mass,mass_w,density,temperature,n,runoff,t_srf,albedo_dyn, &
-                    300.0_wp,100.0_wp,500.0_wp,c,melted)
+                    300.0_wp,100.0_wp,500.0_wp,c,melted,melt_left)
 
+    ! Layer 1 (at T0) melts whole; layer 2 is warmed from T0 - 20 first.
+    cost = 1.0_wp_acc + real(ci,wp_acc)*20.0_wp_acc/real(Lm,wp_acc)
     call check("all layers are gone", n .eq. 0, nfail)
     call check_rel("melted only what was there", melted, 200.0_wp_acc, nfail)
+    call check_rel("potential left = 500 - 100 - 100 (1 + ci 20/Lm)", melt_left, &
+                   400.0_wp_acc - 100.0_wp_acc*cost, nfail)
     call check_rel("everything left the column as runoff", runoff, before, nfail)
     call check("t_srf reset to T0", t_srf .eq. T0, nfail)
     call check("albedo reset to bare ice", albedo_dyn .eq. c%alpha_ice, nfail)
