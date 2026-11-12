@@ -1745,6 +1745,8 @@ contains
         forc%wind_speed            = 2.0_wp
         forc%relative_humidity     = 0.2_wp       ! very dry air -> sublimation
         forc%has_relative_humidity = .TRUE.
+        forc%q_lw_down             = 300.0_wp     ! a warm sky keeps the surface sublimating
+        forc%has_q_lw_down         = .TRUE.
 
         precip = 0.0_wp_acc
         do istep = 1, 500

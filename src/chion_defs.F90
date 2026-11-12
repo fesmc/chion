@@ -411,17 +411,30 @@ module chion_defs
         real(wp) :: eps_air            ! [1] emissivity of air (graybody longwave)
 
         ! Cloud-proxy downwelling longwave (CHION_LONGWAVE_CLOUD_PROXY,
-        ! Chion.jl 03bb445): eps = base + temperature_slope*(T_a - T0)
-        ! + cloud_slope*n, n = 1 - SWdn/(TOA*tau_clear(z)), tau_clear =
-        ! clear_sky_transmissivity + clear_sky_transmissivity_per_km*z/1000;
-        ! n = night_cloud_fraction without a daily-mean TOA.
-        integer  :: longwave_scheme                     ! CHION_LONGWAVE_*
-        real(wp) :: lw_emissivity_base                  ! [1]
-        real(wp) :: lw_emissivity_temperature_slope     ! [K-1]
-        real(wp) :: lw_emissivity_cloud_slope           ! [1]
-        real(wp) :: lw_clear_sky_transmissivity         ! [1] at sea level
-        real(wp) :: lw_clear_sky_transmissivity_per_km  ! [km-1]
-        real(wp) :: lw_night_cloud_fraction             ! [1]
+        ! Chion.jl 38cb742, after Konzelmann et al. 1994). The cloud fraction n
+        ! inverts the shortwave transmissivity: clear sky tau_cs = min(1,
+        ! clear_sky_transmissivity + clear_sky_transmissivity_per_km*z[km]
+        ! + clear_sky_transmissivity_insolation*ln(TOA/300 W m-2)), clouds
+        ! reduce it by 1 - a*n**p*exp(-b*z[km]) (a, p, b the
+        ! cloud_transmission coefficient, exponent and decay_per_km). The
+        ! emissivity eps = eps_cs*(1 - n**q) + eps_oc*n**q, eps_cs and eps_oc
+        ! linear in T_a - T0, q = cloud_emissivity_exponent, clamped to
+        ! [0.4, emissivity_max]; n = night_cloud_fraction without a daily-mean
+        ! TOA.
+        integer  :: longwave_scheme                          ! CHION_LONGWAVE_*
+        real(wp) :: lw_clear_sky_transmissivity              ! [1] at sea level, TOA = 300 W m-2
+        real(wp) :: lw_clear_sky_transmissivity_per_km       ! [km-1]
+        real(wp) :: lw_clear_sky_transmissivity_insolation   ! [1] per ln(TOA/300 W m-2)
+        real(wp) :: lw_cloud_transmission_coefficient        ! [1]
+        real(wp) :: lw_cloud_transmission_exponent           ! [1]
+        real(wp) :: lw_cloud_transmission_decay_per_km       ! [km-1]
+        real(wp) :: lw_clear_sky_emissivity                  ! [1] at T0
+        real(wp) :: lw_clear_sky_emissivity_temperature_slope ! [K-1]
+        real(wp) :: lw_overcast_emissivity                   ! [1] at T0
+        real(wp) :: lw_overcast_emissivity_temperature_slope ! [K-1]
+        real(wp) :: lw_cloud_emissivity_exponent             ! [1]
+        real(wp) :: lw_night_cloud_fraction                  ! [1]
+        real(wp) :: lw_emissivity_max                        ! [1]
 
         real(wp) :: eps_snow           ! [1] emissivity of snow
         real(wp) :: eps_ice            ! [1] emissivity of bare ice (semix SEB)
@@ -709,13 +722,14 @@ contains
         c%l_dew       = .TRUE.
         c%climberx_qsat = CLIMBERX_QSAT_CLIMBERX
 
-        ! Chion.jl bulk turbulence defaults (src/constants.jl, 03bb445).
+        ! Chion.jl bulk turbulence defaults (src/constants.jl, 03bb445;
+        ! sensible exchange factor 38cb742).
         c%semix_karman                   = 0.4_wp
         c%semix_surface_height           = 10.0_wp
         c%semix_z0m_snow                 = 0.001_wp
         c%semix_z0m_ice                  = 0.01_wp
         c%semix_zm_to_zh                 = 10.0_wp
-        c%semix_sensible_exchange_factor = 2.5_wp
+        c%semix_sensible_exchange_factor = 3.0_wp
         c%semix_stable_coefficient       = 40.0_wp
         c%semix_latent_exchange_factor   = 1.0_wp
 
@@ -759,15 +773,21 @@ contains
 
         c%eps_air  = 0.80_wp
 
-        ! Chion.jl 03bb445 coefficients (fitted to daily MAR longwave over
-        ! Greenland) and default, the cloud proxy.
-        c%longwave_scheme                    = CHION_LONGWAVE_CLOUD_PROXY
-        c%lw_emissivity_base                 = 0.624_wp
-        c%lw_emissivity_temperature_slope    = 0.0032_wp
-        c%lw_emissivity_cloud_slope          = 0.613_wp
-        c%lw_clear_sky_transmissivity        = 0.85_wp
-        c%lw_clear_sky_transmissivity_per_km = 0.075_wp
-        c%lw_night_cloud_fraction            = 0.389_wp
+        ! Chion.jl 38cb742 coefficients and default, the cloud proxy.
+        c%longwave_scheme                           = CHION_LONGWAVE_CLOUD_PROXY
+        c%lw_clear_sky_transmissivity               = 0.718_wp
+        c%lw_clear_sky_transmissivity_per_km        = 0.0298_wp
+        c%lw_clear_sky_transmissivity_insolation    = 0.0569_wp
+        c%lw_cloud_transmission_coefficient         = 0.447_wp
+        c%lw_cloud_transmission_exponent            = 2.75_wp
+        c%lw_cloud_transmission_decay_per_km        = 0.225_wp
+        c%lw_clear_sky_emissivity                   = 0.716_wp
+        c%lw_clear_sky_emissivity_temperature_slope = 0.00239_wp
+        c%lw_overcast_emissivity                    = 0.952_wp
+        c%lw_overcast_emissivity_temperature_slope  = 0.00362_wp
+        c%lw_cloud_emissivity_exponent              = 3.0_wp
+        c%lw_night_cloud_fraction                   = 0.85_wp
+        c%lw_emissivity_max                         = 1.0_wp
 
         c%eps_snow = 0.98_wp
         c%eps_ice  = 0.98_wp
@@ -879,15 +899,32 @@ contains
         write(*,"(a25,g14.6,a)") "c_fsnow_orog = ", c%c_fsnow_orog, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_air  = ", c%eps_air,  "  [1]"
         write(*,"(a25,i14)")     "longwave_scheme = ", c%longwave_scheme
-        write(*,"(a37,g14.6,a)") "lw_emissivity_base = ", c%lw_emissivity_base, "  [1]"
-        write(*,"(a37,g14.6,a)") "lw_emissivity_temperature_slope = ", &
-                                 c%lw_emissivity_temperature_slope, "  [K-1]"
-        write(*,"(a37,g14.6,a)") "lw_emissivity_cloud_slope = ", c%lw_emissivity_cloud_slope, "  [1]"
-        write(*,"(a37,g14.6,a)") "lw_clear_sky_transmissivity = ", &
+        write(*,"(a44,g14.6,a)") "lw_clear_sky_transmissivity = ", &
                                  c%lw_clear_sky_transmissivity, "  [1]"
-        write(*,"(a37,g14.6,a)") "lw_clear_sky_transmissivity_per_km = ", &
+        write(*,"(a44,g14.6,a)") "lw_clear_sky_transmissivity_per_km = ", &
                                  c%lw_clear_sky_transmissivity_per_km, "  [km-1]"
-        write(*,"(a37,g14.6,a)") "lw_night_cloud_fraction = ", c%lw_night_cloud_fraction, "  [1]"
+        write(*,"(a44,g14.6,a)") "lw_clear_sky_transmissivity_insolation = ", &
+                                 c%lw_clear_sky_transmissivity_insolation, "  [1]"
+        write(*,"(a44,g14.6,a)") "lw_cloud_transmission_coefficient = ", &
+                                 c%lw_cloud_transmission_coefficient, "  [1]"
+        write(*,"(a44,g14.6,a)") "lw_cloud_transmission_exponent = ", &
+                                 c%lw_cloud_transmission_exponent, "  [1]"
+        write(*,"(a44,g14.6,a)") "lw_cloud_transmission_decay_per_km = ", &
+                                 c%lw_cloud_transmission_decay_per_km, "  [km-1]"
+        write(*,"(a44,g14.6,a)") "lw_clear_sky_emissivity = ", &
+                                 c%lw_clear_sky_emissivity, "  [1]"
+        write(*,"(a44,g14.6,a)") "lw_clear_sky_emissivity_temperature_slope = ", &
+                                 c%lw_clear_sky_emissivity_temperature_slope, "  [K-1]"
+        write(*,"(a44,g14.6,a)") "lw_overcast_emissivity = ", &
+                                 c%lw_overcast_emissivity, "  [1]"
+        write(*,"(a44,g14.6,a)") "lw_overcast_emissivity_temperature_slope = ", &
+                                 c%lw_overcast_emissivity_temperature_slope, "  [K-1]"
+        write(*,"(a44,g14.6,a)") "lw_cloud_emissivity_exponent = ", &
+                                 c%lw_cloud_emissivity_exponent, "  [1]"
+        write(*,"(a44,g14.6,a)") "lw_night_cloud_fraction = ", &
+                                 c%lw_night_cloud_fraction, "  [1]"
+        write(*,"(a44,g14.6,a)") "lw_emissivity_max = ", &
+                                 c%lw_emissivity_max, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_snow = ", c%eps_snow, "  [1]"
         write(*,"(a25,g14.6,a)") "eps_ice  = ", c%eps_ice,  "  [1]"
         write(*,"(a25,g14.6,a)") "sigma_sb = ", c%sigma_sb, "  [W m-2 K-4]"
@@ -900,10 +937,11 @@ contains
 
     subroutine chion_const_validate(c)
         ! Constraints Chion.jl's SnowpackPhysicalConstants constructor checks
-        ! (src/constants.jl, 6d06af6, 03bb445): the aging timescales are
-        ! positive, under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1,
-        ! the clear-sky transmissivity is positive and the night cloud
-        ! fraction in [0,1], the semix turbulence's karman constant, height,
+        ! (src/constants.jl, 6d06af6, 03bb445, 38cb742): the aging timescales
+        ! are positive, under the aging scheme 0 <= alpha_wet <= alpha_dry <= 1,
+        ! the cloud proxy's clear-sky transmissivity, cloud transmission
+        ! coefficient and exponents positive, its night cloud fraction in
+        ! [0,1] and its emissivity_max in (0.4,1], the semix turbulence's karman constant, height,
         ! roughness lengths, roughness ratio and exchange factors positive and
         ! its stable coefficient non-negative. Plus chion's
         ! aging_snowfall_ref > 0 (D30), and for the thin-snow albedo (D40,
@@ -943,6 +981,21 @@ contains
             write(io_unit_err,*) "chion_const_validate:: Error: lw_night_cloud_fraction &
                                  &must be in [0,1]."
             write(io_unit_err,*) "lw_night_cloud_fraction = ", c%lw_night_cloud_fraction
+            stop "Program stopped."
+        end if
+
+        if (.not. (c%lw_cloud_transmission_coefficient .gt. 0.0_wp &
+                   .and. c%lw_cloud_transmission_exponent .gt. 0.0_wp &
+                   .and. c%lw_cloud_emissivity_exponent .gt. 0.0_wp)) then
+            write(io_unit_err,*) "chion_const_validate:: Error: lw_cloud_transmission_coefficient, &
+                                 &lw_cloud_transmission_exponent and lw_cloud_emissivity_exponent &
+                                 &must be positive."
+            stop "Program stopped."
+        end if
+
+        if (.not. (c%lw_emissivity_max .gt. 0.4_wp .and. c%lw_emissivity_max .le. 1.0_wp)) then
+            write(io_unit_err,*) "chion_const_validate:: Error: lw_emissivity_max must be in (0.4,1]."
+            write(io_unit_err,*) "lw_emissivity_max = ", c%lw_emissivity_max
             stop "Program stopped."
         end if
 

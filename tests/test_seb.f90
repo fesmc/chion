@@ -442,8 +442,8 @@ contains
         tx = turb_semix_flux_linearized(c,263.0_wp,268.0_wp,0.8_wp,80000.0_wp,5.0_wp, &
                                         turb_semix_neutral_exchange(c,.FALSE.),c%Lv + c%Lm)
         rho = turb_semix_air_density(c,268.0_wp,80000.0_wp)
-        call check_close("sensible coefficient = 2.5 rho cp/r_a", tx%sensible_linear, &
-                         2.5_wp*rho*c%cp_air &
+        call check_close("sensible coefficient = 3 rho cp/r_a", tx%sensible_linear, &
+                         3.0_wp*rho*c%cp_air &
                          /turb_semix_resistance(c,263.0_wp,268.0_wp,5.0_wp,turb_semix_neutral_exchange(c,.FALSE.)), &
                          1.0e-5_wp, nfail)
         call check_close("Q_sh = coefficient*(Ta - Ts)", &

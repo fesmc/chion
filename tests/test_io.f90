@@ -57,9 +57,11 @@ program test_io
     integer, parameter :: NCOL_TEST = 3
     integer, parameter :: NSTEP_1   = 24     ! steps before the restart
     integer, parameter :: NSTEP_2   = 12     ! steps after it
-    ! The aging round trip restarts during the first rain spell, while snow
-    ! is aging (set_forcing); at NSTEP_1 it is snowing and every age is 0.
-    integer, parameter :: NSTEP_1_AGING = 5
+    ! The aging round trip restarts when the first rain spell has begun on
+    ! the warmer columns, while their snow is aging (set_forcing); at NSTEP_1
+    ! it is snowing and every age is 0, and a step later the thin snow of the
+    ! warmer columns has melted out.
+    integer, parameter :: NSTEP_1_AGING = 4
     real(wp), parameter :: DT_TEST  = 1.0_wp
 
     character(len=512) :: mode

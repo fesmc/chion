@@ -85,15 +85,18 @@ module snow_surface_fluxes
 
     private
 
-    ! Cloud-proxy longwave limits, literals in Chion.jl 03bb445
-    ! (surface_fluxes.jl LONGWAVE_CLOUD_PROXY_MIN_TOA, _cloud_proxy_emissivity):
-    ! below this daily-mean TOA (polar night) the shortwave cloudiness proxy is
-    ! undefined; it needs a daily-mean shortwave, so a step of at least
-    ! CLOUD_PROXY_DT_DAYS_MIN; the emissivity is clamped to [MIN, MAX].
+    ! Cloud-proxy longwave limits, literals in Chion.jl 38cb742
+    ! (surface_fluxes.jl LONGWAVE_CLOUD_PROXY_MIN_TOA, _cloud_proxy_cloud_fraction,
+    ! _cloud_proxy_emissivity): below this daily-mean TOA (polar night) the
+    ! shortwave cloud fraction is undefined, and the clear-sky transmissivity
+    ! takes at least this TOA; the proxy needs a daily-mean shortwave, so a step
+    ! of at least CLOUD_PROXY_DT_DAYS_MIN; the insolation term of the clear-sky
+    ! transmissivity is relative to CLOUD_PROXY_TOA_REF; the emissivity is
+    ! clamped to [CLOUD_PROXY_EMISSIVITY_MIN, c%lw_emissivity_max].
     real(wp), parameter :: CLOUD_PROXY_MIN_TOA        = 50.0_wp   ! [W m-2]
+    real(wp), parameter :: CLOUD_PROXY_TOA_REF        = 300.0_wp  ! [W m-2]
     real(wp), parameter :: CLOUD_PROXY_DT_DAYS_MIN    = 0.75_wp   ! [d]
     real(wp), parameter :: CLOUD_PROXY_EMISSIVITY_MIN = 0.4_wp    ! [1]
-    real(wp), parameter :: CLOUD_PROXY_EMISSIVITY_MAX = 1.3_wp    ! [1]
 
     ! === Return types ========================================================
     ! Julia returns named tuples; Fortran gets small derived types. FIELD ORDER
@@ -166,6 +169,7 @@ module snow_surface_fluxes
     end interface with_parameterized_longwave
 
     public :: cloud_proxy_emissivity
+    public :: cloud_proxy_cloud_fraction
     public :: clear_sky_transmissivity
     public :: with_parameterized_longwave
 
@@ -203,21 +207,18 @@ contains
 
     pure function cloud_proxy_emissivity_geom(c,forc,geom) result(emissivity)
         ! Chion.jl/src/processes/surface_fluxes.jl:_cloud_proxy_emissivity
-        ! (03bb445). Effective atmospheric emissivity relative to the air
-        ! temperature,
-        !     eps = clamp(eps0 + eps_T*(T_a - T0) + eps_n*n, 0.4, 1.3),
-        ! with the cloudiness n = clamp(1 - SWdn/(TOA*tau_clear(z)), 0, 1)
-        ! from the daily shortwave transmissivity the forcing already carries,
-        ! and tau_clear = tau0 + tau_km*z/1000 (z = surface_height; non-finite
-        ! or negative -> 0). Where the proxy is undefined -- polar night
-        ! (TOA <= 50 W m-2), a sub-daily step (dt < 0.75 d, where SWdn is not
-        ! a daily mean), no latitude -- n is the constant night cloudiness.
-        !
-        ! TOA is chion's fixed-orbit daily mean from latitude, solar longitude
-        ! and day of year, as in Julia, unless the host supplies its own
-        ! (has_toa_shortwave; chion only, docs/porting_notes.md D33). The
-        ! host's TOA needs no latitude. geom is the column-day's solar geometry
-        ! (diurnal_geometry of the forcing's latitude and solar longitude).
+        ! (38cb742; Konzelmann et al. 1994). Effective atmospheric emissivity
+        ! relative to the air temperature, weighted between clear sky and
+        ! overcast,
+        !     eps = clamp(eps_cs*(1 - n**q) + eps_oc*n**q, 0.4, eps_max),
+        !     eps_cs = lw_clear_sky_emissivity
+        !              + lw_clear_sky_emissivity_temperature_slope*(T_a - T0),
+        !     eps_oc = lw_overcast_emissivity
+        !              + lw_overcast_emissivity_temperature_slope*(T_a - T0),
+        ! q = lw_cloud_emissivity_exponent, eps_max = lw_emissivity_max, and
+        ! the cloud fraction n of cloud_proxy_cloud_fraction. geom is the
+        ! column-day's solar geometry (diurnal_geometry of the forcing's
+        ! latitude and solar longitude).
 
         implicit none
 
@@ -227,8 +228,51 @@ contains
         real(wp) :: emissivity                                ! [1]
 
         ! Local variables
+        real(wp) :: weight, clear, overcast
+
+        weight   = cloud_proxy_cloud_fraction(c,forc,geom)**c%lw_cloud_emissivity_exponent
+        clear    = c%lw_clear_sky_emissivity &
+                   + c%lw_clear_sky_emissivity_temperature_slope*(forc%air_temperature - c%T0)
+        overcast = c%lw_overcast_emissivity &
+                   + c%lw_overcast_emissivity_temperature_slope*(forc%air_temperature - c%T0)
+
+        emissivity = clear*(1.0_wp - weight) + overcast*weight
+
+        emissivity = min(max(emissivity,CLOUD_PROXY_EMISSIVITY_MIN),c%lw_emissivity_max)
+
+        return
+
+    end function cloud_proxy_emissivity_geom
+
+    pure function cloud_proxy_cloud_fraction(c,forc,geom) result(cloud_fraction)
+        ! Chion.jl/src/processes/surface_fluxes.jl:_cloud_proxy_cloud_fraction
+        ! (38cb742). The daily cloud fraction n diagnosed from the shortwave
+        ! transmissivity of the atmosphere: clouds reduce the clear-sky one,
+        ! tau_cs (clear_sky_transmissivity), by the factor
+        ! 1 - a*n**p*exp(-b*z) (Konzelmann et al. 1994), inverted for n,
+        !     n = clamp((1 - SWdn/(TOA*tau_cs))/(a*exp(-b*z)), 0, 1)**(1/p),
+        ! a = lw_cloud_transmission_coefficient, p = lw_cloud_transmission_exponent,
+        ! b = lw_cloud_transmission_decay_per_km, z = surface_height [km]
+        ! (non-finite or negative -> 0). Where the proxy is undefined -- polar
+        ! night (TOA <= 50 W m-2), a sub-daily step (dt < 0.75 d, where SWdn is
+        ! not a daily mean), no latitude -- n is the constant
+        ! lw_night_cloud_fraction.
+        !
+        ! TOA is chion's fixed-orbit daily mean from latitude, solar longitude
+        ! and day of year, as in Julia, unless the host supplies its own
+        ! (has_toa_shortwave; chion only, docs/porting_notes.md D33). The
+        ! host's TOA needs no latitude.
+
+        implicit none
+
+        type(chion_const_class),        intent(IN) :: c
+        type(chion_step_forcing_class), intent(IN) :: forc
+        type(diurnal_geometry_class),   intent(IN) :: geom
+        real(wp) :: cloud_fraction                            ! [1]
+
+        ! Local variables
         logical  :: daily
-        real(wp) :: toa, clear_transmissivity, cloudiness
+        real(wp) :: toa, height_km, deficit, cloud_effect
 
         if (forc%has_toa_shortwave) then
             toa   = forc%toa_shortwave
@@ -244,38 +288,44 @@ contains
         daily = daily .and. toa .gt. CLOUD_PROXY_MIN_TOA &
                       .and. forc%dt_days .ge. CLOUD_PROXY_DT_DAYS_MIN
 
-        clear_transmissivity = clear_sky_transmissivity(c,forc%surface_height)
-
-        if (daily) then
-            cloudiness = min(max(1.0_wp - forc%shortwave_down &
-                                 /safe_positive(toa*clear_transmissivity), &
-                                 0.0_wp),1.0_wp)
-        else
-            cloudiness = c%lw_night_cloud_fraction
+        if (.not. daily) then
+            cloud_fraction = c%lw_night_cloud_fraction
+            return
         end if
 
-        emissivity = c%lw_emissivity_base &
-                     + c%lw_emissivity_temperature_slope*(forc%air_temperature - c%T0) &
-                     + c%lw_emissivity_cloud_slope*cloudiness
+        height_km = 0.0_wp
+        if (ieee_is_finite(forc%surface_height)) height_km = max(forc%surface_height,0.0_wp)/1000.0_wp
 
-        emissivity = min(max(emissivity,CLOUD_PROXY_EMISSIVITY_MIN),CLOUD_PROXY_EMISSIVITY_MAX)
+        deficit = min(max(1.0_wp - forc%shortwave_down &
+                          /safe_positive(toa*clear_sky_transmissivity(c,forc%surface_height,toa)), &
+                          0.0_wp),1.0_wp)
+
+        cloud_effect = c%lw_cloud_transmission_coefficient &
+                       *exp(-c%lw_cloud_transmission_decay_per_km*height_km)
+
+        cloud_fraction = min(max(deficit/safe_positive(cloud_effect),0.0_wp),1.0_wp) &
+                         **(1.0_wp/c%lw_cloud_transmission_exponent)
 
         return
 
-    end function cloud_proxy_emissivity_geom
+    end function cloud_proxy_cloud_fraction
 
-    elemental function clear_sky_transmissivity(c,height) result(tau)
-        ! The daily shortwave transmissivity of a clear sky at the surface
-        ! height, tau_clear = tau0 + tau_km*z/1000 [1], the reference of the
-        ! cloud proxy's cloudiness n = 1 - SWdn/(TOA*tau_clear). A height that
-        ! is not finite (no surface height) or negative counts as sea level.
-        ! Public so a host that makes SWdn from a cloud fraction n,
-        ! SWdn = TOA*tau_clear*(1 - n), gives the proxy back the same n.
+    elemental function clear_sky_transmissivity(c,height,toa) result(tau)
+        ! The daily shortwave transmissivity of a clear sky (Chion.jl 38cb742,
+        ! _cloud_proxy_cloud_fraction), rising with the surface height and the
+        ! insolation,
+        !     tau_cs = min(1, tau0 + tau_z*z[km] + tau_S*ln(TOA/300 W m-2)),
+        ! tau0 = lw_clear_sky_transmissivity, tau_z = ..._per_km, tau_S =
+        ! ..._insolation. A height that is not finite (no surface height) or
+        ! negative counts as sea level; TOA is taken at least 50 W m-2, the
+        ! proxy's night limit. The reference of the cloud proxy's cloud
+        ! fraction; public, exported by the chion facade.
 
         implicit none
 
         type(chion_const_class), intent(IN) :: c
         real(wp),                intent(IN) :: height   ! [m]
+        real(wp),                intent(IN) :: toa      ! [W m-2] daily-mean TOA shortwave
         real(wp) :: tau                                 ! [1]
 
         real(wp) :: z
@@ -283,7 +333,10 @@ contains
         z = 0.0_wp
         if (ieee_is_finite(height)) z = max(height,0.0_wp)
 
-        tau = c%lw_clear_sky_transmissivity + c%lw_clear_sky_transmissivity_per_km*z/1000.0_wp
+        tau = min(1.0_wp, c%lw_clear_sky_transmissivity &
+                          + c%lw_clear_sky_transmissivity_per_km*z/1000.0_wp &
+                          + c%lw_clear_sky_transmissivity_insolation &
+                            *log(max(toa,CLOUD_PROXY_MIN_TOA)/CLOUD_PROXY_TOA_REF))
 
         return
 

@@ -28,7 +28,7 @@ program test_surface
                                     CHION_TURB_BESSI, CHION_TURB_SEMIX, CHION_TURB_CLIMBERX, &
                                     CHION_LONGWAVE_GRAYBODY, CHION_LONGWAVE_CLOUD_PROXY
     use snow_surface_fluxes
-    use snow_diurnal, only : daily_toa_shortwave
+    use snow_diurnal, only : daily_toa_shortwave, diurnal_geometry
     use snow_vapor
     use snow_seb_semix
     use snow_turbulence
@@ -721,8 +721,9 @@ contains
     end subroutine test_snow_vapor_mass
 
     subroutine test_cloud_proxy(nfail)
-        ! Chion.jl surface_fluxes.jl _cloud_proxy_emissivity and
-        ! _with_parameterized_longwave (03bb445), and chion's host TOA (D33).
+        ! Chion.jl surface_fluxes.jl _cloud_proxy_cloud_fraction,
+        ! _cloud_proxy_emissivity and _with_parameterized_longwave (38cb742),
+        ! and chion's host TOA (D33).
 
         use, intrinsic :: ieee_arithmetic, only : ieee_value, ieee_quiet_nan
 
@@ -732,7 +733,7 @@ contains
 
         type(chion_const_class)        :: c
         type(chion_step_forcing_class) :: fp, fc
-        real(wp) :: toa, tau, n_cloud, eps, eps_ref, nan_wp
+        real(wp) :: toa, tau, n_cloud, eps, eps_ref, nan_wp, eps_night
 
         write(*,*)
         write(*,"(a)") "--- cloud-proxy longwave ---"
@@ -742,26 +743,30 @@ contains
         ! Greenland summer day: 70 N at the June solstice, 1.5 km.
         call forcing_init(fp)
         fp%air_temperature     = 268.0_wp
-        fp%shortwave_down      = 250.0_wp
+        fp%shortwave_down      = 360.0_wp
         fp%latitude_deg        = 70.0_wp
         fp%solar_longitude_deg = 90.0_wp
         fp%day_of_year         = 172.0_wp
         fp%surface_height      = 1500.0_wp
 
         toa     = daily_toa_shortwave(70.0_wp,90.0_wp,172.0_wp)
-        tau     = 0.85_wp + 0.075_wp*1.5_wp
-        n_cloud = 1.0_wp - 250.0_wp/(toa*tau)
-        eps_ref = 0.624_wp + 0.0032_wp*(268.0_wp - c%T0) + 0.613_wp*n_cloud
+        tau     = min(1.0_wp, 0.718_wp + 0.0298_wp*1.5_wp + 0.0569_wp*log(toa/300.0_wp))
+        n_cloud = ((1.0_wp - 360.0_wp/(toa*tau))/(0.447_wp*exp(-0.225_wp*1.5_wp)))**(1.0_wp/2.75_wp)
+        eps_ref = proxy_eps(268.0_wp,n_cloud)
 
         call check("70 N solstice: TOA well above the 50 W m-2 night limit", &
                    toa .gt. 400.0_wp, nfail)
-        call check("70 N solstice: cloudiness strictly inside (0,1)", &
+        call check("70 N solstice: cloud fraction strictly inside (0,1)", &
                    n_cloud .gt. 0.0_wp .and. n_cloud .lt. 1.0_wp, nfail)
+        call check_close("tau_cs = min(1, 0.718 + 0.0298 z + 0.0569 ln(TOA/300))", &
+                         clear_sky_transmissivity(c,1500.0_wp,toa), tau, 1.0e-6_wp, nfail)
+        call check_close("n = ((1 - SW/(TOA tau_cs))/(0.447 exp(-0.225 z)))^(1/2.75)", &
+                         cloud_proxy_cloud_fraction(c,fp,diurnal_geometry(70.0_wp,90.0_wp)), &
+                         n_cloud, 1.0e-5_wp, nfail)
         eps = cloud_proxy_emissivity(c,fp)
-        call check_close("eps = 0.624 + 0.0032(Ta-T0) + 0.613(1 - SW/(TOA tau_clear(z)))", &
-                         eps, eps_ref, 1.0e-6_wp, nfail)
+        call check_close("eps = eps_cs(T)(1 - n^3) + eps_oc(T) n^3", eps, eps_ref, 1.0e-6_wp, nfail)
 
-        ! Graybody (the default) passes the forcing through untouched.
+        ! Graybody passes the forcing through untouched.
         c%longwave_scheme = CHION_LONGWAVE_GRAYBODY
         fc = with_parameterized_longwave(c,fp)
         call check("graybody: forcing passed through, no longwave prescribed", &
@@ -786,7 +791,7 @@ contains
         fp%q_lw_down     = 0.0_wp
 
         ! Night fallbacks: polar night, a sub-daily step, no latitude.
-        eps_ref = 0.624_wp + 0.0032_wp*(268.0_wp - c%T0) + 0.613_wp*0.389_wp
+        eps_night = proxy_eps(268.0_wp,0.85_wp)
 
         fc = fp
         fc%solar_longitude_deg = 270.0_wp
@@ -795,18 +800,18 @@ contains
         call check("80 N midwinter: TOA below the night limit", &
                    daily_toa_shortwave(80.0_wp,270.0_wp,355.0_wp) .le. 50.0_wp, nfail)
         call check_close("polar night: n = lw_night_cloud_fraction", &
-                         cloud_proxy_emissivity(c,fc), eps_ref, 1.0e-6_wp, nfail)
+                         cloud_proxy_emissivity(c,fc), eps_night, 1.0e-6_wp, nfail)
 
         fc = fp
         fc%dt_days = 0.5_wp
         call check_close("sub-daily step: n = lw_night_cloud_fraction", &
-                         cloud_proxy_emissivity(c,fc), eps_ref, 1.0e-6_wp, nfail)
+                         cloud_proxy_emissivity(c,fc), eps_night, 1.0e-6_wp, nfail)
 
         nan_wp = ieee_value(nan_wp,ieee_quiet_nan)
         fc = fp
         fc%latitude_deg = nan_wp
         call check_close("no latitude: n = lw_night_cloud_fraction", &
-                         cloud_proxy_emissivity(c,fc), eps_ref, 1.0e-6_wp, nfail)
+                         cloud_proxy_emissivity(c,fc), eps_night, 1.0e-6_wp, nfail)
 
         ! A missing (NaN) or negative surface height is sea level.
         fc = fp
@@ -821,47 +826,69 @@ contains
         call check("negative surface height = sea level", &
                    cloud_proxy_emissivity(c,fc) .eq. eps_ref, nfail)
 
-        ! clear_sky_transmissivity is the proxy's tau_clear: a host SWdn from a
-        ! cloud fraction, TOA*tau_clear(z)*(1 - n), gives the proxy back n.
-        call check_close("clear_sky_transmissivity(1500 m) = 0.85 + 0.075*1.5", &
-                         clear_sky_transmissivity(c,1500.0_wp), tau, 1.0e-12_wp, nfail)
+        ! clear_sky_transmissivity: sea level for NaN and negative heights, the
+        ! TOA floored at the night limit, capped at 1.
         call check("clear_sky_transmissivity: NaN and negative heights = sea level", &
-                   clear_sky_transmissivity(c,nan_wp) .eq. 0.85_wp .and. &
-                   clear_sky_transmissivity(c,-200.0_wp) .eq. 0.85_wp, nfail)
+                   clear_sky_transmissivity(c,nan_wp,300.0_wp) .eq. 0.718_wp .and. &
+                   clear_sky_transmissivity(c,-200.0_wp,300.0_wp) .eq. 0.718_wp, nfail)
+        call check_close("clear_sky_transmissivity: TOA floored at 50 W m-2", &
+                         clear_sky_transmissivity(c,0.0_wp,0.0_wp), &
+                         0.718_wp + 0.0569_wp*log(50.0_wp/300.0_wp), 1.0e-6_wp, nfail)
+        call check("clear_sky_transmissivity: at most 1", &
+                   clear_sky_transmissivity(c,9000.0_wp,600.0_wp) .eq. 1.0_wp, nfail)
+
+        ! The proxy inverts its transmissivity model: SWdn = TOA tau_cs
+        ! (1 - a n^p exp(-b z)) gives n back.
         fc = fp
-        fc%shortwave_down = toa*clear_sky_transmissivity(c,fp%surface_height)*(1.0_wp - 0.28_wp)
-        eps_ref = 0.624_wp + 0.0032_wp*(268.0_wp - c%T0) + 0.613_wp*0.28_wp
-        call check_close("SWdn = TOA tau_clear (1 - n): the proxy's cloudiness is n", &
-                         cloud_proxy_emissivity(c,fc), eps_ref, 1.0e-9_wp, nfail)
+        fc%shortwave_down = toa*clear_sky_transmissivity(c,fp%surface_height,toa) &
+                            *(1.0_wp - 0.447_wp*0.6_wp**2.75_wp*exp(-0.225_wp*1.5_wp))
+        call check_close("SWdn = TOA tau_cs (1 - a n^p exp(-b z)): the proxy's n is n", &
+                         cloud_proxy_cloud_fraction(c,fc,diurnal_geometry(70.0_wp,90.0_wp)), &
+                         0.6_wp, 1.0e-5_wp, nfail)
 
         ! The host's TOA replaces chion's own (D33), and needs no latitude.
         fc = fp
         fc%has_toa_shortwave = .TRUE.
-        fc%toa_shortwave     = 400.0_wp
+        fc%toa_shortwave     = 600.0_wp
         fc%latitude_deg      = nan_wp
-        eps_ref = 0.624_wp + 0.0032_wp*(268.0_wp - c%T0) &
-                  + 0.613_wp*(1.0_wp - 250.0_wp/(400.0_wp*tau))
+        tau     = min(1.0_wp, 0.718_wp + 0.0298_wp*1.5_wp + 0.0569_wp*log(600.0_wp/300.0_wp))
+        n_cloud = ((1.0_wp - 360.0_wp/(600.0_wp*tau))/(0.447_wp*exp(-0.225_wp*1.5_wp)))**(1.0_wp/2.75_wp)
         call check_close("host TOA replaces the internal one", &
-                         cloud_proxy_emissivity(c,fc), eps_ref, 1.0e-6_wp, nfail)
+                         cloud_proxy_emissivity(c,fc), proxy_eps(268.0_wp,n_cloud), 1.0e-6_wp, nfail)
         fc%toa_shortwave = 40.0_wp
-        eps_ref = 0.624_wp + 0.0032_wp*(268.0_wp - c%T0) + 0.613_wp*0.389_wp
-        call check_close("host TOA below the night limit: night cloudiness", &
-                         cloud_proxy_emissivity(c,fc), eps_ref, 1.0e-6_wp, nfail)
+        call check_close("host TOA below the night limit: night cloud fraction", &
+                         cloud_proxy_emissivity(c,fc), eps_night, 1.0e-6_wp, nfail)
 
-        ! Cloudiness and emissivity clamps.
+        ! Cloud fraction and emissivity clamps.
         fc = fp
         fc%shortwave_down = 0.0_wp
-        fc%air_temperature = 330.0_wp
-        call check_close("emissivity clamped at 1.3", cloud_proxy_emissivity(c,fc), &
-                         1.3_wp, 1.0e-6_wp, nfail)
+        call check_close("no shortwave: cloud fraction clamped at 1", &
+                         cloud_proxy_cloud_fraction(c,fc,diurnal_geometry(70.0_wp,90.0_wp)), &
+                         1.0_wp, 1.0e-6_wp, nfail)
+        fc%air_temperature = 300.0_wp
+        call check_close("emissivity clamped at lw_emissivity_max = 1", cloud_proxy_emissivity(c,fc), &
+                         1.0_wp, 1.0e-6_wp, nfail)
         fc%shortwave_down = 2000.0_wp
-        fc%air_temperature = 120.0_wp
-        call check_close("emissivity clamped at 0.4 (cloudiness clamped at 0)", &
+        fc%air_temperature = 100.0_wp
+        call check_close("emissivity clamped at 0.4 (cloud fraction clamped at 0)", &
                          cloud_proxy_emissivity(c,fc), 0.4_wp, 1.0e-6_wp, nfail)
 
         return
 
     end subroutine test_cloud_proxy
+
+    pure function proxy_eps(t_air,n) result(e)
+        ! The default cloud-proxy emissivity (Chion.jl 38cb742), unclamped.
+
+        implicit none
+
+        real(wp), intent(IN) :: t_air, n
+        real(wp) :: e
+
+        e = (0.716_wp + 0.00239_wp*(t_air - 273.15_wp))*(1.0_wp - n**3) &
+            + (0.952_wp + 0.00362_wp*(t_air - 273.15_wp))*n**3
+
+    end function proxy_eps
 
     subroutine forcing_init(forc)
         ! Neutral per-column forcing: nothing prescribed, no precipitation,
