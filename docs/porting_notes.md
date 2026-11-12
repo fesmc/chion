@@ -3,9 +3,10 @@
 Every intentional deviation from `Chion.jl` (branch `main`), and every Julia quirk
 deliberately preserved. Required reading before changing any physics module.
 
-Reference: Chion.jl `main` `9ec6cc7` (= `03bb445`), synced in `docs/PLAN_dev_nils.md`
-(D29-D42). The port base was `a9ec154` (D1-D28 were written against it; their text is
-updated where the sync changed them). Physics deviations are reverted under `legacy_chion=1`
+Reference: Chion.jl `main` `38cb742`, synced in the section "Sync with Chion.jl `main`
+`38cb742`" below (D32 and D45 retired, D29 reduced, D47); before it `9ec6cc7` (= `03bb445`),
+synced in `docs/PLAN_dev_nils.md` (D29-D42). The port base was `a9ec154` (D1-D28 were
+written against it; their text is updated where the sync changed them). Physics deviations are reverted under `legacy_chion=1`
 (D24) where they would otherwise fail the validation gate; each entry says whether it is.
 Issues for Chion.jl: `docs/upstream_chionjl_issues.md`.
 
@@ -449,7 +450,7 @@ capped one-layer scheme is what smbpal and Chion.jl's own BESSI already use.
 ### D24. `legacy_chion=1` build variant
 **What:** `make ... legacy_chion=1` defines `CHION_LEGACY`, which reverts the
 deliberate physics corrections to Chion.jl's values (D22's R = 8.314, D25's g = 9.81,
-D27's ITM `tsrf` scaling, D30's aging-albedo refresh, D32, D35, D38, D39, D40's
+D27's ITM `tsrf` scaling, D30's aging-albedo refresh, D35, D38, D39, D40's
 thin-snow blend and D41's land columns; the list is in `chion_defs.F90`). Builds land in `libchion/{include,bin}[-dp]-legacy`
 (`-legacy-fpsafe` for validation/).
 
@@ -584,20 +585,21 @@ in the CLIMBER-X turbulence (`turbulent_flux_scheme = "climberx"`, formerly `seb
 
 ## PLAN_dev_nils — sync with Chion.jl `dev_nils` and `main` `9ec6cc7`
 
-### D29. Rain with no layer to hold it runs off, exactly once
-**What:** `apply_accumulation` sends rain to `runoff` when `n = 0` or `mass(1) <= 0`;
-otherwise it goes to `mass_w(1)` as before. Nothing is added in the bare-ice branch.
+### D29. Rain with no layer to hold it runs off where it falls
+**What:** `apply_accumulation` sends rain to `runoff` when `n = 0` or `mass(1) <=
+TOL_EMPTY_LAYER`; otherwise it goes to `mass_w(1)`. Nothing is added in the bare-ice
+branches. Structural only since the 38cb742 sync.
 
 **Why:** Chion.jl dropped that rain (defects 11 and 20). dev_nils `8fff530` fixed it by
-adding the step's rain to `runoff` in the bare-ice branch. When `0 < mass(1) <=
-TOL_EMPTY_LAYER`, though, accumulation has already put the rain in `mass_w(1)`, so it is
-counted twice. Routing it where it falls counts it once.
+adding the step's rain to `runoff` in the bare-ice branch, which counted it twice when `0 <
+mass(1) <= EPS_EMPTY_LAYER` (the rain was already in `mass_w(1)`). Chion.jl `38cb742` holds
+rain only above `EPS_EMPTY_LAYER` and removes a sub-threshold surface layer after
+accumulation (synced), so the double count is gone and both route the rain once; chion
+keeps routing it where it falls.
 
-**Impact:** `runoff` on bare-ice steps with rain; `smb_ice` and the snowpack are unchanged.
-Identical to Chion.jl except in the sliver window above (tested in `test_bessi` 5b), which
-the harness columns never enter, so not under `legacy_chion`. The BESSI closure identity no
-longer needs rain withheld. Chion.jl's substrate bare path (`03bb445`) has the same double
-count; chion adds no rain there either (C3). Reported upstream.
+**Impact:** none in practice. Chion.jl would still drop the rain on a sub-threshold surface
+layer over snow (not bare after its removal, so no bare branch runs), a state no step
+leaves behind. Not under `legacy_chion`.
 
 ### D30. Aging albedo: snowfall rejuvenates in proportion to its mass
 **What:** under `albedo_scheme = "aging"`, a step's snowfall `S` [kg m-2] onto aged
@@ -644,35 +646,17 @@ results are not bit-identical to before. Reported upstream. The fine-layer remes
 mixes temperature with it too (review Q16); its harness configurations show no branch
 flips, so it stays out of `legacy_chion`.
 
-### D32. Fine near-surface layers: the first layer below them is split and merged by mass
-**What:** with fine near-surface layers (D36), the remesh ends with `rebalance_layer` at
-`k0` = (number of limited layers) + 1, i.e. layer 5: the split loop while `mass(k0) >
-mass_max` (`mass_split` into a new layer `k0+1`; at `Ntot`, merge the two deepest layers,
-or deplete the bottom one when at most two mass layers fit) and the merge loop while
-`mass(k0) < mass_min` (top up to `mass_split` from `k0+1`, or merge with it). These are
-Chion.jl's surface-layer split and merge, generalised to layer `k` (`split_layer`,
-`merge_layer`, `free_slot_for_split`; `k = 1` is Chion.jl's surface layer, used as
-before in accumulation, melt and vapour flux). Reverted under `legacy_chion`
-(`NEAR_SURFACE_SPLIT_MERGE_BELOW`).
-
-**Why:** in Chion.jl (`03bb445`) the surface split fires only when `mass(1) > mass_max`
-right after snowfall (> 500 kg m-2 in one step), and the surface merge is off. The remesh
-pushes every increment down the four fine layers into layer 5, which nothing caps, splits
-or merges: it grows until the 22.5 m depth cap exports its base. A firn column collapses
-to four thin layers over one cell of up to ~22 m (N <= 5, `Ntot` irrelevant), so
-densification, cold content, percolation and refreezing below 0.47 m happen in one cell.
-Upstream docs ("Without these limits the surface layer can hold up to `mass_max`")
-suggest this is not intended (review Q4; PLAN_dev_nils N7).
-
-**Impact:** only with fine layers on. The column below them is resolved as without fine
-layers (300 kg m-2 layers up to `Ntot`). Measured on the 10-year `chion_column` example
-(prod sp), Chion.jl's behaviour -> chion: mean N 4.9 -> 10.0 (max 5 -> 15); runoff +7.7 %,
-refreezing -6.0 %, melt +0.6 %, final thickness -12.6 %, bulk density +10.6 %, liquid water
--40 %. Chion.jl's single cell holds and refreezes more meltwater; chion's runoff and
-refreezing are within 2.5 % of the run without fine layers. With `Ntot <= k0 + 1` the slot is freed by depleting the
-bottom layer, whose `continuous_bottom_deplete` resets `t_srf` to `temperature(1)` as it
-does in accumulation; with the default `Ntot = 15` a bottom merge frees it instead.
-Harness: the fine-layer configurations run under `legacy_chion` and stay gated.
+### D32. Fine near-surface layers: the first layer below them is split and merged by mass (retired)
+**Retired with the 38cb742 sync.** chion split and merged the first layer below the fine
+near-surface layers by mass (`rebalance_layer` at `k0`), because in Chion.jl `03bb445`
+everything the remesh pushed below the fine layers stayed in one cell of up to ~22 m (review
+Q4; PLAN_dev_nils N7; upstream issue A3). Chion.jl `38cb742` fixed it its own way,
+`_split_deep_layers!`, now ported (`snow_layers.f90:split_deep_layers`): after the remesh,
+every layer from the first unlimited one down is split while heavier than `mass_max`
+(`mass_split` below); a full column first merges its two deepest layers, and the two deepest
+layers of a full column are never split, so the bottom layer may grow. Unlike D32 there is
+no merge of light layers and no bottom depletion. `NEAR_SURFACE_SPLIT_MERGE_BELOW` is gone
+from `legacy_chion`.
 
 ### D33. Cloud-proxy longwave: optional host TOA
 **What:** Chion.jl's cloud-proxy longwave (`03bb445`, `longwave_scheme = "cloud_proxy"`,
@@ -693,7 +677,8 @@ host's transmissivity (review Q5; PLAN_dev_nils N9).
 
 **Impact:** none unless a host sets the flag; the harness does not, so it gates
 Chion.jl's internal TOA (not under `legacy_chion`). The drivers set neither
-(`chion_column.x`, `chion_grid.x`).
+(`chion_column.x`, `chion_grid.x`). Since `38cb742` the TOA also sets the clear-sky
+transmissivity's insolation term, `ln(TOA/300 W m-2)`; the host's TOA is used there too.
 
 ### D34. Ice substrate: none on land, reset with the column, old restarts start at `min(t_srf, T0)`
 **What:** three chion-only rules around Chion.jl's thermal ice substrate (`03bb445`,
@@ -755,7 +740,8 @@ for Nils, not fixed here.
 
 **Why:** (1) `Inf` is not a robust namelist value, and the `-Ofast` production build may
 assume finite arithmetic. (2) A limited layer below an unlimited one has no use, and the
-first unlimited layer must be well defined: the split/merge resumes there (D32). (3) After
+first unlimited layer must be well defined: the deep-layer split starts there
+(`split_deep_layers`). (3) After
 such a transfer the receiver is full by construction. In dp the re-tested deficit is
 ~1e-18 m and Julia exits too; in sp it is a few ulp of the target (~1e-9 m), and the loop
 would keep moving round-off.
@@ -870,9 +856,12 @@ To raise with Chion.jl (PLAN_dev_nils N5).
 - snow-free, it does nothing: no melt, sublimation, `smb_ice` or runoff (rain has already
   run off, D29), no latent heat flux; `Tsrf` is set to the air temperature, its albedo
   (and `albedo_snow`) to `alpha_land`;
-- under snow, a melt demand the snow cannot meet is not charged to ice: `melt` is the snow
-  actually melted (on ice it is the demand, the shortfall melting ice, `smb_ice -=`,
-  `runoff +=`), the shortfall energy is dropped;
+- under snow, melt potential the snow cannot use is not charged to ice: `melt` is the snow
+  melted (on ice the potential left melts ice, `smb_ice -=`, `runoff +=`, and counts in
+  `melt`), the energy left is dropped;
+- fresh snow on snow-free land starts its interface at `min(T_air, T0)`, like its layers:
+  a snow surface linearized about `T_air > T0` melts far too much (Chion.jl#29). On ice the
+  interface keeps the bare surface's value, as in Chion.jl;
 - no ice substrate (D34).
 Reverted under `legacy_chion` (`LAND_COLUMNS_WITHOUT_ICE`: bare ice under every column).
 
@@ -949,38 +938,20 @@ gave Antarctica (lat ~ -75) an offset of +235 W m-2 instead of -65.
 **Impact:** none for `lat, lat0 > 0`; Southern-Hemisphere ITM columns change. `test_itm`'s
 smbpal reference keeps smbpal's form; its columns are northern. Not under `legacy_chion`.
 
-### D45. Surface temperature of a column left bare, and of fresh snow on one
-**What:** the interface temperature `t_srf` of a snow-free column is that of the surface
-beneath, set by the column step (`snow_bessi.f90`, steps 5 and 16): over the ice substrate,
-the interface the energy solve found (prognostic); `T0` for bare ice without a substrate
-(BESSI's bare ice at the melting point); the air on land (D41). The sublimation kernel no
-longer resets it to `T0` when it empties the column (`apply_snow_surface_vapor_mass_flux`).
-Fresh snow on a column that started bare starts its interface at the air temperature, as
-its layers (step 3), capped at `T0`: a snow surface is never above melting, and in air above
-freezing an interface at `T_air > T0` linearizes the melting surface's fluxes about a
-surface that cannot exist (20 yr at 268 K, 80 kg m-2 yr-1 on the substrate: runoff
-241 405 uncapped, 140 612 capped, 145 182 before D45; Chion.jl#29 takes the same cap). Reverted under `legacy_chion` (`BARE_SURFACE_TEMPERATURE_FROM_BELOW`).
-
-**Why:** `t_srf` is the point the energy solve linearizes the surface fluxes about
-(`Ts_n = t_srf`, `snow_energy.f90`). Chion.jl resets it to `T0` when sublimation empties
-the column (`surface_fluxes.jl`, end of `_apply_snow_surface_vapor_mass_flux!`), even over a
-substrate at 230 K. Under a snowfall smaller than a day's sublimation demand this locks a
-cold column bare: each day's thin snow (0.08 kg m-2 at 30 kg m-2 yr-1) is solved about
-273 K, emits ~40 W m-2 too little longwave, comes out several K warmer than the air
-(also in the polar night), sublimates within the step, and the column is reset to `T0`
-again. From a cold start (empty column, `t_srf = T0`) it never builds snow: annual-mean
-`t_srf` 273.15 K, albedo `alpha_ice`, all snowfall sublimated, with and without a
-substrate. The thin-snow albedo (D40) aggravates it but is not needed: `legacy_chion`
-traps too.
-
-**Impact:** a -45 C column with 30 kg m-2 yr-1 from empty, 100 years
-(`tests/test_bessi.f90` test 18): Chion.jl/`legacy_chion` stores 0 and sublimates
-3000 kg m-2, `t_srf` 273.15 K, albedo 0.40; chion stores 2380 kg m-2, sublimates 629
-(6.3 kg m-2 yr-1 at the end), `t_srf` 226.3 K (air 228.2), albedo 0.81. In ablation-zone
-cycles a few 1e-4 relative on melt and `smb_ice` (test 1). A sublimation-limited column
-can still settle thin: at 12 kg m-2 yr-1 and -45 C it holds ~2 kg m-2 under the thin-snow
-albedo (~0.5) and sublimates its snowfall, where a column started with firn accumulates
-(D40's `swe_crit_albedo`, not this defect).
+### D45. Surface temperature of a column left bare, and of fresh snow on one (retired)
+**Retired with the 38cb742 sync.** chion kept the interface temperature `t_srf` of a column
+emptied by sublimation instead of resetting it to `T0`, set it from the surface beneath (the
+solved substrate, `T0` for bare ice without one, the air on land), and started fresh snow on
+a bare column at `min(T_air, T0)`, interface included: Chion.jl `9ec6cc7` reset an emptied
+column to `T0`, which locked a cold, dry column bare (upstream issue A8b; Chion.jl#29).
+Chion.jl `38cb742` keeps `t_srf` when sublimation or bottom depletion empties the column
+(bottom depletion: `min(t_srf, T0)`) and gives fresh snow on a bare column `min(T_air, T0)`
+in every layer, leaving the interface at the bare surface's value; all ported. chion's other
+rules are dropped (bare ice without a substrate no longer sets `T0`; fresh snow no longer
+sets the interface), except on land, which Chion.jl does not have (D41).
+`BARE_SURFACE_TEMPERATURE_FROM_BELOW` is gone from `legacy_chion`. `tests/test_bessi.f90`
+test 18 (a -45 C column from empty, 100 years) builds snow as before: 2281 kg m-2 stored of
+3000 with the substrate, 2273 without.
 
 ### D46. Optional initial snowpack at the cold start
 **What:** `chion_init_state(chn, swe, t_init)` takes two optional (ncol) fields: `swe`
@@ -997,16 +968,16 @@ zero. A column reset by `chion_set_active_mask` returns to the default (bare) co
 **Layering:** `bessi_init_firn_column` lays `swe` on the empty column as one layer and hands
 it to the routine that owns the layering of a grown column: `remesh_near_surface_layers`
 with fine layers (cap them to their thicknesses, the excess into the first layer below,
-which is split by mass, D32), `rebalance_layer` at the surface without. So it has the
-invariants of a column grown by accumulation, and the first step repairs nothing: the fine
-layers at their thicknesses; below them one layer in `[mass_min, mass_max]` holding the
-remainder, over layers of `mass_split` (a split leaves `mass_split` below the layer it
-splits, so the partial layer is the upper one, not the bottom one); `n <= Ntot`, the bottom
-layer taking the excess by bottom merges. With the defaults, 500 kg m-2 is 7, 17.5, 35, 105,
-335.5 kg m-2 and 2000 kg m-2 adds five layers of 300. Under `legacy_chion` everything below
-the fine layers stays in one layer, as in a grown legacy column. A `swe` deeper than the
-22.5 m cap at `density_init_firn`, or one the column cannot hold without exporting mass
-(`Ntot` at most one above the fine layers), is an error.
+and split every layer below them heavier than `mass_max`, `split_deep_layers`),
+`rebalance_layer` at the surface without. So it has the invariants of a column grown by
+accumulation, and the first step repairs nothing: the fine layers at their thicknesses;
+below them one layer of at most `mass_max` holding the remainder, over layers of
+`mass_split` (a split leaves `mass_split` below the layer it splits, so the partial layer is
+the upper one, not the bottom one); `n <= Ntot`, the bottom layer taking the excess by
+bottom merges. With the defaults, 500 kg m-2 is 7, 17.5, 35, 105, 335.5 kg m-2 and 2000 kg
+m-2 adds five layers of 300. A `swe` deeper than the 22.5 m cap at `density_init_firn`, or
+one the column cannot hold without exporting mass (no fine layers and `Ntot <= 2`), is an
+error.
 
 **Why:** an ice-sheet host cold-starts on ice columns, which are never snow-free. A dry,
 cold BESSI column started empty can settle thin under the thin-snow albedo (D40): at -45 C
@@ -1019,6 +990,43 @@ substrate the 1-2 years of relaxing from 273 K.
 `legacy_chion` (an input, not a correction).
 
 ---
+
+## Sync with Chion.jl `main` `38cb742`
+
+Ported from `9ec6cc7..38cb742` (`117ff94`, `4c889da`, `1f8ce12`), with no deviation:
+- cloud-proxy longwave after Konzelmann et al. (1994): cloud fraction from the shortwave
+  transmissivity (clear-sky transmissivity with elevation and insolation terms, cloud
+  transmission `1 - a n^p exp(-b z)`), emissivity blended between clear sky and overcast,
+  capped at `lw_emissivity_max`; `semix_sensible_exchange_factor` 3.0;
+- closed energy budget of melt: warming sub-freezing snow to `T0` costs melt potential
+  (`Lm + ci (T0 - T)` per kg), the potential left melts ice, `melt` is snow plus ice melted;
+  no partial-melt fast path (upstream items 14 and 19b gone). chion has no prescribed melt
+  (C9 deferred), so its melt always pays the charge, as Chion.jl's SEB melt;
+- fresh snow on a bare column at `min(T_air, T0)`; an emptied column keeps `t_srf` (D45);
+- `_split_deep_layers!` (D32);
+- sub-threshold surface layers removed after accumulation (water and solid to the layer
+  below or runoff), rain held and the energy solve run only above `EPS_EMPTY_LAYER` (D29).
+
+Not ported, not physics: the scheme-type dispatch, the Experiment API, threading/GPU,
+the RH fallback of the data loader, the boundary/column enthalpy diagnostics, and the
+`Float32` round-off floor of the fill (`_roundoff_floor`; chion has its own, D36, D43).
+
+### D47. Energy solve: the Thomas sweep, not the upward elimination
+**What:** `snow_energy_flux` keeps the Thomas algorithm (forward elimination from the
+surface, back substitution, solved again for the melting surface). Chion.jl `38cb742`
+eliminates rows `n..2` upward once and closes row 1 for the free and the melting surface
+(`_eliminate_heat_diffusion_upward!`, `_close_surface_row`).
+
+**Why:** the two are the same system and solution; they differ in round-off. In `wp = sp`,
+chion's production precision, the upward elimination was measured an order of magnitude
+less accurate: the non-melting energy-conservation check of `test_energy`
+(`sum m ci dT == heating`) erred by 10.4 J m-2 of 26630 (3.9e-4) against 1.2 J m-2 (4.5e-5)
+with the Thomas sweep, and an isothermal snow + substrate column drifted beyond 1e-4 K in 30
+days. The reduced diagonal `1 - lower - upper + upper q` cancels when `q` is near 1 (thick or
+conductive layers).
+
+**Impact:** round-off only (dp: ~1e-16 relative, below the harness' 4-ulp Float32 gate).
+Not under `legacy_chion`.
 
 ## WP-wide build note
 
@@ -1084,6 +1092,12 @@ Collected across batch 1. Severity: **A** = wrong results, **B** = latent/condit
 | still open | 3, 8, 21, 23, 25, D31 merge mean, 20b's single `sigma` (`pdd_defects.md` D11), 21b ITM long names |
 | new since `03bb445` | 27 (`Tsrf = T(1)` in the bottom deplete), 28 (substrate not reset), D29's double count in the substrate bare path, layer 5 unbounded under fine layers (D32), fixed-orbit TOA (D33), bare-ice latent heat (D35), `R_air` literal (D38), polar-night diurnal (D39), thin-snow albedo and land columns (D40, D41), aging refresh (D30), `Tsrf = T0` on an emptied column (D45) |
 | not re-checked | 2, 9, 10, 12, 14-18, 19b, 22 |
+
+**Since `38cb742`** (synced): fixed upstream are D29's double count (rain held only above
+`EPS_EMPTY_LAYER`), layer 5 under fine layers (D32, `_split_deep_layers!`), `Tsrf = T0` on an
+emptied column (D45), and 14 and 19b (the melt fast path is gone). 27 stands for a column
+that keeps layers; an emptied one keeps `min(Tsrf, T0)`. New: D47 (the upward elimination's
+`sp` round-off).
 
 ### Mass-weighted mean of equal values is not exact (D31)
 

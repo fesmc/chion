@@ -1,6 +1,10 @@
 # Hand-off: cloud-proxy longwave recalibration (BESSI)
 
-Status: open, decided (option a), not started. Written 2026-10-10 after the Chion.jl
+Status: superseded in part (2026-11-12): chion now has Chion.jl `38cb742`'s cloud proxy
+(Konzelmann et al. 1994: clear-sky transmissivity with an insolation term, cloud fraction
+from `1 - a n^p exp(-b z)`, clear-sky/overcast emissivity blend), new `lw_*` keys and
+defaults; the analysis below is of the old linear form and needs redoing with it.
+Previously: open, decided (option a), not started. Written 2026-10-10 after the Chion.jl
 9ec6cc7 sync (PR #1). BESSI stays an ongoing project; yelmox uses chion ITM by default.
 
 ## Problem

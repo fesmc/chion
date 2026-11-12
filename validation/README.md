@@ -237,6 +237,16 @@ cloud proxy (`refreezing`); PDD 0.37 (`simple`) and 0.41 ulp (`cg05`,
 `snowpack_swe`); ITM, all 14 fields by name, 0.48 ulp (`runoff`). PDD closure
 1.4e-15 / 2.3e-15 at dp, 9.8e-08 / 3.8e-07 at sp.
 
+**Re-pointed to main `38cb742` (chion synced to it; reference env developing a
+`38cb742` worktree via `CHION_VALIDATION_PROJECT`):** every gated field of every
+configuration passes, all coverage assertions too. Worst 0.47 ulp (`Tsrf`) in each
+single-option BESSI configuration, 0.48 ulp (`runoff`) in the defaults; PDD 0.37 / 0.41
+ulp; ITM 0.48 ulp. The harness needed two changes: `ITMModel` lost the unused
+`trans_c`, and the fine-layer coverage now asserts the deep-layer split
+(`_split_deep_layers!`) instead of an unsplit layer 5. Tests: 16 per `fpsafe` build
+pass at dp and dp+legacy; sp fails only `test_surface` "semix solid: vapor_mass" and
+`test_bessi` "SEMIX: albedo = f_snow ..." (both sp round-off, failing before the sync).
+
 Reported, not gated:
 
 - **`wp = sp` costs** up to ~2e-05 relative (`albedo`, `mass_w`; ~4e-06 for

@@ -27,16 +27,18 @@ CLIMBER-X's SEMIX surface scheme.
 ## Reference
 
 Ported from Chion.jl `a9ec154`, synced to Chion.jl `main` `9ec6cc7`
-([docs/PLAN_dev_nils.md](docs/PLAN_dev_nils.md)). `validation/` gates the port
+([docs/PLAN_dev_nils.md](docs/PLAN_dev_nils.md)) and then `38cb742`
+([docs/porting_notes.md](docs/porting_notes.md)). `validation/` gates the port
 against it field by field; chion's deliberate deviations are listed in
 `docs/porting_notes.md` and reverted by the `legacy_chion=1` build.
 
 ## Defaults
 
-`input/chion_defaults.nml` holds Chion.jl's calibrated GrIS set (`03bb445`):
-BESSI with `alpha_ice` 0.40, dynamic albedo, `seb_scheme =
-turbulent_flux_scheme = "semix"` (exchange factor 2.5, stable coefficient 40),
-cloud-proxy longwave, 5-layer thermal ice substrate, fine near-surface layers
+`input/chion_defaults.nml` holds Chion.jl's calibrated GrIS set (`03bb445`,
+with `38cb742`'s longwave and exchange factor): BESSI with `alpha_ice` 0.40,
+dynamic albedo, `seb_scheme = turbulent_flux_scheme = "semix"` (exchange factor
+3.0, stable coefficient 40), cloud-proxy longwave (Konzelmann et al. 1994),
+5-layer thermal ice substrate, fine near-surface layers
 (0.02, 0.05, 0.10, 0.30 m), 8 diurnal substeps with a 1 K cycle; PDD
 `pdd_method = "simple"`. chion adds a thin-snow albedo blend
 (`swe_crit_albedo` 10 kg m-2) and land columns (`H_ice = 0`: `alpha_land`, no

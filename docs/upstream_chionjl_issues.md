@@ -13,6 +13,12 @@ aging × `dt` (defect 19), the CF time axis (24), the output time coordinate (26
 budget (#12-#14, #19). Open from the PDD list: #17's single `temperature_sigma` and no
 `melt`/`refreezing` in `PDDState`.
 
+**Update, Chion.jl `38cb742`** (synced into chion): 1 is fixed (rain held only above
+`EPS_EMPTY_LAYER`, a sub-threshold surface layer removed), 3 is fixed its own way
+(`_split_deep_layers!`), 8b is fixed (an emptied column keeps `Tsrf`; fresh snow at
+`min(T_air, T0)`). New: the upward elimination of the energy solve loses `Float32` accuracy
+(chion D47).
+
 ## A. Wrong results
 
 **1. Rain on a near-empty column is counted twice.**

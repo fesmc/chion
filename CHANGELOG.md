@@ -10,6 +10,53 @@ tag is the port itself, summarised rather than enumerated.
 
 ## [Unreleased]
 
+Synced with Chion.jl `main` `38cb742` (`docs/porting_notes.md`, "Sync with Chion.jl `main`
+`38cb742`"): D32 and D45 retired, D29 reduced to where rain is routed, D47 new. Default
+BESSI results change.
+
+### Breaking
+
+- `&chion_const` cloud-proxy keys (re-sync host par files; a par file that sets a removed key
+  is not read for it):
+  - removed: `lw_emissivity_base`, `lw_emissivity_temperature_slope`,
+    `lw_emissivity_cloud_slope`;
+  - new: `lw_clear_sky_transmissivity_insolation` (0.0569), `lw_cloud_transmission_coefficient`
+    (0.447), `lw_cloud_transmission_exponent` (2.75), `lw_cloud_transmission_decay_per_km`
+    (0.225), `lw_clear_sky_emissivity` (0.716), `lw_clear_sky_emissivity_temperature_slope`
+    (0.00239), `lw_overcast_emissivity` (0.952), `lw_overcast_emissivity_temperature_slope`
+    (0.00362), `lw_cloud_emissivity_exponent` (3.0), `lw_emissivity_max` (1.0);
+  - new defaults: `lw_clear_sky_transmissivity` 0.85 -> 0.718,
+    `lw_clear_sky_transmissivity_per_km` 0.075 -> 0.0298, `lw_night_cloud_fraction` 0.389 ->
+    0.85, `semix_sensible_exchange_factor` 2.5 -> 3.0.
+- `clear_sky_transmissivity(c, height, toa)` takes the daily-mean TOA (was `(c, height)`).
+- `forcing_shortwave_cloud(c, toa, height, cloud)` is replaced by
+  `forcing_shortwave_transmissivity(toa, height, trans0, trans_per_km)`.
+- `legacy_chion`: `NEAR_SURFACE_SPLIT_MERGE_BELOW` and `BARE_SURFACE_TEMPERATURE_FROM_BELOW`
+  removed (Chion.jl now has the behaviour they selected, or its own).
+
+### Changed
+
+- Cloud-proxy longwave after Konzelmann et al. (1994), as Chion.jl `38cb742`: the cloud
+  fraction inverts the shortwave transmissivity, `SWdn = TOA*tau_cs*(1 - a n^p exp(-b z))`,
+  with `tau_cs = min(1, tau0 + tau_z z + tau_S ln(TOA/300 W m-2))`; the emissivity blends
+  clear-sky and overcast values linear in `T_air - T0` by `n^q`, in `[0.4,
+  lw_emissivity_max]`. The host TOA (D33) enters both.
+- Melt closes the energy budget (Chion.jl `38cb742`): warming sub-freezing snow to `T0` costs
+  melt potential, `Lm + ci (T0 - T)` per kg; the potential left once the snow is gone melts
+  ice; `melt` is the snow plus the ice melted (was the potential). No partial-melt fast path:
+  a surface layer thinned below `mass_min` is merged, `t_srf = T0` on every melt.
+- Fresh snow on a bare column takes `min(T_air, T0)` in every layer; its interface keeps the
+  bare surface's temperature (on land `min(T_air, T0)`, D41). A column emptied by sublimation
+  keeps `t_srf`, by bottom depletion `min(t_srf, T0)`; bare ice without a substrate no longer
+  resets it to `T0` (D45 retired).
+- Fine near-surface layers: every layer below them heavier than `mass_max` is split
+  (`mass_split` below); a full column first merges its two deepest layers, which are never
+  split; no merge of light layers (Chion.jl `_split_deep_layers!`; D32 retired).
+- A surface layer at or below `TOL_EMPTY_LAYER` after accumulation is removed, its water and
+  solid to the layer below or to runoff; rain is held and the energy solve has snow rows only
+  above `TOL_EMPTY_LAYER` (were `mass(1) > 0`). A surface layer removed when depleted passes
+  its residual solid on with its water.
+
 ### Added
 
 - Optional initial snowpack at the cold start: `chion_init_state(chn, swe, t_init)`, (ncol)
@@ -19,16 +66,15 @@ tag is the port itself, summarised rather than enumerated.
   ITM sets `H_snow` and `tsrf`, PDD `snowpack_swe`. Initial storage, not SMB: the
   accumulators start at zero. Without the arguments the cold start is unchanged (D46).
 - `chion_forcing_host` (exported by `chion`): forcing a host derives from monthly air temperature and precipitation,
-  as in Chion.jl's `forcing.jl`. `forcing_shortwave_cloud` (SWdn = TOA*tau_clear(z)*(1 - cloud), so the cloud proxy reads
-  that cloud fraction back), `forcing_wind_speed` (u0 + u_z*z + u_s*|grad z| over a fixed baseline on a regular grid),
+  as in Chion.jl's `forcing.jl`. `forcing_shortwave_transmissivity` (SWdn = TOA*min(max(trans0 + trans_per_km*z[km], 0),
+  1), a per-domain direct transmissivity: MAR v3.14 Greenland summer 0.587 + 0.052 z[km], CERES Antarctica 0.68 +
+  0.041 z[km]; the cloud proxy diagnoses its own cloudiness from it), `forcing_wind_speed` (u0 + u_z*z + u_s*|grad z| over a fixed baseline on a regular grid),
   `forcing_tvar_sigma` (the daily temperature variability falling with the monthly mean temperature, Seguinot and
   Rogozhina 2014) and `forcing_red_noise_monthly` (AR(1) noise of zero monthly mean and unit variance from a portable
   Park-Miller generator, the same sequence in Chion.jl). Calibrations against ERA5, CERES and MAR in the module header;
   test `make forcing`.
-- `clear_sky_transmissivity(c, height)` (elemental, exported by `chion`): the cloud proxy's
-  clear-sky shortwave transmissivity tau0 + tau_km*z/1000, so a host that makes the shortwave
-  from a cloud fraction n, SWdn = TOA*tau_clear(z)*(1 - n), gives the proxy back the same n.
-  The proxy now calls it; its result is unchanged.
+- `clear_sky_transmissivity(c, height, toa)` (elemental, exported by `chion`): the cloud
+  proxy's clear-sky shortwave transmissivity.
 - The surface energy balance of BESSI as a diagnostic: `chion_get_surface_fluxes` takes the
   optional step means `sw_down`, `sw_net`, `lw_down`, `lw_net`, `sh`, `lh` and `prh` (the heat
   of the precipitation) [W m-2], positive into the surface; MV under ITM and PDD. They are the
@@ -45,10 +91,8 @@ tag is the port itself, summarised rather than enumerated.
 - BESSI: a cold, dry column started empty (e.g. the East Antarctic plateau, the north
   Greenland interior) built no snow: each day's snowfall sublimated, `t_srf` stayed at 273 K
   and the albedo at `alpha_ice`. Sublimation emptying the column reset `t_srf` to `T0`, about
-  which the next step linearized the surface fluxes. A column left bare now has the
-  temperature of the surface beneath (substrate: solved; no substrate: `T0`; land: air), and
-  fresh snow on a bare column starts its interface at the air temperature, capped at `T0`. Chion.jl has the
-  defect; `legacy_chion` keeps it (D45).
+  which the next step linearized the surface fluxes. An emptied column now keeps `t_srf`, as
+  in Chion.jl `38cb742` (D45, retired).
 
 ## [v0.2.0] — 2026-10-23
 

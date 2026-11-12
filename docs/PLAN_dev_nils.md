@@ -1,5 +1,8 @@
 # Plan: sync chion with Chion.jl `dev_nils`
 
+Follow-up (2026-11-12): synced to Chion.jl `main` `38cb742` on `main`; D32 and D45 retired,
+D29 reduced, D47 added (`porting_notes.md`, "Sync with Chion.jl `main` `38cb742`").
+
 Status: **done** on branch `sync-dev-nils` (2026-10-09): reference Chion.jl `main` `9ec6cc7`,
 validation gate green, all unit tests pass. Deferred: WP7 (`refreezing_correction`), C9
 (prescribed melt); skipped: `surface_smb` (Q10). Issues for Nils: `upstream_chionjl_issues.md`.
