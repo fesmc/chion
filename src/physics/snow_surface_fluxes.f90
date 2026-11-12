@@ -166,6 +166,7 @@ module snow_surface_fluxes
     end interface with_parameterized_longwave
 
     public :: cloud_proxy_emissivity
+    public :: clear_sky_transmissivity
     public :: with_parameterized_longwave
 
     ! Resolved (exact-at-known-T) surface fluxes
@@ -227,7 +228,7 @@ contains
 
         ! Local variables
         logical  :: daily
-        real(wp) :: toa, height, clear_transmissivity, cloudiness
+        real(wp) :: toa, clear_transmissivity, cloudiness
 
         if (forc%has_toa_shortwave) then
             toa   = forc%toa_shortwave
@@ -243,16 +244,7 @@ contains
         daily = daily .and. toa .gt. CLOUD_PROXY_MIN_TOA &
                       .and. forc%dt_days .ge. CLOUD_PROXY_DT_DAYS_MIN
 
-        ! Forcing without a surface height (NaN) uses the sea-level clear-sky
-        ! transmissivity.
-        if (ieee_is_finite(forc%surface_height)) then
-            height = max(forc%surface_height,0.0_wp)
-        else
-            height = 0.0_wp
-        end if
-
-        clear_transmissivity = c%lw_clear_sky_transmissivity &
-                               + c%lw_clear_sky_transmissivity_per_km*height/1000.0_wp
+        clear_transmissivity = clear_sky_transmissivity(c,forc%surface_height)
 
         if (daily) then
             cloudiness = min(max(1.0_wp - forc%shortwave_down &
@@ -271,6 +263,31 @@ contains
         return
 
     end function cloud_proxy_emissivity_geom
+
+    elemental function clear_sky_transmissivity(c,height) result(tau)
+        ! The daily shortwave transmissivity of a clear sky at the surface
+        ! height, tau_clear = tau0 + tau_km*z/1000 [1], the reference of the
+        ! cloud proxy's cloudiness n = 1 - SWdn/(TOA*tau_clear). A height that
+        ! is not finite (no surface height) or negative counts as sea level.
+        ! Public so a host that makes SWdn from a cloud fraction n,
+        ! SWdn = TOA*tau_clear*(1 - n), gives the proxy back the same n.
+
+        implicit none
+
+        type(chion_const_class), intent(IN) :: c
+        real(wp),                intent(IN) :: height   ! [m]
+        real(wp) :: tau                                 ! [1]
+
+        real(wp) :: z
+
+        z = 0.0_wp
+        if (ieee_is_finite(height)) z = max(height,0.0_wp)
+
+        tau = c%lw_clear_sky_transmissivity + c%lw_clear_sky_transmissivity_per_km*z/1000.0_wp
+
+        return
+
+    end function clear_sky_transmissivity
 
     pure function with_parameterized_longwave_forc(c,forc) result(fc)
         ! with_parameterized_longwave with the solar geometry taken from the

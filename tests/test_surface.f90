@@ -821,6 +821,19 @@ contains
         call check("negative surface height = sea level", &
                    cloud_proxy_emissivity(c,fc) .eq. eps_ref, nfail)
 
+        ! clear_sky_transmissivity is the proxy's tau_clear: a host SWdn from a
+        ! cloud fraction, TOA*tau_clear(z)*(1 - n), gives the proxy back n.
+        call check_close("clear_sky_transmissivity(1500 m) = 0.85 + 0.075*1.5", &
+                         clear_sky_transmissivity(c,1500.0_wp), tau, 1.0e-12_wp, nfail)
+        call check("clear_sky_transmissivity: NaN and negative heights = sea level", &
+                   clear_sky_transmissivity(c,nan_wp) .eq. 0.85_wp .and. &
+                   clear_sky_transmissivity(c,-200.0_wp) .eq. 0.85_wp, nfail)
+        fc = fp
+        fc%shortwave_down = toa*clear_sky_transmissivity(c,fp%surface_height)*(1.0_wp - 0.28_wp)
+        eps_ref = 0.624_wp + 0.0032_wp*(268.0_wp - c%T0) + 0.613_wp*0.28_wp
+        call check_close("SWdn = TOA tau_clear (1 - n): the proxy's cloudiness is n", &
+                         cloud_proxy_emissivity(c,fc), eps_ref, 1.0e-9_wp, nfail)
+
         ! The host's TOA replaces chion's own (D33), and needs no latitude.
         fc = fp
         fc%has_toa_shortwave = .TRUE.

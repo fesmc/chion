@@ -46,4 +46,8 @@ module chion
     ! longitude of their own: Chion.jl's calendar-day formula.
     use snow_diurnal, only : calendar_solar_longitude_deg
 
+    ! The cloud proxy's clear-sky shortwave transmissivity, for hosts that
+    ! make the shortwave from a cloud fraction.
+    use snow_surface_fluxes, only : clear_sky_transmissivity
+
 end module chion

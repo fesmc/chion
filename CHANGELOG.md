@@ -18,6 +18,10 @@ tag is the port itself, summarised rather than enumerated.
   empty column, and starts the substrate and `t_srf` of every column at `min(t_init, T0)`;
   ITM sets `H_snow` and `tsrf`, PDD `snowpack_swe`. Initial storage, not SMB: the
   accumulators start at zero. Without the arguments the cold start is unchanged (D46).
+- `clear_sky_transmissivity(c, height)` (elemental, exported by `chion`): the cloud proxy's
+  clear-sky shortwave transmissivity tau0 + tau_km*z/1000, so a host that makes the shortwave
+  from a cloud fraction n, SWdn = TOA*tau_clear(z)*(1 - n), gives the proxy back the same n.
+  The proxy now calls it; its result is unchanged.
 - The surface energy balance of BESSI as a diagnostic: `chion_get_surface_fluxes` takes the
   optional step means `sw_down`, `sw_net`, `lw_down`, `lw_net`, `sh`, `lh` and `prh` (the heat
   of the precipitation) [W m-2], positive into the surface; MV under ITM and PDD. They are the
