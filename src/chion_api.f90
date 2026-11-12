@@ -88,7 +88,8 @@ module chion_api
                             chion_model_surface, chion_model_surface_active, &
                             chion_model_summary_line, &
                             CHION_NFLUX, CHION_IMELT, CHION_IRUNOFF, &
-                            CHION_IREFRZ, CHION_ISUBL
+                            CHION_IREFRZ, CHION_ISUBL, CHION_ISWD, CHION_ISWN, &
+                            CHION_ILWD, CHION_ILWN, CHION_ISH, CHION_ILH, CHION_IPRH
 
     use snow_bessi, only : bessi_class, bessi_par_class, bessi_par_init, bessi_par_validate
     use snow_pdd,   only : pdd_class, pdd_par_class, pdd_par_init, pdd_par_validate, &
@@ -164,7 +165,7 @@ module chion_api
         ! (melt, runoff, refreezing, sublimation), so chion_get_surface_fluxes
         ! can hand back a per-step rate. Shape (CHION_NFLUX,ncol); fields a
         ! model does not resolve are held at MV. See chion_model_flux_cum.
-        real(wp_acc), allocatable :: flux_cum_prev(:,:)  ! (CHION_NFLUX,ncol) [kg m-2]
+        real(wp_acc), allocatable :: flux_cum_prev(:,:)  ! (CHION_NFLUX,ncol) [kg m-2], [J m-2] the energy slots
 
         real(wp)                  :: dt_last           ! [d] length of the last step
     end type chion_class
@@ -788,7 +789,8 @@ contains
         return
     end subroutine check_surface_arg
 
-    subroutine chion_get_surface_fluxes(chn,melt,runoff,refrz,subl)
+    subroutine chion_get_surface_fluxes(chn,melt,runoff,refrz,subl, &
+                                        sw_down,sw_net,lw_down,lw_net,sh,lh,prh)
         ! ===================================================================
         ! Surface flux diagnostics for the step chion_update just finished, as
         ! per-column RATES [kg m-2 s-1] (== [mm w.e. s-1]):
@@ -797,6 +799,21 @@ contains
         !   runoff  runoff
         !   refrz   refreezing
         !   subl    sublimation (>= 0)
+        !
+        ! and the step-mean surface energy balance [W m-2], positive into the
+        ! surface (BESSI only; MV under ITM and PDD):
+        !
+        !   sw_down, sw_net  shortwave down and absorbed
+        !   lw_down, lw_net  longwave down and net
+        !   sh, lh           sensible and turbulent latent heat
+        !   prh              heat of the precipitation
+        !
+        ! The energy terms are those the surface balance closed on: under snow
+        ! and on an ice substrate the linearized terms at the solved interface
+        ! temperature, on bare ice without one the terms at T0. Their sum is
+        ! the energy into the column, melt and conduction. Bare land
+        ! exchanges nothing and adds nothing. Diagnostics only: their
+        ! accumulators are not in the restart, and restart at zero.
         !
         ! These are the surface (whole-column) budget terms, NOT the ice-facing
         ! flux chion_get_smb returns. A host builds the surface mass balance --
@@ -822,21 +839,37 @@ contains
         real(wp), optional, intent(OUT) :: runoff(:)
         real(wp), optional, intent(OUT) :: refrz(:)
         real(wp), optional, intent(OUT) :: subl(:)
+        real(wp), optional, intent(OUT) :: sw_down(:), sw_net(:), lw_down(:), lw_net(:)
+        real(wp), optional, intent(OUT) :: sh(:), lh(:), prh(:)
 
         integer :: i, icol, ncol
         real(wp_acc), allocatable :: flux_cum(:,:)
         real(wp_acc) :: dt
 
         ncol = chn%grd%ncol
-        call check_flux_arg("melt",  melt,  ncol)
-        call check_flux_arg("runoff",runoff,ncol)
-        call check_flux_arg("refrz", refrz, ncol)
-        call check_flux_arg("subl",  subl,  ncol)
+        call check_flux_arg("melt",   melt,   ncol)
+        call check_flux_arg("runoff", runoff, ncol)
+        call check_flux_arg("refrz",  refrz,  ncol)
+        call check_flux_arg("subl",   subl,   ncol)
+        call check_flux_arg("sw_down",sw_down,ncol)
+        call check_flux_arg("sw_net", sw_net, ncol)
+        call check_flux_arg("lw_down",lw_down,ncol)
+        call check_flux_arg("lw_net", lw_net, ncol)
+        call check_flux_arg("sh",     sh,     ncol)
+        call check_flux_arg("lh",     lh,     ncol)
+        call check_flux_arg("prh",    prh,    ncol)
 
-        if (present(melt))   melt   = MV
-        if (present(runoff)) runoff = MV
-        if (present(refrz))  refrz  = MV
-        if (present(subl))   subl   = MV
+        if (present(melt))    melt    = MV
+        if (present(runoff))  runoff  = MV
+        if (present(refrz))   refrz   = MV
+        if (present(subl))    subl    = MV
+        if (present(sw_down)) sw_down = MV
+        if (present(sw_net))  sw_net  = MV
+        if (present(lw_down)) lw_down = MV
+        if (present(lw_net))  lw_net  = MV
+        if (present(sh))      sh      = MV
+        if (present(lh))      lh      = MV
+        if (present(prh))     prh     = MV
 
         if (chn%dt_last .le. 0.0_wp) return
 
@@ -851,6 +884,13 @@ contains
             if (present(runoff)) call flux_rate(flux_cum,chn%flux_cum_prev,CHION_IRUNOFF,icol,dt,runoff(icol))
             if (present(refrz))  call flux_rate(flux_cum,chn%flux_cum_prev,CHION_IREFRZ, icol,dt,refrz(icol))
             if (present(subl))   call flux_rate(flux_cum,chn%flux_cum_prev,CHION_ISUBL,  icol,dt,subl(icol))
+            if (present(sw_down)) call flux_rate(flux_cum,chn%flux_cum_prev,CHION_ISWD,icol,dt,sw_down(icol))
+            if (present(sw_net))  call flux_rate(flux_cum,chn%flux_cum_prev,CHION_ISWN,icol,dt,sw_net(icol))
+            if (present(lw_down)) call flux_rate(flux_cum,chn%flux_cum_prev,CHION_ILWD,icol,dt,lw_down(icol))
+            if (present(lw_net))  call flux_rate(flux_cum,chn%flux_cum_prev,CHION_ILWN,icol,dt,lw_net(icol))
+            if (present(sh))      call flux_rate(flux_cum,chn%flux_cum_prev,CHION_ISH, icol,dt,sh(icol))
+            if (present(lh))      call flux_rate(flux_cum,chn%flux_cum_prev,CHION_ILH, icol,dt,lh(icol))
+            if (present(prh))     call flux_rate(flux_cum,chn%flux_cum_prev,CHION_IPRH,icol,dt,prh(icol))
         end do
 
         deallocate(flux_cum)

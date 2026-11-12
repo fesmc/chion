@@ -93,6 +93,7 @@ module snow_bessi
                                    snow_cover_fraction, thin_snow_albedo
     use snow_albedo_semix,  only : semix_surface_albedo, semix_dust_concentration, &
                                    semix_daily_coszm, semix_snow_cover_fraction
+    use snow_seb_semix,     only : semix_longwave_down
     use snow_densify,       only : densify_column, apply_htessel_liquid_water_compaction
     use snow_energy,        only : snow_energy_flux, snow_energy_result_class
     use snow_surface_fluxes,only : bare_ice_ablation_class, bare_ice_ablation_mass, &
@@ -118,6 +119,20 @@ module snow_bessi
     private
 
     real(wp_acc), parameter :: PI_ACC = 3.141592653589793238462643383279502884_wp_acc
+
+    ! The surface energy balance accumulators seb_cum(BESSI_NSEB,ncol), by slot
+    ! [J m-2], positive into the surface: shortwave down and net, longwave
+    ! down and net, sensible, turbulent latent, and the heat of the
+    ! precipitation. Diagnostics only (chion's addition, not in Julia): not in
+    ! the restart, and nothing in the physics reads them.
+    integer, parameter, public :: BESSI_NSEB    = 7
+    integer, parameter, public :: BESSI_SEB_SWD = 1
+    integer, parameter, public :: BESSI_SEB_SWN = 2
+    integer, parameter, public :: BESSI_SEB_LWD = 3
+    integer, parameter, public :: BESSI_SEB_LWN = 4
+    integer, parameter, public :: BESSI_SEB_SH  = 5
+    integer, parameter, public :: BESSI_SEB_LH  = 6
+    integer, parameter, public :: BESSI_SEB_PRH = 7
 
     ! === Types ===============================================================
 
@@ -186,6 +201,7 @@ module snow_bessi
         real(wp_acc), allocatable :: vapor_mass(:)            ! [kg m-2] + = deposition
         real(wp_acc), allocatable :: sublimation(:)           ! [kg m-2] >= 0
         real(wp_acc), allocatable :: latent_heat_flux_sum(:)  ! [W m-2 d]
+        real(wp_acc), allocatable :: seb_cum(:,:)             ! (BESSI_NSEB,ncol) [J m-2], diagnostics
 
         ! Instantaneous per-column scalars. albedo is what the surface energy
         ! balance sees (and what is written out): the snow albedo blended with
@@ -480,6 +496,7 @@ contains
         allocate(bsi%now%vapor_mass(ncol))
         allocate(bsi%now%sublimation(ncol))
         allocate(bsi%now%latent_heat_flux_sum(ncol))
+        allocate(bsi%now%seb_cum(BESSI_NSEB,ncol))
 
         allocate(bsi%now%t_srf(ncol))
         allocate(bsi%now%albedo(ncol))
@@ -518,6 +535,7 @@ contains
         if (allocated(bsi%now%vapor_mass))           deallocate(bsi%now%vapor_mass)
         if (allocated(bsi%now%sublimation))          deallocate(bsi%now%sublimation)
         if (allocated(bsi%now%latent_heat_flux_sum)) deallocate(bsi%now%latent_heat_flux_sum)
+        if (allocated(bsi%now%seb_cum))              deallocate(bsi%now%seb_cum)
 
         if (allocated(bsi%now%t_srf))  deallocate(bsi%now%t_srf)
         if (allocated(bsi%now%albedo)) deallocate(bsi%now%albedo)
@@ -592,6 +610,7 @@ contains
         bsi%now%vapor_mass           = 0.0_wp_acc
         bsi%now%sublimation          = 0.0_wp_acc
         bsi%now%latent_heat_flux_sum = 0.0_wp_acc
+        bsi%now%seb_cum              = 0.0_wp_acc
 
         bsi%now%t_srf  = c%T0
         bsi%now%albedo = c%alpha_dry
@@ -840,6 +859,7 @@ contains
             bsi%now%vapor_mass(icol)           = 0.0_wp_acc
             bsi%now%sublimation(icol)          = 0.0_wp_acc
             bsi%now%latent_heat_flux_sum(icol) = 0.0_wp_acc
+            bsi%now%seb_cum(:,icol)            = 0.0_wp_acc
 
             bsi%now%t_srf(icol)  = c%T0
             bsi%now%albedo(icol) = c%alpha_dry
@@ -936,6 +956,7 @@ contains
                   vapor_mass  => bsi%now%vapor_mass(icol),          &
                   sublimation => bsi%now%sublimation(icol),         &
                   lhf_sum     => bsi%now%latent_heat_flux_sum(icol),&
+                  seb_cum     => bsi%now%seb_cum(:,icol),           &
                   t_srf       => bsi%now%t_srf(icol),               &
                   albedo      => bsi%now%albedo(icol),              &
                   albedo_snow => bsi%now%albedo_snow(icol),         &
@@ -1066,7 +1087,7 @@ contains
                 call bessi_bare_ice_substrate_step(mass,density,temperature,n, &
                                                    ice_temperature,t_srf,albedo, &
                                                    smb_ice,runoff,melt,vapor_mass, &
-                                                   sublimation,lhf_sum,c,forc, &
+                                                   sublimation,lhf_sum,seb_cum,c,forc, &
                                                    par%ice_substrate_top_thickness, &
                                                    dt_seconds)
                 return
@@ -1087,6 +1108,13 @@ contains
             ! W m-2 DAYS, not W m-2 seconds. dt_days, not dt_seconds.
             lhf_sum = lhf_sum + real(bare_ice_fluxes%latent_heat_flux,wp_acc) &
                                 *real(forc%dt_days,wp_acc)
+
+            associate(f => bare_ice_fluxes%fluxes)
+            call seb_accumulate(seb_cum,max(forc%shortwave_down,0.0_wp),f%shortwave_absorbed, &
+                                semix_longwave_down(c,forc%q_lw_down,forc%has_q_lw_down, &
+                                                    forc%air_temperature), &
+                                f%longwave,f%sensible,f%latent,f%rain,dt_seconds)
+            end associate
 
             return
 
@@ -1179,6 +1207,8 @@ contains
         call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,albedo, &
                               lh_coef%linear,lh_coef%constant,dt_seconds,energy, &
                               ice_temperature,par%ice_substrate_top_thickness)
+
+        call seb_accumulate_energy(seb_cum,energy,dt_seconds)
 
         ! === Step 10: post-solve surface vapor mass flux =====================
         ! Evaluated exactly at the NEW interface temperature t_srf (Chion.jl
@@ -1386,7 +1416,7 @@ contains
 
     subroutine bessi_bare_ice_substrate_step(mass,density,temperature,n,ice_temperature, &
                                              t_srf,albedo,smb_ice,runoff,melt,vapor_mass, &
-                                             sublimation,lhf_sum,c,forc, &
+                                             sublimation,lhf_sum,seb_cum,c,forc, &
                                              ice_top_thickness,dt_seconds)
         ! Chion.jl _step_bare_ice_substrate! (src/step.jl:309-366 at 9ec6cc7).
         !
@@ -1432,6 +1462,7 @@ contains
         real(wp_acc), intent(INOUT) :: vapor_mass         ! [kg m-2]
         real(wp_acc), intent(INOUT) :: sublimation        ! [kg m-2]
         real(wp_acc), intent(INOUT) :: lhf_sum            ! [W m-2 d]
+        real(wp_acc), intent(INOUT) :: seb_cum(:)         ! (BESSI_NSEB) [J m-2]
 
         type(chion_const_class),        intent(IN) :: c
         type(chion_step_forcing_class), intent(IN) :: forc
@@ -1452,6 +1483,8 @@ contains
         call snow_energy_flux(mass,density,temperature,t_srf,n,c,forc,albedo, &
                               lh_coef%linear,lh_coef%constant,dt_seconds,energy, &
                               ice_temperature,ice_top_thickness)
+
+        call seb_accumulate_energy(seb_cum,energy,dt_seconds)
 
         ! Julia re-evaluates all non-shortwave components at the resolved Ts
         ! (_resolved_nonshortwave_surface_flux_components); only the latent
@@ -1480,6 +1513,47 @@ contains
         return
 
     end subroutine bessi_bare_ice_substrate_step
+
+    subroutine seb_accumulate(seb_cum,sw_down,sw_net,lw_down,lw_net,sh,lh,prh,dt_seconds)
+        ! Add one (sub)step's surface energy terms [W m-2] times its length to
+        ! the column's accumulators [J m-2].
+
+        implicit none
+
+        real(wp_acc), intent(INOUT) :: seb_cum(:)       ! (BESSI_NSEB)
+        real(wp),     intent(IN)    :: sw_down, sw_net, lw_down, lw_net, sh, lh, prh
+        real(wp),     intent(IN)    :: dt_seconds
+
+        real(wp_acc) :: dt
+
+        dt = real(dt_seconds,wp_acc)
+        seb_cum(BESSI_SEB_SWD) = seb_cum(BESSI_SEB_SWD) + real(sw_down,wp_acc)*dt
+        seb_cum(BESSI_SEB_SWN) = seb_cum(BESSI_SEB_SWN) + real(sw_net, wp_acc)*dt
+        seb_cum(BESSI_SEB_LWD) = seb_cum(BESSI_SEB_LWD) + real(lw_down,wp_acc)*dt
+        seb_cum(BESSI_SEB_LWN) = seb_cum(BESSI_SEB_LWN) + real(lw_net, wp_acc)*dt
+        seb_cum(BESSI_SEB_SH)  = seb_cum(BESSI_SEB_SH)  + real(sh,     wp_acc)*dt
+        seb_cum(BESSI_SEB_LH)  = seb_cum(BESSI_SEB_LH)  + real(lh,     wp_acc)*dt
+        seb_cum(BESSI_SEB_PRH) = seb_cum(BESSI_SEB_PRH) + real(prh,    wp_acc)*dt
+
+        return
+
+    end subroutine seb_accumulate
+
+    subroutine seb_accumulate_energy(seb_cum,energy,dt_seconds)
+        ! seb_accumulate of the terms of an energy solve.
+
+        implicit none
+
+        real(wp_acc),                   intent(INOUT) :: seb_cum(:)
+        type(snow_energy_result_class), intent(IN)    :: energy
+        real(wp),                       intent(IN)    :: dt_seconds
+
+        call seb_accumulate(seb_cum,energy%sw_down,energy%sw_net,energy%lw_down,energy%lw_net, &
+                            energy%sh,energy%lh,energy%prh,dt_seconds)
+
+        return
+
+    end subroutine seb_accumulate_energy
 
     subroutine bessi_column_step(bsi,icol,forc_in,c,decl)
         ! Chion.jl column_step! (src/step.jl:113-157): the diurnal-shortwave

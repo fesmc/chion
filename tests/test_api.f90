@@ -76,6 +76,7 @@ program test_api
     call test_active_mask(nfail)
     call test_get_smb(nfail)
     call test_flux_totals(nfail)
+    call test_seb_fluxes(nfail)
     call test_tsrf_annual(nfail)
     call test_init_snowpack(nfail)
 
@@ -1068,6 +1069,88 @@ contains
         return
 
     end subroutine test_flux_totals
+
+    subroutine test_seb_fluxes(nfail)
+        ! The surface energy balance of chion_get_surface_fluxes: under BESSI,
+        ! on a column ablating at the melting point (warm, no snow), the melt
+        ! energy is the sum of the terms over the second half of the run, once
+        ! the ice substrate has warmed, to 1 % (the rest re-warms its night-time
+        ! cooling, 0.2 % here), the shortwave down is the forcing's daily mean
+        ! (the diurnal substeps conserve it) and the absorbed part lies within
+        ! it; an inactive column, and every column under ITM and PDD, is MV.
+
+        implicit none
+
+        integer, intent(INOUT) :: nfail
+
+        ! Local variables
+        type(chion_class) :: chn
+        integer  :: im, n
+        integer  :: gidx(2)
+        real(wp) :: melt(2), swd(2), swn(2), lwd(2), lwn(2), sh(2), lh(2), prh(2)
+        real(wp) :: t2m, sf, rf, sw, ws
+        real(wp_acc) :: e_melt, e_sum
+        logical  :: ok_sw, ok_mv
+        character(len=8) :: models(3)
+
+        write(*,"(a)") "--- 8b. chion_get_surface_fluxes: surface energy balance ---"
+
+        models(1) = "bessi"
+        models(2) = "pdd"
+        models(3) = "itm"
+
+        gidx = [1,2]
+
+        do im = 1, 3
+
+            call write_model_par(PAR_TMP,trim(models(im)))
+            call chion_init(chn,PAR_TMP,2)
+            call chion_init_state(chn)
+            if (trim(models(im)) .eq. "itm") chn%itm%now%H_snow = 0.0_wp
+            call chion_set_active_mask(chn,[.TRUE.,.FALSE.])
+
+            e_melt = 0.0_wp_acc
+            e_sum  = 0.0_wp_acc
+            ok_sw  = .TRUE.
+            ok_mv  = .TRUE.
+
+            do n = 1, NSTEP
+                call set_forcing(chn,gidx,n,"ablate")
+                call chion_update(chn,DT_DAYS)
+                call chion_get_surface_fluxes(chn,melt=melt,sw_down=swd,sw_net=swn,lw_down=lwd, &
+                                              lw_net=lwn,sh=sh,lh=lh,prh=prh)
+                ok_mv = ok_mv .and. all([swd(2),swn(2),lwd(2),lwn(2),sh(2),lh(2),prh(2)] .eq. MV)
+                if (trim(models(im)) .eq. "bessi") then
+                    call forcing_values(gidx(1),n,"ablate",t2m,sf,rf,sw,ws)
+                    ok_sw = ok_sw .and. abs(swd(1) - sw) .le. 1.0e-3_wp*sw &
+                                  .and. swn(1) .gt. 0.0_wp .and. swn(1) .le. swd(1)
+                    if (n .gt. NSTEP/2) then
+                        e_melt = e_melt + real(melt(1),wp_acc)*real(chn%c%Lm,wp_acc)
+                        e_sum  = e_sum  + real(swn(1),wp_acc) + real(lwn(1),wp_acc) + real(sh(1),wp_acc) &
+                                        + real(lh(1),wp_acc) + real(prh(1),wp_acc)
+                    end if
+                else
+                    ok_mv = ok_mv .and. all([swd(1),swn(1),lwd(1),lwn(1),sh(1),lh(1),prh(1)] .eq. MV)
+                end if
+            end do
+
+            if (trim(models(im)) .eq. "bessi") then
+                call check("bessi: shortwave down = forcing, 0 < absorbed <= down", ok_sw, nfail)
+                call check("bessi: melt energy = sum of the terms at the melting point", &
+                           e_melt .gt. 0.0_wp_acc .and. abs(e_melt - e_sum) .le. 1.0e-2_wp_acc*e_sum, nfail)
+            end if
+            call check(trim(models(im))//": energy terms MV where not resolved and on inactive columns", &
+                       ok_mv, nfail)
+
+            call chion_end(chn)
+
+        end do
+
+        write(*,*)
+
+        return
+
+    end subroutine test_seb_fluxes
 
     subroutine test_init_snowpack(nfail)
         ! chion_init_state with an initial snowpack (D46): every model holds

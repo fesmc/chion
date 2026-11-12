@@ -18,6 +18,13 @@ tag is the port itself, summarised rather than enumerated.
   empty column, and starts the substrate and `t_srf` of every column at `min(t_init, T0)`;
   ITM sets `H_snow` and `tsrf`, PDD `snowpack_swe`. Initial storage, not SMB: the
   accumulators start at zero. Without the arguments the cold start is unchanged (D46).
+- The surface energy balance of BESSI as a diagnostic: `chion_get_surface_fluxes` takes the
+  optional step means `sw_down`, `sw_net`, `lw_down`, `lw_net`, `sh`, `lh` and `prh` (the heat
+  of the precipitation) [W m-2], positive into the surface; MV under ITM and PDD. They are the
+  terms the balance closed on: under snow and on an ice substrate the linearized terms at the
+  solved interface temperature, on bare ice without one the terms at `T0`. Accumulated in
+  `seb_cum` [J m-2], packed as `CHION_ISWD`..`CHION_IPRH` after the mass slots
+  (`CHION_NFLUX` 11); not in the restart.
 
 ### Fixed
 

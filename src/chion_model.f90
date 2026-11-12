@@ -73,7 +73,7 @@ module chion_model
 
     use snow_bessi, only : bessi_class, bessi_alloc, bessi_dealloc, &
                            bessi_init_state, bessi_reset_columns, &
-                           bessi_column_step
+                           bessi_column_step, BESSI_NSEB
     use snow_pdd,   only : pdd_class, pdd_alloc, pdd_dealloc, &
                            pdd_init_state, pdd_reset_column, &
                            pdd_column_step, pdd_surface_temperature
@@ -95,11 +95,22 @@ module chion_model
 
     ! Surface flux diagnostics packed by chion_model_flux_cum, in this order.
     ! One place, so the accessor and every model map onto the same slots.
-    integer, parameter, public :: CHION_NFLUX  = 4
+    ! Slots 1-4 are mass [kg m-2]; 5-11 the surface energy balance [J m-2],
+    ! positive into the surface, BESSI's seb_cum in its slot order (BESSI
+    ! only; MV under ITM and PDD).
+    integer, parameter, public :: CHION_NMASS  = 4
+    integer, parameter, public :: CHION_NFLUX  = 11
     integer, parameter, public :: CHION_IMELT  = 1   ! total melt (snow + ice)
     integer, parameter, public :: CHION_IRUNOFF= 2   ! runoff
     integer, parameter, public :: CHION_IREFRZ = 3   ! refreezing
     integer, parameter, public :: CHION_ISUBL  = 4   ! sublimation (>= 0)
+    integer, parameter, public :: CHION_ISWD   = 5   ! shortwave down
+    integer, parameter, public :: CHION_ISWN   = 6   ! net shortwave
+    integer, parameter, public :: CHION_ILWD   = 7   ! longwave down
+    integer, parameter, public :: CHION_ILWN   = 8   ! net longwave
+    integer, parameter, public :: CHION_ISH    = 9   ! sensible heat
+    integer, parameter, public :: CHION_ILH    = 10  ! turbulent latent heat
+    integer, parameter, public :: CHION_IPRH   = 11  ! heat of the precipitation
 
     public :: chion_pack_step_forcing
     public :: chion_model_alloc
@@ -581,6 +592,7 @@ contains
                 flux_cum(CHION_IRUNOFF,:) = bsi%now%runoff
                 flux_cum(CHION_IREFRZ,:)  = bsi%now%refreezing
                 flux_cum(CHION_ISUBL,:)   = bsi%now%sublimation
+                flux_cum(CHION_NMASS+1:CHION_NMASS+BESSI_NSEB,:) = bsi%now%seb_cum
 
             case("itm")
                 if (ncol .ne. itm%now%ncol) call chion_size_error(ncol,itm%now%ncol)
@@ -639,6 +651,7 @@ contains
                     flux_cum(CHION_IRUNOFF,icol) = bsi%now%runoff(icol)
                     flux_cum(CHION_IREFRZ,icol)  = bsi%now%refreezing(icol)
                     flux_cum(CHION_ISUBL,icol)   = bsi%now%sublimation(icol)
+                    flux_cum(CHION_NMASS+1:CHION_NMASS+BESSI_NSEB,icol) = bsi%now%seb_cum(:,icol)
                 end do
                 !$omp end parallel do
 

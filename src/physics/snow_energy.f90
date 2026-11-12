@@ -105,6 +105,20 @@ module snow_energy
         real(wp)     :: surface_flux_linear              ! [W m-2 K-1] Q_lin
         real(wp)     :: latent_heat_linear_coefficient   ! [W m-2 K-1] echoed through
         real(wp)     :: latent_heat_constant_term        ! [W m-2] echoed through
+
+        ! The surface energy balance of the step [W m-2], positive into the
+        ! surface: the linearized terms the solve balanced, constant -
+        ! linear*Ts at the solved interface temperature, so that their sum
+        ! times dt is heating. Diagnostics only (chion's addition, not in
+        ! Julia): sw_down and lw_down are the incoming fluxes, prh the heat of
+        ! the precipitation (the latent_heat_* coefficients).
+        real(wp)     :: sw_down = 0.0_wp
+        real(wp)     :: sw_net  = 0.0_wp
+        real(wp)     :: lw_down = 0.0_wp
+        real(wp)     :: lw_net  = 0.0_wp
+        real(wp)     :: sh      = 0.0_wp
+        real(wp)     :: lh      = 0.0_wp
+        real(wp)     :: prh     = 0.0_wp
     end type snow_energy_result_class
 
 contains
@@ -411,6 +425,13 @@ contains
         res%surface_flux_linear            = 0.0_wp
         res%latent_heat_linear_coefficient = latent_heat_linear_coefficient
         res%latent_heat_constant_term      = latent_heat_constant_term
+        res%sw_down = 0.0_wp
+        res%sw_net  = 0.0_wp
+        res%lw_down = 0.0_wp
+        res%lw_net  = 0.0_wp
+        res%sh      = 0.0_wp
+        res%lh      = 0.0_wp
+        res%prh     = 0.0_wp
 
         n_ice  = size(ice_temperature)
         n_snow = 0
@@ -713,6 +734,18 @@ contains
         end do
 
         t_srf = ts_new
+
+        ! === Step 7: the step's surface energy balance (diagnostics) =========
+        ! Each term at ts_new, as the solve balanced it; their sum is
+        ! q_const - q_lin*ts_new = heating/dt.
+
+        res%sw_down = forc%shortwave_down
+        res%sw_net  = sw_abs
+        res%lw_down = semix_longwave_down(c,forc%q_lw_down,forc%has_q_lw_down,forc%air_temperature)
+        res%lw_net  = lw_const - lw_lin*ts_new
+        res%sh      = sh_const - sh_lin*ts_new
+        res%lh      = lh_turb_const - lh_turb_lin*ts_new
+        res%prh     = latent_heat_constant_term - latent_heat_linear_coefficient*ts_new
 
         return
 

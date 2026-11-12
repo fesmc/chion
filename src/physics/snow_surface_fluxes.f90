@@ -127,6 +127,7 @@ module snow_surface_fluxes
         real(wp) :: sublimation_mass   ! [kg m-2] >= 0
         real(wp) :: latent_heat_flux   ! [W m-2] signed
         real(wp) :: net_mass_change    ! [kg m-2] vapor_mass - melt_mass
+        type(bare_ice_flux_class) :: fluxes   ! the energy terms at T0 (diagnostics; chion's addition)
     end type bare_ice_ablation_class
 
     type surface_vapor_flux_class
@@ -580,6 +581,7 @@ contains
                              /real(c%Lm,wp_acc),wp)
 
         abl%latent_heat_flux = flx%latent
+        abl%fluxes           = flx
         abl%vapor_mass       = real(real(flx%latent,wp_acc)*real(dt_seconds,wp_acc) &
                                     /real(c%Lv + c%Lm,wp_acc),wp)
         abl%sublimation_mass = max(-abl%vapor_mass,0.0_wp)
