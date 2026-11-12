@@ -85,10 +85,15 @@ $(objdir)/chion_io.o: $(srcdir)/chion_io.f90 \
 						  	$(objdir)/chion_physics.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
+# Forcing a host derives from monthly climate (shortwave, wind, temperature variability).
+$(objdir)/chion_forcing_host.o: $(srcdir)/chion_forcing_host.f90 \
+						  	$(objdir)/chion_defs.o $(objdir)/chion_physics.o
+	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
+
 $(objdir)/chion.o: $(srcdir)/chion.f90 \
 						  	$(objdir)/chion_defs.o $(objdir)/chion_model.o $(objdir)/chion_api.o \
 						  	$(objdir)/chion_io.o $(objdir)/chion_physics.o \
-						  	$(objdir)/chion_forcing_monthly.o
+						  	$(objdir)/chion_forcing_monthly.o $(objdir)/chion_forcing_host.o
 	$(FC) $(DFLAGS) $(FFLAGS) $(INC_FESMUTILS) -c -o $@ $<
 
 ## driver-layer modules ########################
@@ -126,6 +131,7 @@ chion_physics = $(objdir)/chion_physics.o
 chion_core =    $(objdir)/chion_model.o \
                 $(objdir)/chion_api.o \
                 $(objdir)/chion_io.o \
+                $(objdir)/chion_forcing_host.o \
                 $(objdir)/chion.o
 
 # Driver-layer objects, linked into drivers that need domain loading and
